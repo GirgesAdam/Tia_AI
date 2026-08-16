@@ -1,0 +1,273 @@
+{
+  "name": "Tia v0.18 - WhatsApp Outbox Worker",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -900,
+        0
+      ],
+      "id": "574fe720-6445-443b-b26d-142a1dd94fe5",
+      "name": "Every 5 Seconds"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/claim",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"limit\": 10\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -660,
+        0
+      ],
+      "id": "ce73ff28-851e-4e50-a4fd-137e9e200e88",
+      "name": "Tia Claim Outbox",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body ?? $json;\nconst rows = Array.isArray(data) ? data : (data.dispatch_id ? [data] : []);\nreturn rows.filter(x => x?.dispatch_id && x?.external_user_id && x?.external_account_id).map(x => ({json:x}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        0
+      ],
+      "id": "250e0ae3-6c28-4538-a9b5-fd36458b55c3",
+      "name": "Expand Dispatches"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1ad8dee6-b201-44fc-a7c2-9b3c1c580df7",
+              "leftValue": "={{ $json.message_type }}",
+              "rightValue": "template",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -180,
+        0
+      ],
+      "id": "cf77c453-408d-46f9-bc7f-fa952163719e",
+      "name": "Template Message?"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendTemplate",
+        "phoneNumberId": "={{ $json.external_account_id }}",
+        "recipientPhoneNumber": "={{ $json.external_user_id }}",
+        "template": "={{ $json.metadata.whatsapp_template.name + '|' + $json.metadata.whatsapp_template.language_code }}"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        80,
+        -120
+      ],
+      "id": "22534ca7-b516-49aa-856a-c52f4c819a11",
+      "name": "WhatsApp Send Template",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "={{ $json.external_account_id }}",
+        "recipientPhoneNumber": "={{ $json.external_user_id }}",
+        "textBody": "={{ $json.content }}",
+        "additionalFields": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        80,
+        120
+      ],
+      "id": "13ccb756-1154-4286-9ec7-82b53462ff33",
+      "name": "WhatsApp Send Text",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({status: (($json.messages?.[0]?.id || $json.id) ? 'sent' : 'failed'), provider_message_id: ($json.messages?.[0]?.id || $json.id || null), error: (($json.messages?.[0]?.id || $json.id) ? null : ($json.error?.message || $json.message || 'WhatsApp send failed in n8n')), retry_after_seconds: (($json.messages?.[0]?.id || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud'}}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        -120
+      ],
+      "id": "c9d3674f-f2a2-4303-9b29-47b8a26d74b7",
+      "name": "Tia Record Template Result",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({status: (($json.messages?.[0]?.id || $json.id) ? 'sent' : 'failed'), provider_message_id: ($json.messages?.[0]?.id || $json.id || null), error: (($json.messages?.[0]?.id || $json.id) ? null : ($json.error?.message || $json.message || 'WhatsApp send failed in n8n')), retry_after_seconds: (($json.messages?.[0]?.id || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud'}}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        120
+      ],
+      "id": "f527e392-4b31-4a59-8fc2-c495ce4263c7",
+      "name": "Tia Record Text Result",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Every 5 Seconds": {
+      "main": [
+        [
+          {
+            "node": "Tia Claim Outbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tia Claim Outbox": {
+      "main": [
+        [
+          {
+            "node": "Expand Dispatches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Dispatches": {
+      "main": [
+        [
+          {
+            "node": "Template Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Template Message?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Template",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "WhatsApp Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send Template": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Template Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send Text": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Text Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,0 +1,246 @@
+{
+  "name": "Tia v0.18 - WhatsApp Inbound & Delivery Status",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        0
+      ],
+      "id": "5eeac441-6665-4b4b-8083-d5bee899c389",
+      "name": "WhatsApp Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.body ?? $json;\nconst output = [];\n\nfunction emitValue(value) {\n  if (!value || typeof value !== 'object') return;\n\n  const contacts = Array.isArray(value.contacts) ? value.contacts : [];\n  const messages = Array.isArray(value.messages) ? value.messages : [];\n  const statuses = Array.isArray(value.statuses) ? value.statuses : [];\n  const phoneNumberId = value.metadata?.phone_number_id ?? null;\n\n  for (const message of messages) {\n    if (message?.type !== 'text' || !message?.text?.body || !message?.id || !message?.from) {\n      continue;\n    }\n\n    const contact = contacts.find((item) => item?.wa_id === message.from) ?? contacts[0] ?? {};\n    output.push({\n      json: {\n        kind: 'inbound',\n        tia_payload: {\n          external_event_id: `message:${message.id}`,\n          external_message_id: message.id,\n          external_user_id: message.from,\n          external_conversation_id: message.from,\n          display_name: contact?.profile?.name ?? null,\n          phone: message.from,\n          message_type: 'text',\n          text: message.text.body,\n          metadata: {\n            provider: 'meta_cloud',\n            phone_number_id: phoneNumberId,\n            whatsapp_timestamp: message.timestamp ?? null,\n            whatsapp_type: message.type,\n            context_message_id: message.context?.id ?? null,\n          },\n        },\n      },\n    });\n  }\n\n  const supportedStatuses = new Set(['sent', 'delivered', 'read', 'failed']);\n  for (const status of statuses) {\n    if (!status?.id || !supportedStatuses.has(status?.status)) continue;\n\n    const timestamp = status.timestamp ?? '0';\n    const seconds = Number(timestamp);\n    const occurredAt = Number.isFinite(seconds) && seconds > 0\n      ? new Date(seconds * 1000).toISOString()\n      : null;\n    const firstError = Array.isArray(status.errors) ? status.errors[0] : null;\n\n    output.push({\n      json: {\n        kind: 'status',\n        tia_payload: {\n          external_event_id: `status:${status.id}:${status.status}:${timestamp}`,\n          provider_message_id: status.id,\n          status: status.status,\n          occurred_at: occurredAt,\n          error: firstError?.title ?? firstError?.message ?? null,\n          metadata: {\n            provider: 'meta_cloud',\n            recipient_id: status.recipient_id ?? null,\n            conversation: status.conversation ?? null,\n            pricing: status.pricing ?? null,\n            errors: status.errors ?? null,\n          },\n        },\n      },\n    });\n  }\n}\n\nif (Array.isArray(raw.entry)) {\n  for (const entry of raw.entry) {\n    for (const change of entry?.changes ?? []) emitValue(change?.value);\n  }\n} else if (raw.value) {\n  emitValue(raw.value);\n} else {\n  emitValue(raw);\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        0
+      ],
+      "id": "ce6835fd-aae9-4618-bc99-a7638e81afdb",
+      "name": "Normalize WhatsApp Event"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cab6a09a-f68f-488b-9622-e7cb3a336377",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "inbound",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -420,
+        0
+      ],
+      "id": "32018686-42bd-4f30-83da-6d2119b80849",
+      "name": "Is Inbound Message?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/inbound",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.tia_payload) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        -100
+      ],
+      "id": "b90e49eb-258e-436b-88a5-ef526dcac7c4",
+      "name": "Tia Accept Inbound",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/inbound/' + $json.event_id + '/process' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        100,
+        -100
+      ],
+      "id": "20eac207-a79e-4c8b-a5bf-ae6f3493ff47",
+      "name": "Tia Process With AI",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "657558bb-e4c4-4764-a808-2004ff7b7f56",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "status",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -160,
+        120
+      ],
+      "id": "e2575d02-e8ee-455d-bb9e-3e341941f012",
+      "name": "Is Delivery Status?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/provider-status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.tia_payload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        100,
+        120
+      ],
+      "id": "4348670a-2f35-4bec-98b9-7fbb97bc2230",
+      "name": "Tia Record Delivery Status",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize WhatsApp Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize WhatsApp Event": {
+      "main": [
+        [
+          {
+            "node": "Is Inbound Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Inbound Message?": {
+      "main": [
+        [
+          {
+            "node": "Tia Accept Inbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Delivery Status?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tia Accept Inbound": {
+      "main": [
+        [
+          {
+            "node": "Tia Process With AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Delivery Status?": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Delivery Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,0 +1,8 @@
+
+=== TIA AI v0.15.0 FINAL INTERNAL GATE ===
+[PASS] Reset full staging scenarios
+[PASS] Admin Supabase login
+[FAIL] Unhandled final gate error — AttributeError: 'ClientOptions' object has no attribute 'storage'
+
+=== SUMMARY ===
+PASS=2 WARN=0 FAIL=1

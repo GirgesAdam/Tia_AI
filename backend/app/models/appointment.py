@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+APPOINTMENT_STATUSES = (
+    "pending",
+    "confirmed",
+    "checked_in",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "no_show",
+    "rescheduled",
+)
+
+ACTIVE_APPOINTMENT_STATUSES = (
+    "pending",
+    "confirmed",
+    "checked_in",
+    "in_progress",
+)
+
+APPOINTMENT_SOURCES = (
+    "ai",
+    "staff",
+    "whatsapp",
+    "instagram",
+    "website",
+    "phone",
+    "walk_in",
+    "facebook",
+    "email",
+    "other",
+)
+
+
+class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "appointments"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "id", name="uq_appointments_workspace_id_id"),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'checked_in', 'in_progress', "
+            "'completed', 'cancelled', 'no_show', 'rescheduled')",
+            name="appointment_status_valid",
+        ),
+        CheckConstraint(
+            "source IN ('ai', 'staff', 'whatsapp', 'instagram', 'website', "
+            "'phone', 'walk_in', 'facebook', 'email', 'other')",
+            name="appointment_source_valid",
+        ),
+        CheckConstraint("end_at > start_at", name="appointment_interval_valid"),
+        CheckConstraint("busy_end_at > busy_start_at", name="appointment_busy_interval_valid"),
+        CheckConstraint("busy_start_at <= start_at", name="appointment_busy_start_valid"),
+        CheckConstraint("busy_end_at >= end_at", name="appointment_busy_end_valid"),
+        CheckConstraint("duration_minutes > 0", name="appointment_duration_positive"),
+        CheckConstraint("price_minor >= 0", name="appointment_price_non_negative"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            ondelete="CASCADE",
+            name="fk_appointments_workspace",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "patient_id"],
+            ["patients.workspace_id", "patients.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_patient",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "branch_id"],
+            ["branches.workspace_id", "branches.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_branch",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "doctor_id"],
+            ["doctors.workspace_id", "doctors.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_doctor",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "service_id"],
+            ["services.workspace_id", "services.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_service",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "lead_id"],
+            ["leads.workspace_id", "leads.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_lead",
+        ),
+        ExcludeConstraint(
+            ("workspace_id", "="),
+            ("doctor_id", "="),
+            (func.tstzrange(text("busy_start_at"), text("busy_end_at"), "[)"), "&&"),
+            where=text(
+                "status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"
+            ),
+            using="gist",
+            name="excl_appointments_doctor_busy_time",
+        ),
+        Index("ix_appointments_workspace_start", "workspace_id", "start_at"),
+        Index("ix_appointments_patient_start", "patient_id", "start_at"),
+        Index("ix_appointments_doctor_start", "doctor_id", "start_at"),
+        Index("ix_appointments_branch_start", "branch_id", "start_at"),
+        Index("ix_appointments_workspace_status", "workspace_id", "status"),
+        Index(
+            "uq_appointments_workspace_idempotency_key",
+            "workspace_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    patient_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    branch_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    doctor_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    lead_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    rescheduled_from_appointment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="staff",
+        server_default="staff",
+    )
+
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    busy_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    busy_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EGP", server_default="EGP")
+
+    customer_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    no_show_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

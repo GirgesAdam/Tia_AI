@@ -1,0 +1,3 @@
+"use server"; import { revalidatePath } from "next/cache"; import { tiaRequest } from "@/lib/tia/api";
+export async function inviteMember(formData:FormData){const email=String(formData.get("email")||"").trim();const role=String(formData.get("role")||"member");await tiaRequest("/auth/workspace/invitations",{method:"POST",body:JSON.stringify({email,role})});revalidatePath("/team");}
+export async function changeRole(formData:FormData){const id=String(formData.get("membership_id"));const role=String(formData.get("role"));await tiaRequest(`/auth/workspace/members/${id}`,{method:"PATCH",body:JSON.stringify({role})});revalidatePath("/team");}

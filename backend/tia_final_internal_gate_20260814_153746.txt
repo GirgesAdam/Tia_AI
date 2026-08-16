@@ -1,0 +1,72 @@
+
+=== TIA AI v0.15.0 FINAL INTERNAL GATE ===
+[PASS] Reset full staging scenarios
+[PASS] Admin Supabase login
+[PASS] Ephemeral real Supabase member identity
+[PASS] Seed final gate fixtures
+[PASS] Real member Supabase login
+
+=== 1. TRUE CONCURRENT BOOKING RACE ===
+[PASS] Find race-test availability — HTTP 200, 2.66s
+[PASS] Exactly one concurrent request succeeds — statuses=[201, 409]
+[PASS] Database contains one active appointment for raced slot — count=1
+
+=== 2. MULTI-TENANT ISOLATION ===
+[PASS] A cannot read B patient — HTTP 404, 1.82s
+[PASS] A cannot read B appointment — HTTP 404, 1.84s
+[PASS] A cannot read B conversation — HTTP 404, 1.74s
+[PASS] B cannot read A patient — HTTP 404, 1.64s
+[PASS] B cannot read A appointment — HTTP 404, 1.74s
+[PASS] B cannot read A conversation — HTTP 404, 1.71s
+[PASS] A cannot mutate B patient — HTTP 404, 1.77s
+[PASS] B context cannot invoke agent on A patient — HTTP 422, 1.74s
+
+=== 3. REAL MEMBER RBAC ===
+[PASS] Member can read CRM — HTTP 200, 1.27s
+[PASS] Member can read booking — HTTP 200, 1.31s
+[PASS] Member can discover availability — HTTP 200, 1.84s
+[PASS] Member can create operational booking — HTTP 201, 5.42s
+[PASS] Member can read Team Inbox — HTTP 200, 2.64s
+[PASS] Member can add patient note — HTTP 201, 1.64s
+[PASS] Member denied workspace member list — HTTP 403, 1.43s
+[PASS] Member denied clinic mutation — HTTP 403, 1.54s
+[PASS] Member denied booking settings mutation — HTTP 403, 1.53s
+
+=== 4. STATEFUL WORKFLOW CONCURRENCY + EXPIRY ===
+[PASS] Stale workflow version is rejected
+[PASS] Expired workflow is closed and audited — status=expired
+
+=== 5. AUTOMATION LIFECYCLE ===
+[PASS] Final gate automation rule visible — HTTP 200, 1.51s
+[PASS] Availability +8d — HTTP 200, 2.70s
+[PASS] Create automation reschedule appointment — HTTP 201, 3.27s
+[PASS] Plan automation jobs before reschedule — HTTP 200, 3.58s
+[PASS] Availability +9d — HTTP 200, 1.78s
+[PASS] Reschedule appointment for automation lifecycle — HTTP 200, 3.75s
+[PASS] Replan after reschedule — HTTP 200, 2.98s
+[PASS] Reschedule cancels old reminder and creates one replacement — old=cancelled new_count=1
+[PASS] Availability +10d — HTTP 200, 1.91s
+[PASS] Create automation cancellation appointment — HTTP 201, 3.72s
+[PASS] Plan job before cancellation — HTTP 200, 2.77s
+[PASS] Cancel automation target appointment — HTTP 200, 2.13s
+[PASS] Replan after cancellation — HTTP 200, 5.24s
+[PASS] Cancellation removes future reminder — status=cancelled
+[PASS] Disable final gate automation rule — HTTP 200, 3.13s
+[PASS] Planner handles disabled rule — HTTP 200, 2.52s
+[PASS] Disabled rule leaves no queued/failed jobs — active=0
+[PASS] Re-enable final gate automation rule — HTTP 200, 2.10s
+[PASS] Stale automation processing job is reclaimable — HTTP 200, 4.21s
+
+=== 6. CHANNEL + HANDOFF RACES ===
+[PASS] Inbound persists during active handoff — HTTP 202, 3.27s
+[PASS] Active handoff pauses AI on channel processing — HTTP 200, 3.57s
+[PASS] Paused inbound creates no AI outbound message or dispatch — ai_outbound=0
+[PASS] Provider callback advances to read — HTTP 202, 2.04s
+[PASS] Late failed callback cannot downgrade read — HTTP 202, 2.26s
+[PASS] Late sent callback cannot downgrade read — HTTP 202, 1.74s
+
+=== 7. FRONTEND E2E ===
+[FAIL] Unhandled final gate error — FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+=== SUMMARY ===
+PASS=52 WARN=0 FAIL=1

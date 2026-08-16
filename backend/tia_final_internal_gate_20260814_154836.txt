@@ -1,0 +1,17 @@
+
+=== TIA AI v0.15.0 FINAL INTERNAL GATE ===
+
+Seed failed due to a database constraint:
+(psycopg.errors.ForeignKeyViolation) update or delete on table "channel_connections" violates foreign key constraint "fk_conversations_channel_connection" on table "conversations"
+DETAIL:  Key (workspace_id, id)=(cd044141-edf4-43fc-8783-a9e7e147010b, f887bd7e-dac9-58ec-8005-94ec32fd4b28) is still referenced from table "conversations".
+[SQL: DELETE FROM channel_connections WHERE channel_connections.workspace_id = %(workspace_id_1)s::UUID AND channel_connections.id IN (%(id_1_1)s::UUID, %(id_1_2)s::UUID)]
+[parameters: {'workspace_id_1': UUID('cd044141-edf4-43fc-8783-a9e7e147010b'), 'id_1_1': UUID('f887bd7e-dac9-58ec-8005-94ec32fd4b28'), 'id_1_2': UUID('bb77ac67-c4fb-5a1c-9dd7-95a24a92d230')}]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+[FAIL] Reset full staging scenarios — exit=1
+
+=== SUMMARY ===
+PASS=0 WARN=0 FAIL=1
+
+=== SUMMARY ===
+PASS=0 WARN=0 FAIL=1

@@ -1,0 +1,57 @@
+from datetime import datetime, time, timezone
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+
+from app.agents.prompts.customer_service import build_customer_service_system_prompt
+from app.agents.tools.clinic_tools import _filter_slots_by_local_window
+
+
+def _slot(start_hour: int, start_minute: int, duration_minutes: int = 60):
+    start = datetime(
+        2026,
+        8,
+        13,
+        start_hour,
+        start_minute,
+        tzinfo=ZoneInfo("Africa/Cairo"),
+    )
+    from datetime import timedelta
+
+    end = start + timedelta(minutes=duration_minutes)
+
+    return SimpleNamespace(
+        start_at=start.astimezone(timezone.utc),
+        end_at=end.astimezone(timezone.utc),
+    )
+
+
+def test_upper_bound_requires_whole_appointment_to_fit() -> None:
+    tz = ZoneInfo("Africa/Cairo")
+    slots = [
+        _slot(20, 0),
+        _slot(20, 15),
+        _slot(20, 30),
+    ]
+
+    filtered = _filter_slots_by_local_window(
+        slots,
+        tz=tz,
+        lower_bound=time(20, 0),
+        upper_bound=time(21, 0),
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0][1].strftime("%H:%M") == "20:00"
+
+
+def test_prompt_prefers_composite_tools() -> None:
+    prompt = build_customer_service_system_prompt(
+        clinic_name="Tia",
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 8, 12, 20, 0),
+    )
+
+    assert "get_booking_options" in prompt
+    assert "get_reschedule_options" in prompt
+    assert "السبب اختياري" in prompt
+    assert "من غير وعد" in prompt

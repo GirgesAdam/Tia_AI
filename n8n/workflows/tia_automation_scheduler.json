@@ -1,0 +1,129 @@
+{
+  "name": "Tia v0.18 - Automation Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -520,
+        0
+      ],
+      "id": "b48bae5f-635f-479f-8959-b5e30ca3d9e3",
+      "name": "Every Minute"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/automations/adapter/tick",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"limit\": 20,\n  \"planning_horizon_days\": 14\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -280,
+        0
+      ],
+      "id": "74f76ee8-b70f-4225-ae24-e29f4929d0e8",
+      "name": "Tia Plan + Claim",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body ?? $json;\nconst jobs = Array.isArray(data.claimed) ? data.claimed : [];\nreturn jobs.map((job, i) => ({json: job, pairedItem: {item: 0}}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        0
+      ],
+      "id": "9a7a5fcf-8804-47d7-83e7-3bea1acf6a77",
+      "name": "Expand Claimed Jobs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/automations/adapter/jobs/' + $json.job_id + '/execute' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "id": "7f31e1eb-9bf3-4f00-93e5-f33cc1c4b6b9",
+      "name": "Tia Execute Automation",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Tia Plan + Claim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tia Plan + Claim": {
+      "main": [
+        [
+          {
+            "node": "Expand Claimed Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Claimed Jobs": {
+      "main": [
+        [
+          {
+            "node": "Tia Execute Automation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Cairo"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

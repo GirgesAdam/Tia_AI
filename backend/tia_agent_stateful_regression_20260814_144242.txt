@@ -1,0 +1,12 @@
+[PASS] Reset staging scenarios
+[PASS] Supabase login
+[PASS] Combined pricing + booking discovery — HTTP 200
+[PASS] Booking flow persisted — status=awaiting_option_selection version=2
+[PASS] Active flow structured option selection — HTTP 200
+[PASS] Stateful booking persisted in PostgreSQL — HTTP 200
+[PASS] Booking flow completed and version advanced — status=completed version=4
+[PASS] Flow audit trail contains start/options/write/complete — events=['completed', 'options_presented', 'started', 'updated', 'write_authorized', 'write_completed']
+[PASS] Start booking flow for safety interruption test — HTTP 200
+[PASS] Medical question interrupts active booking flow — HTTP 200
+[PASS] Medical interruption closes active flow — status=interrupted
+SUMMARY PASS=11 WARN=0 FAIL=0

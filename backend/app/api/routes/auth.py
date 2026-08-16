@@ -1,0 +1,268 @@
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.api.dependencies.security import (
+    WorkspaceAccess,
+    get_current_user,
+    get_workspace_access,
+    get_workspace_admin,
+)
+from app.database.session import get_db
+from app.models.user import User
+from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
+from app.schemas.auth import (
+    CurrentUserRead,
+    MeRead,
+    WorkspaceAccessRead,
+    WorkspaceInvitationCreate,
+    WorkspaceInvitationRead,
+    WorkspaceMemberRead,
+    WorkspaceMemberRoleUpdate,
+)
+from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
+
+router = APIRouter()
+
+
+def member_read(membership: WorkspaceMember, user: User) -> WorkspaceMemberRead:
+    return WorkspaceMemberRead(
+        membership_id=membership.id,
+        user_id=user.id,
+        auth_user_id=user.auth_user_id,
+        email=user.email,
+        full_name=user.full_name,
+        role=membership.role,
+        is_active=membership.is_active,
+    )
+
+
+def active_admin_count(db: Session, workspace_id: UUID) -> int:
+    count = db.scalar(
+        select(func.count())
+        .select_from(WorkspaceMember)
+        .where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.role == WORKSPACE_ROLE_ADMIN,
+            WorkspaceMember.is_active.is_(True),
+        )
+    )
+    return int(count or 0)
+
+
+def ensure_not_last_admin(
+    db: Session,
+    workspace_id: UUID,
+    membership: WorkspaceMember,
+) -> None:
+    if (
+        membership.role == WORKSPACE_ROLE_ADMIN
+        and membership.is_active
+        and active_admin_count(db, workspace_id) <= 1
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workspace must always have at least one active admin.",
+        )
+
+
+@router.get("/me", response_model=MeRead)
+def me(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MeRead:
+    memberships = list(
+        db.scalars(
+            select(WorkspaceMember)
+            .where(
+                WorkspaceMember.user_id == user.id,
+                WorkspaceMember.is_active.is_(True),
+            )
+            .order_by(WorkspaceMember.created_at)
+        )
+    )
+
+    workspaces = [
+        WorkspaceAccessRead(
+            workspace_id=membership.workspace.id,
+            workspace_name=membership.workspace.name,
+            workspace_slug=membership.workspace.slug,
+            role=membership.role,
+        )
+        for membership in memberships
+        if membership.workspace.is_active
+    ]
+
+    if user.auth_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Authenticated user is not linked to Supabase Auth.",
+        )
+
+    return MeRead(
+        user=CurrentUserRead(
+            id=user.id,
+            auth_user_id=user.auth_user_id,
+            email=user.email,
+            full_name=user.full_name,
+        ),
+        workspaces=workspaces,
+    )
+
+
+@router.get("/workspace", response_model=WorkspaceAccessRead)
+def current_workspace(
+    access: WorkspaceAccess = Depends(get_workspace_access),
+) -> WorkspaceAccessRead:
+    return WorkspaceAccessRead(
+        workspace_id=access.workspace.id,
+        workspace_name=access.workspace.name,
+        workspace_slug=access.workspace.slug,
+        role=access.membership.role,
+    )
+
+
+@router.get("/workspace/members", response_model=list[WorkspaceMemberRead])
+def list_workspace_members(
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> list[WorkspaceMemberRead]:
+    memberships = list(
+        db.scalars(
+            select(WorkspaceMember)
+            .where(WorkspaceMember.workspace_id == access.workspace.id)
+            .order_by(WorkspaceMember.created_at)
+        )
+    )
+    return [member_read(membership, membership.user) for membership in memberships]
+
+
+@router.post(
+    "/workspace/invitations",
+    response_model=WorkspaceInvitationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def invite_workspace_member(
+    payload: WorkspaceInvitationCreate,
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> WorkspaceInvitationRead:
+    existing_user = db.scalar(select(User).where(User.email == payload.email))
+    if existing_user is not None:
+        existing_membership = db.scalar(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == access.workspace.id,
+                WorkspaceMember.user_id == existing_user.id,
+            )
+        )
+        if existing_membership is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This user already belongs to the workspace.",
+            )
+        if existing_user.auth_user_id is not None:
+            membership = WorkspaceMember(
+                workspace_id=access.workspace.id,
+                user_id=existing_user.id,
+                role=payload.role,
+            )
+            db.add(membership)
+            db.commit()
+            db.refresh(membership)
+            return WorkspaceInvitationRead(
+                membership=member_read(membership, existing_user),
+                invitation_sent=False,
+            )
+
+    try:
+        invited = invite_user_by_email(payload.email)
+    except SupabaseAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Supabase could not create the invitation. If the user already exists in "
+                "Supabase Auth, link them after their first sign-in."
+            ),
+        ) from exc
+
+    if existing_user is None:
+        existing_user = User(
+            auth_user_id=invited.auth_user_id,
+            email=invited.email,
+        )
+        db.add(existing_user)
+        db.flush()
+    else:
+        existing_user.auth_user_id = invited.auth_user_id
+
+    membership = WorkspaceMember(
+        workspace_id=access.workspace.id,
+        user_id=existing_user.id,
+        role=payload.role,
+    )
+    db.add(membership)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not create workspace membership.",
+        ) from exc
+
+    db.refresh(existing_user)
+    db.refresh(membership)
+    return WorkspaceInvitationRead(
+        membership=member_read(membership, existing_user),
+        invitation_sent=True,
+    )
+
+
+@router.patch("/workspace/members/{membership_id}", response_model=WorkspaceMemberRead)
+def update_workspace_member_role(
+    membership_id: UUID,
+    payload: WorkspaceMemberRoleUpdate,
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> WorkspaceMemberRead:
+    membership = db.scalar(
+        select(WorkspaceMember).where(
+            WorkspaceMember.id == membership_id,
+            WorkspaceMember.workspace_id == access.workspace.id,
+        )
+    )
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
+
+    if membership.role == WORKSPACE_ROLE_ADMIN and payload.role != WORKSPACE_ROLE_ADMIN:
+        ensure_not_last_admin(db, access.workspace.id, membership)
+
+    membership.role = payload.role
+    db.commit()
+    db.refresh(membership)
+    return member_read(membership, membership.user)
+
+
+@router.delete("/workspace/members/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_workspace_member(
+    membership_id: UUID,
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    membership = db.scalar(
+        select(WorkspaceMember).where(
+            WorkspaceMember.id == membership_id,
+            WorkspaceMember.workspace_id == access.workspace.id,
+        )
+    )
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
+
+    ensure_not_last_admin(db, access.workspace.id, membership)
+
+    db.delete(membership)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

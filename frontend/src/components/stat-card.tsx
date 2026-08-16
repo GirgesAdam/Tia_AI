@@ -1,0 +1,3 @@
+import type { LucideIcon } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+export function StatCard({label,value,detail,icon:Icon}:{label:string;value:string|number;detail:string;icon:LucideIcon}){return <Card><CardContent className="flex items-start justify-between p-5"><div><div className="text-sm font-semibold text-[var(--muted)]">{label}</div><div className="mt-2 text-3xl font-black">{value}</div><div className="mt-2 text-xs text-[var(--muted)]">{detail}</div></div><span className="grid size-10 place-items-center rounded-xl bg-teal-50 text-teal-700"><Icon size={19}/></span></CardContent></Card>}
