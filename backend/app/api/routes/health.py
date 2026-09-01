@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database.session import get_db
 
-
 router = APIRouter()
 
 

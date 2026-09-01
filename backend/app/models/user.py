@@ -30,7 +30,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=text("true"),
     )
 
-    workspace_memberships: Mapped[list["WorkspaceMember"]] = relationship(
+    workspace_memberships: Mapped[list[WorkspaceMember]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

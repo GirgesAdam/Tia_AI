@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,7 +15,7 @@ from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
-from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
+from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
 from app.models.workspace import Workspace
 
 
@@ -106,6 +106,36 @@ def _interval_intersections(
     return intersections
 
 
+def _window_intersections(
+    branch_hours: list[BranchWorkingHour],
+    windows: list[DoctorAvailabilityWindow],
+    local_date: date,
+    tz: ZoneInfo,
+) -> list[tuple[datetime, datetime]]:
+    intersections: list[tuple[datetime, datetime]] = []
+    for branch_hour in branch_hours:
+        branch_start = _combine(local_date, branch_hour.start_time, tz)
+        branch_end = _combine(local_date, branch_hour.end_time, tz)
+        for window in windows:
+            doctor_start = window.start_at.astimezone(tz)
+            doctor_end = window.end_at.astimezone(tz)
+            start = max(branch_start, doctor_start)
+            end = min(branch_end, doctor_end)
+            if end > start:
+                intersections.append((start, end))
+    return intersections
+
+
+def service_duration_minutes(service: Service) -> int:
+    """Return the clinic-wide duration for a service.
+
+    Duration is intentionally service-owned. Doctor-service assignments may
+    control eligibility and price, but every doctor blocks the same amount of
+    time for the same service.
+    """
+    return int(service.duration_minutes)
+
+
 def _overlaps_existing(
     busy_start_at: datetime,
     busy_end_at: datetime,
@@ -126,30 +156,54 @@ def calculate_availability(
     doctor_id: UUID | None = None,
     exclude_appointment_id: UUID | None = None,
     now: datetime | None = None,
+    preloaded_branch: Branch | None = None,
+    preloaded_service: Service | None = None,
 ) -> tuple[str, list[SlotCandidate]]:
-    branch = db.scalar(
-        select(Branch).where(
-            Branch.id == branch_id,
-            Branch.workspace_id == workspace.id,
-            Branch.is_active.is_(True),
+    # Composite booking reads already resolve active branch/service rows before
+    # availability calculation. Reuse those exact ORM rows when supplied instead
+    # of re-reading them over a remote DB connection. Callers that do not have
+    # verified rows retain the original lookup/validation path.
+    if preloaded_branch is not None:
+        if (
+            preloaded_branch.id != branch_id
+            or preloaded_branch.workspace_id != workspace.id
+            or not preloaded_branch.is_active
+        ):
+            raise BookingRuleError("Branch not found or inactive.")
+        branch = preloaded_branch
+    else:
+        branch = db.scalar(
+            select(Branch).where(
+                Branch.id == branch_id,
+                Branch.workspace_id == workspace.id,
+                Branch.is_active.is_(True),
+            )
         )
-    )
-    if branch is None:
-        raise BookingRuleError("Branch not found or inactive.")
+        if branch is None:
+            raise BookingRuleError("Branch not found or inactive.")
 
-    service = db.scalar(
-        select(Service).where(
-            Service.id == service_id,
-            Service.workspace_id == workspace.id,
-            Service.is_active.is_(True),
+    if preloaded_service is not None:
+        if (
+            preloaded_service.id != service_id
+            or preloaded_service.workspace_id != workspace.id
+            or not preloaded_service.is_active
+        ):
+            raise BookingRuleError("Service not found or inactive.")
+        service = preloaded_service
+    else:
+        service = db.scalar(
+            select(Service).where(
+                Service.id == service_id,
+                Service.workspace_id == workspace.id,
+                Service.is_active.is_(True),
+            )
         )
-    )
-    if service is None:
-        raise BookingRuleError("Service not found or inactive.")
+        if service is None:
+            raise BookingRuleError("Service not found or inactive.")
 
     tz = resolve_timezone(workspace, branch)
     settings = get_effective_booking_settings(db, workspace.id)
-    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     local_today = now_utc.astimezone(tz).date()
 
     if booking_date < local_today:
@@ -206,8 +260,8 @@ def calculate_availability(
     doctor_ids = [doctor.id for _, _, doctor in assignments]
     day_start_local = datetime.combine(booking_date, time.min, tzinfo=tz)
     day_end_local = day_start_local + timedelta(days=1)
-    day_start_utc = day_start_local.astimezone(timezone.utc)
-    day_end_utc = day_end_local.astimezone(timezone.utc)
+    day_start_utc = day_start_local.astimezone(UTC)
+    day_end_utc = day_end_local.astimezone(UTC)
 
     appointment_stmt = select(Appointment).where(
         Appointment.workspace_id == workspace.id,
@@ -226,21 +280,64 @@ def calculate_availability(
     minimum_start_utc = now_utc + timedelta(minutes=settings.minimum_notice_minutes)
     slots: list[SlotCandidate] = []
 
-    for _, doctor_service, doctor in assignments:
-        doctor_hours = list(
-            db.scalars(
-                select(DoctorWorkingHour).where(
-                    DoctorWorkingHour.workspace_id == workspace.id,
-                    DoctorWorkingHour.doctor_id == doctor.id,
-                    DoctorWorkingHour.branch_id == branch.id,
-                    DoctorWorkingHour.weekday == weekday,
-                )
+    # Load all relevant doctor schedules in one query. This preserves the exact
+    # availability rules while avoiding one DB round trip per doctor when the
+    # customer did not constrain the request to a single doctor.
+    doctor_hour_rows = list(
+        db.scalars(
+            select(DoctorWorkingHour).where(
+                DoctorWorkingHour.workspace_id == workspace.id,
+                DoctorWorkingHour.doctor_id.in_(doctor_ids),
+                DoctorWorkingHour.branch_id == branch.id,
+                DoctorWorkingHour.weekday == weekday,
             )
         )
-        if not doctor_hours:
+    )
+    doctor_hours_by_doctor: dict[UUID, list[DoctorWorkingHour]] = {
+        doctor_id_value: [] for doctor_id_value in doctor_ids
+    }
+    for doctor_hour in doctor_hour_rows:
+        doctor_hours_by_doctor.setdefault(doctor_hour.doctor_id, []).append(doctor_hour)
+
+    window_rows = list(
+        db.scalars(
+            select(DoctorAvailabilityWindow).where(
+                DoctorAvailabilityWindow.workspace_id == workspace.id,
+                DoctorAvailabilityWindow.doctor_id.in_(doctor_ids),
+                DoctorAvailabilityWindow.branch_id == branch.id,
+                DoctorAvailabilityWindow.start_at < day_end_utc,
+                DoctorAvailabilityWindow.end_at > day_start_utc,
+            )
+        )
+    )
+    windows_by_doctor: dict[UUID, list[DoctorAvailabilityWindow]] = {
+        doctor_id_value: [] for doctor_id_value in doctor_ids
+    }
+    for window in window_rows:
+        windows_by_doctor.setdefault(window.doctor_id, []).append(window)
+
+    for _, doctor_service, doctor in assignments:
+        doctor_hours = doctor_hours_by_doctor.get(doctor.id, [])
+        dated_windows = windows_by_doctor.get(doctor.id, [])
+        if doctor.doctor_type == "visiting":
+            availability_intervals = _window_intersections(
+                branch_hours, dated_windows, booking_date, tz
+            )
+        else:
+            availability_intervals = _interval_intersections(
+                branch_hours, doctor_hours, booking_date, tz
+            )
+            if dated_windows:
+                availability_intervals.extend(
+                    _window_intersections(branch_hours, dated_windows, booking_date, tz)
+                )
+        if not availability_intervals:
             continue
 
-        duration_minutes = doctor_service.custom_duration_minutes or service.duration_minutes
+        # Clinic rule: appointment duration belongs to the service, never to the doctor.
+        # DoctorService can still override price/assignment metadata for backwards compatibility,
+        # but it must not change how long the chair/doctor is blocked.
+        duration_minutes = service_duration_minutes(service)
         price_minor = (
             doctor_service.custom_price_minor
             if doctor_service.custom_price_minor is not None
@@ -251,12 +348,7 @@ def calculate_availability(
         duration = timedelta(minutes=duration_minutes)
         after = timedelta(minutes=service.buffer_after_minutes)
 
-        for interval_start, interval_end in _interval_intersections(
-            branch_hours,
-            doctor_hours,
-            booking_date,
-            tz,
-        ):
+        for interval_start, interval_end in availability_intervals:
             candidate = ceil_to_interval(
                 interval_start + before,
                 settings.slot_interval_minutes,
@@ -269,10 +361,10 @@ def calculate_availability(
                 if busy_end > interval_end:
                     break
 
-                start_utc = service_start.astimezone(timezone.utc)
-                end_utc = service_end.astimezone(timezone.utc)
-                busy_start_utc = busy_start.astimezone(timezone.utc)
-                busy_end_utc = busy_end.astimezone(timezone.utc)
+                start_utc = service_start.astimezone(UTC)
+                end_utc = service_end.astimezone(UTC)
+                busy_start_utc = busy_start.astimezone(UTC)
+                busy_end_utc = busy_end.astimezone(UTC)
 
                 if start_utc >= minimum_start_utc and not _overlaps_existing(
                     busy_start_utc,
@@ -309,7 +401,7 @@ def find_exact_slot(
     requested_start_at: datetime,
     exclude_appointment_id: UUID | None = None,
 ) -> SlotCandidate:
-    requested_utc = requested_start_at.astimezone(timezone.utc)
+    requested_utc = requested_start_at.astimezone(UTC)
 
     branch = db.scalar(
         select(Branch).where(

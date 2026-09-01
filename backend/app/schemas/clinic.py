@@ -86,6 +86,7 @@ class StaffRead(ORMModel):
 
 class DoctorCreate(BaseModel):
     staff_id: UUID
+    doctor_type: str = Field(default="regular", pattern=r"^(regular|visiting)$")
     specialization: str | None = Field(default=None, max_length=200)
     license_number: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=2000)
@@ -93,6 +94,7 @@ class DoctorCreate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
+    doctor_type: str | None = Field(default=None, pattern=r"^(regular|visiting)$")
     specialization: str | None = Field(default=None, max_length=200)
     license_number: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=2000)
@@ -104,6 +106,7 @@ class DoctorRead(ORMModel):
     id: UUID
     workspace_id: UUID
     staff_id: UUID
+    doctor_type: str
     specialization: str | None
     license_number: str | None
     bio: str | None
@@ -174,7 +177,10 @@ class DoctorBranchRead(ORMModel):
 
 
 class DoctorServiceAssignment(BaseModel):
-    custom_duration_minutes: int | None = Field(default=None, gt=0, le=1440)
+    # Duration is a property of Service. Keep this null-only field in the write
+    # contract so older clients that send null remain compatible while non-null
+    # doctor-specific durations are rejected.
+    custom_duration_minutes: None = None
     custom_price_minor: int | None = Field(default=None, ge=0)
     is_active: bool = True
 
@@ -216,7 +222,7 @@ class WorkingHoursReplace(BaseModel):
 
         for intervals in by_weekday.values():
             ordered = sorted(intervals, key=lambda item: item.start_time)
-            for previous, current in zip(ordered, ordered[1:]):
+            for previous, current in zip(ordered, ordered[1:], strict=False):
                 if current.start_time < previous.end_time:
                     raise ValueError("Working-hour intervals cannot overlap on the same weekday.")
         return self

@@ -55,6 +55,10 @@ class AgentAction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    input_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    output_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    input_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    output_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

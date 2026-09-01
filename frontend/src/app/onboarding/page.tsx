@@ -1,17 +1,43 @@
 import { Bot, Building2, Sparkles } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { createWorkspaceAction } from "./actions";
 
-export default function OnboardingPage(){
-  return <main className="grid min-h-screen place-items-center bg-[var(--surface-2)] p-5" dir="rtl">
-    <div className="w-full max-w-xl rounded-3xl border border-[var(--border)] bg-white p-7 shadow-sm">
-      <div className="mb-7 flex items-center gap-3"><span className="grid size-12 place-items-center rounded-2xl bg-[var(--accent)] text-white"><Bot/></span><div><h1 className="text-2xl font-black">ابدأ Workspace جديدة</h1><p className="text-sm text-[var(--muted)]">Tia هتستخدمها كحد فاصل كامل لبيانات العيادة.</p></div></div>
-      <div className="mb-6 rounded-2xl bg-teal-50 p-4 text-sm text-teal-900"><Sparkles className="mb-2" size={18}/>بعد الإنشاء هنمشي على الفروع، الخدمات، الدكاترة، المواعيد وإعدادات الحجز.</div>
-      <form action={createWorkspaceAction} className="space-y-4">
-        <label className="block text-sm font-bold">اسم العيادة<input name="name" required minLength={2} className="mt-1 w-full rounded-xl border border-[var(--border)] px-3 py-2.5" placeholder="مثال: Tia Clinic"/></label>
-        <label className="block text-sm font-bold">Slug بالإنجليزي<input name="slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" className="mt-1 w-full rounded-xl border border-[var(--border)] px-3 py-2.5" placeholder="tia-clinic"/></label>
-        <label className="block text-sm font-bold">Timezone<select name="timezone" defaultValue="Africa/Cairo" className="mt-1 w-full rounded-xl border border-[var(--border)] px-3 py-2.5"><option value="Africa/Cairo">Africa/Cairo</option><option value="Asia/Riyadh">Asia/Riyadh</option><option value="Asia/Dubai">Asia/Dubai</option></select></label>
-        <button className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] font-bold text-white"><Building2 size={18}/>إنشاء Workspace</button>
-      </form>
-    </div>
-  </main>
+export default function OnboardingPage() {
+  return (
+    <main className="grid min-h-screen place-items-center bg-[var(--bg)] p-5 sm:p-8" dir="rtl">
+      <div className="w-full max-w-xl rounded-3xl border border-[var(--border)] bg-white p-6 shadow-[0_16px_50px_rgba(15,23,42,.06)] sm:p-8">
+        <div className="mb-7 flex items-start gap-3">
+          <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(15,118,110,.18)]"><Bot /></span>
+          <div>
+            <h1 className="text-2xl font-black tracking-tight text-slate-950">إضافة عيادة جديدة</h1>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">ابدأ بالمعلومات الأساسية، وبعدها تقدر تكمل إعداد التشغيل والبيانات خطوة بخطوة.</p>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-2xl border border-teal-100 bg-teal-50/70 p-4 text-sm leading-6 text-teal-950">
+          <Sparkles className="mb-2 text-teal-700" size={18} />
+          بعد الإنشاء تقدر تضيف الفروع والخدمات والدكاترة ومواعيد العمل، أو تستورد بيانات العيادة الحالية.
+        </div>
+
+        <form action={createWorkspaceAction} className="space-y-5">
+          <label className="block text-sm font-bold text-slate-800">
+            اسم العيادة
+            <input name="name" required minLength={2} className="form-control mt-1.5" placeholder="مثال: Tia Clinic" />
+          </label>
+          <label className="block text-sm font-bold text-slate-800">
+            المنطقة الزمنية
+            <select name="timezone" defaultValue="Africa/Cairo" className="form-control mt-1.5">
+              <option value="Africa/Cairo">القاهرة</option>
+              <option value="Asia/Riyadh">الرياض</option>
+              <option value="Asia/Dubai">دبي</option>
+            </select>
+          </label>
+          <Button className="w-full" size="lg">
+            <Building2 size={18} /> إنشاء العيادة
+          </Button>
+        </form>
+      </div>
+    </main>
+  );
 }

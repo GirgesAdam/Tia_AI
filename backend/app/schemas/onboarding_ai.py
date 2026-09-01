@@ -6,7 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 OnboardingCapability = Literal[
     "branch_configuration",
     "service_configuration",
@@ -36,10 +35,9 @@ def _reject_overlaps(intervals: list[OnboardingWorkingHour]) -> None:
         by_weekday.setdefault(interval.weekday, []).append(interval)
     for rows in by_weekday.values():
         ordered = sorted(rows, key=lambda row: row.start_time)
-        for previous, current in zip(ordered, ordered[1:]):
+        for previous, current in zip(ordered, ordered[1:], strict=False):
             if current.start_time < previous.end_time:
                 raise ValueError("Working-hour intervals cannot overlap on the same weekday.")
-
 
 
 class OnboardingBranchPlan(BaseModel):
@@ -67,7 +65,9 @@ class OnboardingBranchPlan(BaseModel):
     @model_validator(mode="after")
     def validate_working_hours(self):
         if self.apply_working_hours and not self.working_hours:
-            raise ValueError("Branch working hours cannot be empty when apply_working_hours is true.")
+            raise ValueError(
+                "Branch working hours cannot be empty when apply_working_hours is true."
+            )
         _reject_overlaps(self.working_hours)
         return self
 
@@ -131,7 +131,9 @@ class OnboardingDoctorPlan(BaseModel):
     @model_validator(mode="after")
     def validate_working_hours_application(self):
         if self.apply_working_hours and not self.working_hours:
-            raise ValueError("Doctor working hours cannot be empty when apply_working_hours is true.")
+            raise ValueError(
+                "Doctor working hours cannot be empty when apply_working_hours is true."
+            )
         return self
 
 

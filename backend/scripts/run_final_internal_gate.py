@@ -41,10 +41,10 @@ from app.services.conversation_flows import (
     transition_flow,
 )
 from final_gate_scenarios import gate_ids, member_email_for
-from staging_scenarios import MOCK_AUTOMATION_TOKEN, MOCK_CHANNEL_TOKEN, sid
+from staging_scenarios import REGRESSION_WORKSPACE_ID, MOCK_AUTOMATION_TOKEN, MOCK_CHANNEL_TOKEN, sid
 
 DEFAULT_EMAIL = "adam1ezzat1@gmail.com"
-DEFAULT_WORKSPACE_ID = "cd044141-edf4-43fc-8783-a9e7e147010b"
+DEFAULT_WORKSPACE_ID = str(REGRESSION_WORKSPACE_ID)
 
 
 @dataclass

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from app.agents.semantic_router import (
     HandoffCategory,
     Priority,
-    RiskFlag,
-    SemanticCapability,
     SemanticCapabilityDecision,
 )
-
 
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),
@@ -20,12 +17,8 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "availability_discovery": frozenset({"get_booking_options"}),
     "appointment_creation": frozenset({"book_appointment"}),
     "appointment_list": frozenset({"get_customer_appointments"}),
-    "appointment_confirmation": frozenset(
-        {"get_customer_appointments", "confirm_appointment"}
-    ),
-    "appointment_cancellation": frozenset(
-        {"get_customer_appointments", "cancel_appointment"}
-    ),
+    "appointment_confirmation": frozenset({"get_customer_appointments", "confirm_appointment"}),
+    "appointment_cancellation": frozenset({"get_customer_appointments", "cancel_appointment"}),
     "appointment_reschedule": frozenset(
         {
             "get_customer_appointments",
@@ -34,7 +27,9 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
         }
     ),
     "customer_profile": frozenset({"get_customer_profile"}),
-    "email_communication": frozenset({"send_email_to_customer"}),
+    "customer_history": frozenset({"get_customer_history"}),
+    "follow_up_request": frozenset({"create_follow_up_task"}),
+    "marketing_preferences": frozenset({"update_marketing_consent"}),
     "human_support": frozenset({"escalate_to_human"}),
 }
 
@@ -43,7 +38,8 @@ WRITE_TOOL_CAPABILITY: dict[str, str] = {
     "confirm_appointment": "appointment_confirmation",
     "cancel_appointment": "appointment_cancellation",
     "reschedule_appointment": "appointment_reschedule",
-    "send_email_to_customer": "email_communication",
+    "create_follow_up_task": "follow_up_request",
+    "update_marketing_consent": "marketing_preferences",
     "escalate_to_human": "human_support",
 }
 
@@ -140,6 +136,4 @@ def authorize_tool_execution(
 
     required = WRITE_TOOL_CAPABILITY.get(tool_name)
     if required is not None and required not in policy.capabilities:
-        raise ToolAuthorizationError(
-            f"Write tool {tool_name!r} requires capability {required!r}."
-        )
+        raise ToolAuthorizationError(f"Write tool {tool_name!r} requires capability {required!r}.")

@@ -5,25 +5,66 @@ Revises: 0010_whatsapp_n8n_bridge
 Create Date: 2026-08-13
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 from uuid import uuid4
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0011_automation_engine"
-down_revision: Union[str, Sequence[str], None] = "0010_whatsapp_n8n_bridge"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0010_whatsapp_n8n_bridge"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 DEFAULT_RULES = (
-    ("booking_confirmation", "Booking confirmation", "appointment_created", 0, "tia_booking_confirmation_ar", "ar", 60),
-    ("appointment_reminder_24h", "Appointment reminder - 24 hours", "before_appointment", -1440, "tia_appointment_reminder_24h_ar", "ar", 30),
-    ("appointment_reminder_2h", "Appointment reminder - 2 hours", "before_appointment", -120, "tia_appointment_reminder_2h_ar", "ar", 20),
-    ("post_visit_followup", "Post-visit follow-up", "after_completed", 1440, "tia_post_visit_followup_ar", "ar", 1440),
-    ("no_show_followup", "No-show recovery follow-up", "after_no_show", 30, "tia_no_show_followup_ar", "ar", 720),
+    (
+        "booking_confirmation",
+        "Booking confirmation",
+        "appointment_created",
+        0,
+        "tia_booking_confirmation_ar",
+        "ar",
+        60,
+    ),
+    (
+        "appointment_reminder_24h",
+        "Appointment reminder - 24 hours",
+        "before_appointment",
+        -1440,
+        "tia_appointment_reminder_24h_ar",
+        "ar",
+        30,
+    ),
+    (
+        "appointment_reminder_2h",
+        "Appointment reminder - 2 hours",
+        "before_appointment",
+        -120,
+        "tia_appointment_reminder_2h_ar",
+        "ar",
+        20,
+    ),
+    (
+        "post_visit_followup",
+        "Post-visit follow-up",
+        "after_completed",
+        1440,
+        "tia_post_visit_followup_ar",
+        "ar",
+        1440,
+    ),
+    (
+        "no_show_followup",
+        "No-show recovery follow-up",
+        "after_no_show",
+        30,
+        "tia_no_show_followup_ar",
+        "ar",
+        720,
+    ),
 )
 
 
@@ -41,9 +82,18 @@ def upgrade() -> None:
         sa.Column("template_name", sa.String(length=160), nullable=False),
         sa.Column("template_language", sa.String(length=20), server_default="ar", nullable=False),
         sa.Column("max_lateness_minutes", sa.Integer(), server_default="30", nullable=False),
-        sa.Column("config", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "config",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show')",
             name="automation_rule_trigger_kind_valid",
@@ -57,7 +107,9 @@ def upgrade() -> None:
         sa.UniqueConstraint("workspace_id", "key", name="uq_automation_rules_workspace_key"),
     )
     op.create_index("ix_automation_rules_workspace_id", "automation_rules", ["workspace_id"])
-    op.create_index("ix_automation_rules_workspace_enabled", "automation_rules", ["workspace_id", "enabled"])
+    op.create_index(
+        "ix_automation_rules_workspace_enabled", "automation_rules", ["workspace_id", "enabled"]
+    )
 
     op.create_table(
         "automation_workers",
@@ -68,8 +120,12 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=20), server_default="active", nullable=False),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=True),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('active', 'paused', 'revoked')",
             name="automation_worker_status_valid",
@@ -80,7 +136,9 @@ def upgrade() -> None:
         sa.UniqueConstraint("token_hash", name="uq_automation_workers_token_hash"),
     )
     op.create_index("ix_automation_workers_workspace_id", "automation_workers", ["workspace_id"])
-    op.create_index("ix_automation_workers_workspace_status", "automation_workers", ["workspace_id", "status"])
+    op.create_index(
+        "ix_automation_workers_workspace_status", "automation_workers", ["workspace_id", "status"]
+    )
 
     op.create_table(
         "automation_jobs",
@@ -98,17 +156,41 @@ def upgrade() -> None:
         sa.Column("message_id", sa.Uuid(), nullable=True),
         sa.Column("dispatch_id", sa.Uuid(), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("result", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column(
+            "payload",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "result",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('queued', 'processing', 'dispatched', 'skipped', 'failed', 'cancelled')",
             name="automation_job_status_valid",
         ),
-        sa.ForeignKeyConstraint(["workspace_id", "appointment_id"], ["appointments.workspace_id", "appointments.id"], ondelete="CASCADE", name="fk_automation_jobs_appointment"),
-        sa.ForeignKeyConstraint(["workspace_id", "patient_id"], ["patients.workspace_id", "patients.id"], ondelete="CASCADE", name="fk_automation_jobs_patient"),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "appointment_id"],
+            ["appointments.workspace_id", "appointments.id"],
+            ondelete="CASCADE",
+            name="fk_automation_jobs_appointment",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "patient_id"],
+            ["patients.workspace_id", "patients.id"],
+            ondelete="CASCADE",
+            name="fk_automation_jobs_patient",
+        ),
         sa.ForeignKeyConstraint(["rule_id"], ["automation_rules.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["message_id"], ["messages.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["dispatch_id"], ["message_dispatches.id"], ondelete="SET NULL"),
@@ -120,8 +202,17 @@ def upgrade() -> None:
     op.create_index("ix_automation_jobs_patient_id", "automation_jobs", ["patient_id"])
     op.create_index("ix_automation_jobs_message_id", "automation_jobs", ["message_id"])
     op.create_index("ix_automation_jobs_dispatch_id", "automation_jobs", ["dispatch_id"])
-    op.create_index("uq_automation_jobs_workspace_dedupe", "automation_jobs", ["workspace_id", "dedupe_key"], unique=True)
-    op.create_index("ix_automation_jobs_workspace_due", "automation_jobs", ["workspace_id", "status", "scheduled_for", "next_attempt_at"])
+    op.create_index(
+        "uq_automation_jobs_workspace_dedupe",
+        "automation_jobs",
+        ["workspace_id", "dedupe_key"],
+        unique=True,
+    )
+    op.create_index(
+        "ix_automation_jobs_workspace_due",
+        "automation_jobs",
+        ["workspace_id", "status", "scheduled_for", "next_attempt_at"],
+    )
 
     bind = op.get_bind()
     workspace_ids = [row[0] for row in bind.execute(sa.text("SELECT id FROM workspaces")).all()]

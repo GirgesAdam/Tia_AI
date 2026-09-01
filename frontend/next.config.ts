@@ -11,6 +11,10 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   allowedDevOrigins,
+  experimental: {
+    serverActions: { bodySizeLimit: "64mb" },
+    proxyClientMaxBodySize: "64mb",
+  },
 };
 
 export default nextConfig;

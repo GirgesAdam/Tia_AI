@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Boolean,
     Integer,
     String,
     Text,
@@ -73,6 +74,22 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("busy_end_at >= end_at", name="appointment_busy_end_valid"),
         CheckConstraint("duration_minutes > 0", name="appointment_duration_positive"),
         CheckConstraint("price_minor >= 0", name="appointment_price_non_negative"),
+        CheckConstraint(
+            "payment_status IN ('unknown', 'unpaid', 'partial', 'paid', 'refunded')",
+            name="appointment_payment_status_valid",
+        ),
+        CheckConstraint(
+            "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'other')",
+            name="appointment_payment_method_valid",
+        ),
+        CheckConstraint(
+            "amount_paid_minor IS NULL OR amount_paid_minor >= 0",
+            name="appointment_amount_paid_non_negative",
+        ),
+        CheckConstraint(
+            "billing_context IN ('standard', 'package_prepaid')",
+            name="appointment_billing_context_valid",
+        ),
         ForeignKeyConstraint(
             ["workspace_id"],
             ["workspaces.id"],
@@ -104,6 +121,12 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="fk_appointments_service",
         ),
         ForeignKeyConstraint(
+            ["workspace_id", "patient_package_id"],
+            ["patient_packages.workspace_id", "patient_packages.id"],
+            ondelete="RESTRICT",
+            name="fk_appointments_patient_package",
+        ),
+        ForeignKeyConstraint(
             ["workspace_id", "lead_id"],
             ["leads.workspace_id", "leads.id"],
             ondelete="RESTRICT",
@@ -113,9 +136,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ("workspace_id", "="),
             ("doctor_id", "="),
             (func.tstzrange(text("busy_start_at"), text("busy_end_at"), "[)"), "&&"),
-            where=text(
-                "status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"
-            ),
+            where=text("doctor_assignment_known AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"),
             using="gist",
             name="excl_appointments_doctor_busy_time",
         ),
@@ -124,6 +145,13 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_appointments_doctor_start", "doctor_id", "start_at"),
         Index("ix_appointments_branch_start", "branch_id", "start_at"),
         Index("ix_appointments_workspace_status", "workspace_id", "status"),
+        Index(
+            "ix_appointments_workspace_status_start_patient",
+            "workspace_id",
+            "status",
+            "start_at",
+            "patient_id",
+        ),
         Index(
             "uq_appointments_workspace_idempotency_key",
             "workspace_id",
@@ -137,7 +165,11 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     patient_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     branch_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     doctor_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    doctor_assignment_known: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    patient_package_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     lead_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -170,7 +202,22 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     price_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EGP", server_default="EGP")
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="EGP", server_default="EGP"
+    )
+    payment_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unknown", server_default="unknown"
+    )
+    amount_paid_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payment_method: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unknown", server_default="unknown"
+    )
+    # ``package_prepaid`` means the appointment is settled by a package purchase
+    # recorded elsewhere. It must not create appointment-level revenue.
+    billing_context: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="standard", server_default="standard"
+    )
+    package_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     customer_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

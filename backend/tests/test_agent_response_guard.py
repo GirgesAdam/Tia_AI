@@ -2,10 +2,7 @@ from app.agents.response_guard import sanitize_customer_reply
 
 
 def test_full_uuid_is_removed() -> None:
-    reply = (
-        "الدكتور 50c4d2be-20de-4b06-8dbf-7e9425faebc4 "
-        "متاح الساعة 8"
-    )
+    reply = "الدكتور 50c4d2be-20de-4b06-8dbf-7e9425faebc4 متاح الساعة 8"
     cleaned = sanitize_customer_reply(reply)
     assert "50c4d2be" not in cleaned
 

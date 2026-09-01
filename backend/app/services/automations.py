@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,18 +20,26 @@ from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_identity import ChannelIdentity
 from app.models.conversation import Conversation
+from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
+from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
-from app.schemas.automation import AutomationClaimedJob
+from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOverview
+from app.services.activity import record_activity_event
+from app.services.conversation_ownership import record_outbound_activity, return_to_ai
 
 
 class AutomationError(ValueError):
     pass
+
+
+AUTOMATION_WORKER_FRESH_MINUTES = 5
+AUTOMATION_JOB_STALE_MINUTES = 10
 
 
 @dataclass(frozen=True)
@@ -66,7 +74,9 @@ def get_worker_by_token(db: Session, raw_token: str) -> AutomationWorker | None:
     )
 
 
-def ensure_default_rules(db: Session, workspace_id: UUID, *, commit: bool = True) -> list[AutomationRule]:
+def ensure_default_rules(
+    db: Session, workspace_id: UUID, *, commit: bool = True
+) -> list[AutomationRule]:
     existing = {
         row.key: row
         for row in db.scalars(
@@ -81,7 +91,7 @@ def ensure_default_rules(db: Session, workspace_id: UUID, *, commit: bool = True
             workspace_id=workspace_id,
             key=definition.key,
             name=definition.name,
-            enabled=False,
+            enabled=definition.enabled_by_default,
             trigger_kind=definition.trigger_kind,
             offset_minutes=definition.offset_minutes,
             channel=definition.channel,
@@ -168,7 +178,7 @@ def plan_automation_jobs(
     planning_horizon_days: int = 14,
     now: datetime | None = None,
 ) -> PlanningResult:
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (now or datetime.now(UTC)).astimezone(UTC)
     horizon = now + timedelta(days=planning_horizon_days)
     rules = ensure_default_rules(db, workspace_id, commit=False)
     planned = 0
@@ -193,7 +203,7 @@ def plan_automation_jobs(
             )
             if when is None:
                 continue
-            when = when.astimezone(timezone.utc)
+            when = when.astimezone(UTC)
 
             latest_allowed = when + timedelta(minutes=rule.max_lateness_minutes)
             if latest_allowed < now:
@@ -207,9 +217,14 @@ def plan_automation_jobs(
                 )
             )
             if existing is not None:
-                if existing.status in {"queued", "failed"} and existing.scheduled_for != when:
+                if existing.status in {"queued", "failed", "cancelled"}:
+                    existing.status = "queued"
                     existing.scheduled_for = when
                     existing.next_attempt_at = None
+                    existing.locked_at = None
+                    existing.completed_at = None
+                    existing.last_error = None
+                    existing.result_json = {}
                 continue
 
             db.add(
@@ -248,7 +263,11 @@ def plan_automation_jobs(
     )
     for job, appointment in db.execute(stale_stmt).all():
         rule = db.get(AutomationRule, job.rule_id)
-        if rule is None or rule.id not in active_rule_ids or not _eligible_for_rule(appointment, rule):
+        if (
+            rule is None
+            or rule.id not in active_rule_ids
+            or not _eligible_for_rule(appointment, rule)
+        ):
             job.status = "cancelled"
             job.completed_at = now
             job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
@@ -270,7 +289,7 @@ def claim_due_jobs(
     limit: int,
     now: datetime | None = None,
 ) -> list[AutomationClaimedJob]:
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (now or datetime.now(UTC)).astimezone(UTC)
     stale_before = now - timedelta(minutes=10)
 
     stmt = (
@@ -301,12 +320,38 @@ def claim_due_jobs(
     claimed: list[AutomationClaimedJob] = []
 
     for job in jobs:
-        rule = db.get(AutomationRule, job.rule_id)
-        if rule is None or not rule.enabled:
+        rule_key: str | None = None
+        if job.job_kind == "appointment_rule":
+            rule = db.get(AutomationRule, job.rule_id)
+            if rule is None or not rule.enabled:
+                job.status = "cancelled"
+                job.completed_at = now
+                job.result_json = {"reason": "rule_disabled"}
+                continue
+            rule_key = rule.key
+        elif job.job_kind == "crm_follow_up":
+            task = db.get(CRMTask, job.crm_task_id)
+            if (
+                task is None
+                or task.execution_mode != "ai"
+                or task.task_type != "follow_up"
+                or task.status not in {"pending", "in_progress"}
+            ):
+                job.status = "cancelled"
+                job.completed_at = now
+                job.result_json = {"reason": "follow_up_no_longer_ai_eligible"}
+                continue
+            if task.due_at > now:
+                job.status = "queued"
+                job.scheduled_for = task.due_at
+                job.locked_at = None
+                continue
+        else:
             job.status = "cancelled"
             job.completed_at = now
-            job.result_json = {"reason": "rule_disabled"}
+            job.result_json = {"reason": "unsupported_job_kind"}
             continue
+
         job.status = "processing"
         job.attempts += 1
         job.locked_at = now
@@ -315,8 +360,10 @@ def claim_due_jobs(
         claimed.append(
             AutomationClaimedJob(
                 job_id=job.id,
-                rule_key=rule.key,
+                job_kind=job.job_kind,
+                rule_key=rule_key,
                 appointment_id=job.appointment_id,
+                crm_task_id=job.crm_task_id,
                 patient_id=job.patient_id,
                 scheduled_for=job.scheduled_for,
                 attempt=job.attempts,
@@ -325,7 +372,6 @@ def claim_due_jobs(
 
     db.commit()
     return claimed
-
 
 def _resolve_timezone(workspace: Workspace, branch: Branch | None) -> ZoneInfo:
     name = (branch.timezone if branch and branch.timezone else workspace.timezone) or "Africa/Cairo"
@@ -355,7 +401,7 @@ def _appointment_display_data(
         doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or doctor_name
 
     return {
-        "patient_name": patient.first_name,
+        "patient_name": (f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "العميل"),
         "service_name": service.name if service else "الخدمة",
         "branch_name": branch.name if branch else "الفرع",
         "doctor_name": doctor_name,
@@ -368,24 +414,84 @@ def _appointment_display_data(
 def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "booking_confirmation":
         return (
-            f"تم تسجيل حجزك في Tia يوم {data['date']} الساعة {data['time']}. "
-            "ردي «تأكيد» لتأكيد الموعد أو «تعديل» لو حابة تغيّريه."
+            f"تمام يا {data['patient_name']}، حجز {data['service_name']} اتسجل يوم "
+            f"{data['date']} الساعة {data['time']} في {data['branch_name']}. "
+            "لو حابة تغيّري أي حاجة ابعتيلي هنا."
         )
+    if rule_key == "appointment_reminder_6h":
+        return (
+            f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
+            f"النهارده الساعة {data['time']} في {data['branch_name']}، فاضل حوالي 6 ساعات. "
+            "مستنيينك 💛"
+        )
+    # Legacy rules are kept readable for already-stored audit/history rows, but
+    # v0.31.3 disables them and new workspaces no longer materialize them.
     if rule_key == "appointment_reminder_24h":
         return (
-            f"تذكير بموعدك في Tia يوم {data['date']} الساعة {data['time']}. "
-            "لو حابة تعدّلي الموعد ابعتي «تعديل»."
+            f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
+            f"يوم {data['date']} الساعة {data['time']} في {data['branch_name']}. "
+            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
         )
     if rule_key == "appointment_reminder_2h":
         return (
-            f"فاضل تقريبًا ساعتين على موعدك في Tia الساعة {data['time']}. "
-            "مستنيينك."
+            f"أهلًا {data['patient_name']}، فاضل تقريبًا ساعتين على جلسة "
+            f"{data['service_name']} الساعة {data['time']} في {data['branch_name']}. مستنيينك 💛"
         )
     if rule_key == "post_visit_followup":
-        return "نتمنى تكون زيارتك لـTia كانت كويسة. لو عندك سؤال بعد الزيارة ابعتيه هنا."
+        return (
+            f"إزيك {data['patient_name']}؟ حبيت أطمن عليكي بعد {data['service_name']} "
+            f"اللي كانت يوم {data['date']}. كل حاجة تمام؟"
+        )
     if rule_key == "no_show_followup":
-        return "لاحظنا إن الموعد فات. لو حابة نحجزلك ميعاد جديد ابعتي «حجز» ونساعدك."
+        return (
+            f"أهلًا {data['patient_name']}، لاحظت إن ميعاد {data['service_name']} فات. "
+            "لو حابة نرتب ميعاد تاني ابعتيلي هنا وأنا أساعدك."
+        )
     return "عندك تحديث جديد من Tia."
+
+
+def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:
+    """Return de-duplicated approved templates that share the rule's variable contract."""
+    candidates: list[tuple[str, str]] = [(rule.template_name, rule.template_language)]
+    raw_variants = (rule.config_json or {}).get("template_variants")
+    if isinstance(raw_variants, list):
+        for raw in raw_variants:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            language = str(raw.get("language_code") or rule.template_language).strip()
+            if not name or not language:
+                continue
+            candidate = (name, language)
+            if candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _select_rule_template(rule: AutomationRule, appointment_id: UUID) -> tuple[str, str, int]:
+    """Choose one stable template per appointment/rule so retries never change the copy."""
+    candidates = _rule_template_candidates(rule)
+    digest = hashlib.sha256(f"{appointment_id}:{rule.key}".encode("utf-8")).digest()
+    index = int.from_bytes(digest[:8], "big") % len(candidates)
+    name, language = candidates[index]
+    return name, language, len(candidates)
+
+
+def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str]:
+    """Return the exact positional variables required by each approved Meta template."""
+    patient_name = str(data.get("patient_name") or "العميل")[:256]
+    service_name = str(data.get("service_name") or "الخدمة")[:256]
+    date = str(data.get("date") or "-")[:64]
+    time = str(data.get("time") or "-")[:64]
+    branch_name = str(data.get("branch_name") or "العيادة")[:256]
+
+    if rule_key == "appointment_reminder_6h":
+        return [patient_name, service_name, time, branch_name]
+    if rule_key == "post_visit_followup":
+        return [patient_name, service_name, date]
+
+    # Opt-in / legacy appointment templates retain the original five-variable contract.
+    return [patient_name, service_name, date, time, branch_name]
 
 
 def _resolve_external_route(
@@ -465,6 +571,932 @@ def _resolve_external_route(
     return conversation, connection
 
 
+
+def _followup_active_handoff(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    conversation_id: UUID,
+) -> HandoffRequest | None:
+    return db.scalar(
+        select(HandoffRequest).where(
+            HandoffRequest.workspace_id == workspace_id,
+            HandoffRequest.conversation_id == conversation_id,
+            HandoffRequest.status.in_(("pending", "claimed")),
+        )
+    )
+
+
+def _resolve_followup_route(
+    db: Session,
+    *,
+    task: CRMTask,
+    now: datetime,
+) -> tuple[Conversation, ChannelConnection] | None:
+    if task.conversation_id is not None:
+        conversation = db.scalar(
+            select(Conversation)
+            .where(
+                Conversation.workspace_id == task.workspace_id,
+                Conversation.id == task.conversation_id,
+                Conversation.patient_id == task.patient_id,
+            )
+            .with_for_update()
+        )
+        if conversation is None or conversation.channel_connection_id is None:
+            return None
+        connection = db.get(ChannelConnection, conversation.channel_connection_id)
+        if (
+            connection is None
+            or connection.status != "active"
+            or connection.channel != "whatsapp"
+        ):
+            return None
+        return conversation, connection
+
+    route = _resolve_external_route(
+        db,
+        workspace_id=task.workspace_id,
+        patient_id=task.patient_id,
+        channel="whatsapp",
+        now=now,
+    )
+    if route is None:
+        return None
+    conversation, connection = route
+    locked = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == task.workspace_id,
+            Conversation.id == conversation.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked is None:
+        return None
+    return locked, connection
+
+
+def _handoff_followup_to_staff(
+    *,
+    task: CRMTask,
+    job: AutomationJob,
+    conversation: Conversation | None,
+    reason: str,
+    now: datetime,
+) -> ExecutionResult:
+    task.execution_mode = "human"
+    task.status = "pending"
+    task.completed_at = None
+    task.completed_by_user_id = None
+    if conversation is not None and conversation.owner_type == "human":
+        task.assigned_user_id = conversation.assigned_user_id
+    job.status = "skipped"
+    job.completed_at = now
+    job.locked_at = None
+    job.next_attempt_at = None
+    job.result_json = {"reason": reason, "fallback": "human_task"}
+    return ExecutionResult(job=job, reason=reason)
+
+
+def _conversation_outbound_busy(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    conversation_id: UUID,
+) -> bool:
+    return (
+        db.scalar(
+            select(MessageDispatch.id)
+            .join(Message, Message.id == MessageDispatch.message_id)
+            .where(
+                Message.workspace_id == workspace_id,
+                Message.conversation_id == conversation_id,
+                Message.direction == "outbound",
+                MessageDispatch.status.in_(("queued", "processing")),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _latest_patient_inbound_at(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    conversation_id: UUID,
+) -> datetime | None:
+    return db.scalar(
+        select(Message.created_at)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.conversation_id == conversation_id,
+            Message.sender_type == "patient",
+            Message.direction == "inbound",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+
+
+def _whatsapp_customer_service_window_open(
+    *,
+    latest_patient_inbound_at: datetime | None,
+    now: datetime,
+) -> bool:
+    if latest_patient_inbound_at is None:
+        return False
+    inbound = latest_patient_inbound_at
+    if inbound.tzinfo is None:
+        inbound = inbound.replace(tzinfo=UTC)
+    return inbound.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=24)
+
+
+def _ai_followup_template_config(connection: ChannelConnection) -> tuple[str, str] | None:
+    raw = (connection.config_json or {}).get("ai_followup_template")
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    language_code = str(raw.get("language_code") or "ar").strip() or "ar"
+    if not name:
+        return None
+    return name[:512], language_code[:32]
+
+
+def _dispatch_ai_followup_template(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    task: CRMTask,
+    job: AutomationJob,
+    conversation: Conversation,
+    connection: ChannelConnection,
+    template_name: str,
+    template_language: str,
+    now: datetime,
+) -> ExecutionResult:
+    if conversation.status == "closed":
+        return_to_ai(conversation, close=False, now=now)
+
+    patient = db.get(Patient, task.patient_id)
+    workspace = db.get(Workspace, workspace_id)
+    patient_name = (
+        f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+        if patient is not None
+        else "العميل"
+    ) or "العميل"
+    clinic_name = workspace.name if workspace is not None else "العيادة"
+    local_now = now
+    if workspace is not None:
+        try:
+            local_now = now.astimezone(ZoneInfo(workspace.timezone or "Africa/Cairo"))
+        except ZoneInfoNotFoundError:
+            local_now = now.astimezone(ZoneInfo("Africa/Cairo"))
+    template_body_parameters = [
+        patient_name[:256],
+        task.title[:256],
+        local_now.strftime("%d/%m/%Y"),
+        local_now.strftime("%H:%M"),
+        clinic_name[:256],
+    ]
+
+    metadata = {
+        "source": "ai_followup",
+        "crm_task_id": str(task.id),
+        "automation_job_id": str(job.id),
+        "follow_up": {
+            "goal_title": task.title,
+            "delivery_mode": "approved_template",
+        },
+        "whatsapp_template": {
+            "name": template_name,
+            "language_code": template_language,
+            "body_parameters": template_body_parameters,
+        },
+    }
+    message = Message(
+        workspace_id=workspace_id,
+        conversation_id=conversation.id,
+        channel_connection_id=connection.id,
+        sender_type="ai",
+        direction="outbound",
+        message_type="template",
+        content="WhatsApp approved follow-up template",
+        delivery_status="queued",
+        metadata_json=metadata,
+    )
+    db.add(message)
+    db.flush()
+    dispatch = MessageDispatch(
+        workspace_id=workspace_id,
+        channel_connection_id=connection.id,
+        message_id=message.id,
+        status="queued",
+        attempts=0,
+        metadata_json={
+            "conversation_id": str(conversation.id),
+            "sender_type": "ai",
+            "source": "ai_followup",
+            "crm_task_id": str(task.id),
+            "automation_job_id": str(job.id),
+        },
+    )
+    db.add(dispatch)
+    db.flush()
+
+    record_outbound_activity(conversation, now=now)
+    task.status = "in_progress"
+    job.status = "dispatched"
+    job.message_id = message.id
+    job.dispatch_id = dispatch.id
+    job.completed_at = now
+    job.locked_at = None
+    job.result_json = {
+        "message_id": str(message.id),
+        "dispatch_id": str(dispatch.id),
+        "channel": "whatsapp",
+        "message_type": "template",
+        "delivery_mode": "approved_template",
+        "template_name": template_name,
+    }
+    db.commit()
+    db.refresh(job)
+    return ExecutionResult(job=job, reason=None)
+
+
+def _recent_followup_history(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    conversation_id: UUID,
+    limit: int = 12,
+) -> list[dict[str, str]]:
+    rows = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.workspace_id == workspace_id,
+                Message.conversation_id == conversation_id,
+                Message.content.is_not(None),
+                Message.direction != "internal",
+            )
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+        )
+    )
+    rows.reverse()
+    history: list[dict[str, str]] = []
+    for message in rows:
+        content = " ".join((message.content or "").strip().split())
+        if not content:
+            continue
+        role = "customer" if message.sender_type == "patient" else "tia_or_staff"
+        history.append({"role": role, "text": content[:1200]})
+    return history
+
+
+def _execute_crm_followup_job(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    job: AutomationJob,
+    now: datetime,
+) -> ExecutionResult:
+    task = db.scalar(
+        select(CRMTask)
+        .where(
+            CRMTask.workspace_id == workspace_id,
+            CRMTask.id == job.crm_task_id,
+        )
+        .with_for_update()
+    )
+    patient = db.get(Patient, job.patient_id)
+    workspace = db.get(Workspace, workspace_id)
+    if task is None or patient is None or workspace is None:
+        job.status = "skipped"
+        job.completed_at = now
+        job.locked_at = None
+        job.result_json = {"reason": "follow_up_target_missing"}
+        db.commit()
+        return ExecutionResult(job=job, reason="follow_up_target_missing")
+
+    if task.execution_mode != "ai" or task.status not in {"pending", "in_progress"}:
+        job.status = "cancelled"
+        job.completed_at = now
+        job.locked_at = None
+        job.result_json = {"reason": "follow_up_no_longer_ai_eligible"}
+        db.commit()
+        return ExecutionResult(job=job, reason="follow_up_no_longer_ai_eligible")
+    if task.due_at > now:
+        job.status = "queued"
+        job.scheduled_for = task.due_at
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.result_json = {"reason": "follow_up_rescheduled"}
+        db.commit()
+        return ExecutionResult(job=job, reason="follow_up_rescheduled")
+    if patient.status != "active":
+        task.status = "cancelled"
+        task.completed_at = now
+        job.status = "skipped"
+        job.completed_at = now
+        job.locked_at = None
+        job.result_json = {"reason": "patient_not_active"}
+        db.commit()
+        return ExecutionResult(job=job, reason="patient_not_active")
+
+    route = _resolve_followup_route(db, task=task, now=now)
+    if route is None:
+        result = _handoff_followup_to_staff(
+            task=task, job=job, conversation=None, reason="no_active_whatsapp_route", now=now
+        )
+        db.commit()
+        return result
+    conversation, connection = route
+    active_handoff = _followup_active_handoff(
+        db, workspace_id=workspace_id, conversation_id=conversation.id
+    )
+    if conversation.owner_type != "ai" or conversation.status == "pending" or active_handoff:
+        result = _handoff_followup_to_staff(
+            task=task,
+            job=job,
+            conversation=conversation,
+            reason="conversation_human_owned_or_handoff_active",
+            now=now,
+        )
+        db.commit()
+        return result
+
+    identity = db.scalar(
+        select(ChannelIdentity.id).where(
+            ChannelIdentity.workspace_id == workspace_id,
+            ChannelIdentity.channel_connection_id == connection.id,
+            ChannelIdentity.patient_id == patient.id,
+        )
+    )
+    if identity is None:
+        result = _handoff_followup_to_staff(
+            task=task, job=job, conversation=conversation, reason="whatsapp_identity_missing", now=now
+        )
+        db.commit()
+        return result
+
+    if _conversation_outbound_busy(
+        db, workspace_id=workspace_id, conversation_id=conversation.id
+    ):
+        job.status = "failed"
+        job.locked_at = None
+        job.next_attempt_at = now + timedelta(seconds=60)
+        job.last_error = "follow_up_waiting_for_conversation_outbox"
+        job.result_json = {"reason": "conversation_outbox_busy", "retry": True}
+        db.commit()
+        db.refresh(job)
+        return ExecutionResult(job=job, reason="conversation_outbox_busy")
+
+    latest_inbound_at = _latest_patient_inbound_at(
+        db, workspace_id=workspace_id, conversation_id=conversation.id
+    )
+    if not _whatsapp_customer_service_window_open(
+        latest_patient_inbound_at=latest_inbound_at, now=now
+    ):
+        template = _ai_followup_template_config(connection)
+        if template is None:
+            result = _handoff_followup_to_staff(
+                task=task,
+                job=job,
+                conversation=conversation,
+                reason="approved_whatsapp_followup_template_required",
+                now=now,
+            )
+            db.commit()
+            return result
+        return _dispatch_ai_followup_template(
+            db,
+            workspace_id=workspace_id,
+            task=task,
+            job=job,
+            conversation=conversation,
+            connection=connection,
+            template_name=template[0],
+            template_language=template[1],
+            now=now,
+        )
+
+    history = _recent_followup_history(
+        db, workspace_id=workspace_id, conversation_id=conversation.id
+    )
+    job_id = job.id
+    conversation_id = conversation.id
+    last_message_at_snapshot = conversation.last_message_at
+    connection_id = connection.id
+    task_id = task.id
+    patient_name = (
+        f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+        or patient.first_name
+        or "العميل"
+    )
+    goal_title = task.title
+    goal_note = task.description
+    clinic_name = workspace.name
+    timezone_name = workspace.timezone or "Africa/Cairo"
+    try:
+        tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        timezone_name = "Africa/Cairo"
+        tz = ZoneInfo(timezone_name)
+
+    # Release database locks before provider latency. The final write re-locks and
+    # revalidates ownership/task state so staff takeover during generation wins.
+    db.commit()
+    try:
+        from app.agents.followup_composer import compose_followup_message
+
+        text, model_name = compose_followup_message(
+            clinic_name=clinic_name,
+            timezone_name=timezone_name,
+            local_now=now.astimezone(tz),
+            patient_name=patient_name,
+            goal_title=goal_title,
+            goal_note=goal_note,
+            recent_messages=history,
+        )
+    except Exception as exc:
+        retry_job = db.scalar(
+            select(AutomationJob)
+            .where(
+                AutomationJob.workspace_id == workspace_id,
+                AutomationJob.id == job_id,
+            )
+            .with_for_update()
+        )
+        if retry_job is not None and retry_job.status == "processing":
+            retry_job.status = "failed"
+            retry_job.locked_at = None
+            retry_job.next_attempt_at = now + timedelta(seconds=60)
+            retry_job.last_error = f"follow_up_composer_failed:{type(exc).__name__}"[:4000]
+            retry_job.result_json = {"reason": "follow_up_composer_failed", "retry": True}
+            db.commit()
+            db.refresh(retry_job)
+            return ExecutionResult(job=retry_job, reason="follow_up_composer_failed")
+        if retry_job is None:
+            raise AutomationError("AI follow-up job disappeared during generation.") from exc
+        return ExecutionResult(job=retry_job, reason=retry_job.result_json.get("reason"))
+
+    final_job = db.scalar(
+        select(AutomationJob)
+        .where(
+            AutomationJob.workspace_id == workspace_id,
+            AutomationJob.id == job_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if final_job is None:
+        raise AutomationError("AI follow-up job not found after generation.")
+    if final_job.status != "processing":
+        return ExecutionResult(job=final_job, reason=final_job.result_json.get("reason"))
+
+    final_task = db.scalar(
+        select(CRMTask)
+        .where(CRMTask.workspace_id == workspace_id, CRMTask.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    final_conversation = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == workspace_id,
+            Conversation.id == conversation_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if final_task is None or final_conversation is None:
+        final_job.status = "skipped"
+        final_job.completed_at = now
+        final_job.locked_at = None
+        final_job.result_json = {"reason": "follow_up_target_missing_after_generation"}
+        db.commit()
+        return ExecutionResult(job=final_job, reason="follow_up_target_missing_after_generation")
+
+    if final_conversation.last_message_at != last_message_at_snapshot:
+        final_job.status = "failed"
+        final_job.locked_at = None
+        final_job.next_attempt_at = datetime.now(UTC) + timedelta(seconds=60)
+        final_job.last_error = "follow_up_context_changed_during_generation"
+        final_job.result_json = {"reason": "conversation_changed_during_generation", "retry": True}
+        db.commit()
+        db.refresh(final_job)
+        return ExecutionResult(job=final_job, reason="conversation_changed_during_generation")
+
+    final_handoff = _followup_active_handoff(
+        db, workspace_id=workspace_id, conversation_id=conversation_id
+    )
+    if (
+        final_task.execution_mode != "ai"
+        or final_task.status not in {"pending", "in_progress"}
+        or final_conversation.owner_type != "ai"
+        or final_conversation.status == "pending"
+        or final_handoff is not None
+    ):
+        result = _handoff_followup_to_staff(
+            task=final_task,
+            job=final_job,
+            conversation=final_conversation,
+            reason="follow_up_authority_changed_during_generation",
+            now=now,
+        )
+        db.commit()
+        return result
+
+    final_connection = db.get(ChannelConnection, connection_id)
+    if final_connection is None or final_connection.status != "active":
+        result = _handoff_followup_to_staff(
+            task=final_task,
+            job=final_job,
+            conversation=final_conversation,
+            reason="whatsapp_connection_became_unavailable",
+            now=now,
+        )
+        db.commit()
+        return result
+
+    if final_conversation.status == "closed":
+        return_to_ai(final_conversation, close=False, now=now)
+
+    metadata = {
+        "source": "ai_followup",
+        "crm_task_id": str(final_task.id),
+        "automation_job_id": str(final_job.id),
+        "follow_up": {
+            "goal_title": final_task.title,
+            "composer_model": model_name,
+        },
+    }
+    message = Message(
+        workspace_id=workspace_id,
+        conversation_id=final_conversation.id,
+        channel_connection_id=final_connection.id,
+        sender_type="ai",
+        direction="outbound",
+        message_type="text",
+        content=text,
+        delivery_status="queued",
+        metadata_json=metadata,
+    )
+    db.add(message)
+    db.flush()
+    dispatch = MessageDispatch(
+        workspace_id=workspace_id,
+        channel_connection_id=final_connection.id,
+        message_id=message.id,
+        status="queued",
+        attempts=0,
+        metadata_json={
+            "conversation_id": str(final_conversation.id),
+            "sender_type": "ai",
+            "source": "ai_followup",
+            "crm_task_id": str(final_task.id),
+            "automation_job_id": str(final_job.id),
+        },
+    )
+    db.add(dispatch)
+    db.flush()
+
+    record_outbound_activity(final_conversation, now=now)
+    final_task.status = "in_progress"
+    final_job.status = "dispatched"
+    final_job.message_id = message.id
+    final_job.dispatch_id = dispatch.id
+    final_job.completed_at = now
+    final_job.locked_at = None
+    final_job.result_json = {
+        "message_id": str(message.id),
+        "dispatch_id": str(dispatch.id),
+        "channel": "whatsapp",
+        "message_type": "text",
+        "composer_model": model_name,
+    }
+    db.commit()
+    db.refresh(final_job)
+    return ExecutionResult(job=final_job, reason=None)
+
+def automation_operations_overview(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    now: datetime | None = None,
+) -> AutomationOperationsOverview:
+    """Return a fixed-query operational snapshot for the automation dashboard."""
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    stale_before = now - timedelta(minutes=AUTOMATION_JOB_STALE_MINUTES)
+    worker_fresh_after = now - timedelta(minutes=AUTOMATION_WORKER_FRESH_MINUTES)
+
+    enabled_rules = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AutomationRule)
+            .where(
+                AutomationRule.workspace_id == workspace_id,
+                AutomationRule.enabled.is_(True),
+            )
+        )
+        or 0
+    )
+
+    status_rows = db.execute(
+        select(AutomationJob.status, func.count())
+        .where(AutomationJob.workspace_id == workspace_id)
+        .group_by(AutomationJob.status)
+    ).all()
+    status_counts = {str(status): int(count) for status, count in status_rows}
+
+    due_jobs = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AutomationJob)
+            .where(
+                AutomationJob.workspace_id == workspace_id,
+                AutomationJob.status.in_(("queued", "failed")),
+                AutomationJob.scheduled_for <= now,
+                or_(
+                    AutomationJob.next_attempt_at.is_(None),
+                    AutomationJob.next_attempt_at <= now,
+                ),
+            )
+        )
+        or 0
+    )
+    next_job_at = db.scalar(
+        select(func.min(AutomationJob.scheduled_for)).where(
+            AutomationJob.workspace_id == workspace_id,
+            AutomationJob.status.in_(("queued", "failed")),
+        )
+    )
+    delivery_failed_jobs = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AutomationJob)
+            .join(MessageDispatch, MessageDispatch.id == AutomationJob.dispatch_id)
+            .where(
+                AutomationJob.workspace_id == workspace_id,
+                AutomationJob.status == "dispatched",
+                MessageDispatch.status == "failed",
+            )
+        )
+        or 0
+    )
+    stuck_processing = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AutomationJob)
+            .where(
+                AutomationJob.workspace_id == workspace_id,
+                AutomationJob.status == "processing",
+                AutomationJob.locked_at.is_not(None),
+                AutomationJob.locked_at <= stale_before,
+            )
+        )
+        or 0
+    )
+
+    worker_last_seen_at = db.scalar(
+        select(func.max(AutomationWorker.last_seen_at)).where(
+            AutomationWorker.workspace_id == workspace_id,
+            AutomationWorker.status == "active",
+        )
+    )
+    active_worker_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AutomationWorker)
+            .where(
+                AutomationWorker.workspace_id == workspace_id,
+                AutomationWorker.status == "active",
+            )
+        )
+        or 0
+    )
+    if enabled_rules == 0:
+        worker_state = "not_required"
+    elif active_worker_count == 0:
+        worker_state = "missing"
+    elif worker_last_seen_at is None or worker_last_seen_at < worker_fresh_after:
+        worker_state = "stale"
+    else:
+        worker_state = "healthy"
+
+    failed_jobs = status_counts.get("failed", 0)
+    return AutomationOperationsOverview(
+        now=now,
+        enabled_rules=enabled_rules,
+        queued_jobs=status_counts.get("queued", 0),
+        due_jobs=due_jobs,
+        processing_jobs=status_counts.get("processing", 0),
+        failed_jobs=failed_jobs,
+        delivery_failed_jobs=delivery_failed_jobs,
+        attention_count=failed_jobs + delivery_failed_jobs + stuck_processing,
+        next_job_at=next_job_at,
+        worker_state=worker_state,
+        worker_last_seen_at=worker_last_seen_at,
+        worker_fresh_within_minutes=AUTOMATION_WORKER_FRESH_MINUTES,
+    )
+
+
+def _get_locked_automation_job(
+    db: Session, *, workspace_id: UUID, job_id: UUID
+) -> AutomationJob:
+    job = db.scalar(
+        select(AutomationJob)
+        .where(
+            AutomationJob.workspace_id == workspace_id,
+            AutomationJob.id == job_id,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise AutomationError("Automation job not found.")
+    return job
+
+
+def retry_automation_job(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    job_id: UUID,
+    actor_user_id: UUID | None = None,
+    now: datetime | None = None,
+) -> tuple[AutomationJob, MessageDispatch | None]:
+    """Admin retry that preserves idempotency and never creates a second message."""
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    job = _get_locked_automation_job(db, workspace_id=workspace_id, job_id=job_id)
+
+    if job.status == "failed":
+        job.status = "queued"
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.completed_at = None
+        job.last_error = None
+        job.result_json = {
+            **(job.result_json or {}),
+            "manual_retry_requested_at": now.isoformat(),
+            "manual_retry_scope": "job_execution",
+        }
+        record_activity_event(
+            db,
+            workspace_id=workspace_id,
+            actor_type="staff",
+            actor_user_id=actor_user_id,
+            action="automation.job_retried",
+            entity_type="automation_job",
+            entity_id=job.id,
+            summary="Automation job retry requested",
+            metadata={"retry_scope": "job_execution", "job_kind": job.job_kind},
+        )
+        db.commit()
+        db.refresh(job)
+        return job, None
+
+    if job.status != "dispatched" or job.dispatch_id is None:
+        raise AutomationError(
+            "Only failed automation jobs or failed message deliveries can be retried."
+        )
+
+    dispatch = db.scalar(
+        select(MessageDispatch)
+        .where(
+            MessageDispatch.workspace_id == workspace_id,
+            MessageDispatch.id == job.dispatch_id,
+        )
+        .with_for_update()
+    )
+    if dispatch is None:
+        raise AutomationError("Automation dispatch not found.")
+    if dispatch.status != "failed":
+        raise AutomationError(f"Dispatch is '{dispatch.status}', not failed.")
+    if dispatch.provider_message_id:
+        raise AutomationError(
+            "Provider already assigned a message id; automatic resend is blocked to avoid duplicates."
+        )
+
+    message = db.get(Message, dispatch.message_id)
+    dispatch.status = "queued"
+    dispatch.attempts = 0
+    dispatch.last_error = None
+    dispatch.next_attempt_at = None
+    dispatch.locked_at = None
+    if message is not None:
+        message.delivery_status = "queued"
+    job.result_json = {
+        **(job.result_json or {}),
+        "manual_retry_requested_at": now.isoformat(),
+        "manual_retry_scope": "message_delivery",
+    }
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=actor_user_id,
+        action="automation.job_retried",
+        entity_type="automation_job",
+        entity_id=job.id,
+        summary="Automation delivery retry requested",
+        metadata={"retry_scope": "message_delivery", "job_kind": job.job_kind},
+    )
+    db.commit()
+    db.refresh(job)
+    db.refresh(dispatch)
+    return job, dispatch
+
+
+def cancel_automation_job(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    job_id: UUID,
+    actor_user_id: UUID | None = None,
+    now: datetime | None = None,
+) -> tuple[AutomationJob, MessageDispatch | None]:
+    """Cancel only work that has not entered an active provider send lease."""
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    job = _get_locked_automation_job(db, workspace_id=workspace_id, job_id=job_id)
+
+    if job.status in {"queued", "failed"}:
+        job.status = "cancelled"
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.completed_at = now
+        job.result_json = {
+            **(job.result_json or {}),
+            "reason": "cancelled_by_admin",
+            "cancelled_at": now.isoformat(),
+        }
+        record_activity_event(
+            db,
+            workspace_id=workspace_id,
+            actor_type="staff",
+            actor_user_id=actor_user_id,
+            action="automation.job_cancelled",
+            entity_type="automation_job",
+            entity_id=job.id,
+            summary="Automation job cancelled",
+            metadata={"cancel_scope": "job", "job_kind": job.job_kind},
+        )
+        db.commit()
+        db.refresh(job)
+        return job, None
+
+    if job.status != "dispatched" or job.dispatch_id is None:
+        raise AutomationError(f"Automation job is '{job.status}' and cannot be cancelled.")
+
+    dispatch = db.scalar(
+        select(MessageDispatch)
+        .where(
+            MessageDispatch.workspace_id == workspace_id,
+            MessageDispatch.id == job.dispatch_id,
+        )
+        .with_for_update()
+    )
+    if dispatch is None:
+        raise AutomationError("Automation dispatch not found.")
+    if dispatch.status != "queued":
+        raise AutomationError(
+            f"Dispatch is '{dispatch.status}'; only queued provider sends can be cancelled safely."
+        )
+
+    message = db.get(Message, dispatch.message_id)
+    dispatch.status = "cancelled"
+    dispatch.locked_at = None
+    dispatch.next_attempt_at = None
+    dispatch.last_error = "Cancelled by admin before provider send."
+    if message is not None:
+        message.delivery_status = "cancelled"
+    job.status = "cancelled"
+    job.completed_at = now
+    job.result_json = {
+        **(job.result_json or {}),
+        "reason": "cancelled_by_admin_before_provider_send",
+        "cancelled_at": now.isoformat(),
+    }
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=actor_user_id,
+        action="automation.job_cancelled",
+        entity_type="automation_job",
+        entity_id=job.id,
+        summary="Queued automation delivery cancelled",
+        metadata={"cancel_scope": "message_delivery", "job_kind": job.job_kind},
+    )
+    db.commit()
+    db.refresh(job)
+    db.refresh(dispatch)
+    return job, dispatch
+
+
 def execute_job(
     db: Session,
     *,
@@ -472,7 +1504,7 @@ def execute_job(
     job_id: UUID,
     now: datetime | None = None,
 ) -> ExecutionResult:
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (now or datetime.now(UTC)).astimezone(UTC)
     job = db.scalar(
         select(AutomationJob)
         .where(
@@ -487,6 +1519,13 @@ def execute_job(
         return ExecutionResult(job=job, reason=job.result_json.get("reason"))
     if job.status != "processing":
         raise AutomationError(f"Automation job is '{job.status}', not processing.")
+
+    if job.job_kind == "crm_follow_up":
+        return _execute_crm_followup_job(
+            db, workspace_id=workspace_id, job=job, now=now
+        )
+    if job.job_kind != "appointment_rule":
+        raise AutomationError(f"Unsupported automation job kind '{job.job_kind}'.")
 
     rule = db.get(AutomationRule, job.rule_id)
     appointment = db.get(Appointment, job.appointment_id)
@@ -541,14 +1580,19 @@ def execute_job(
     )
     fallback = _fallback_text(rule.key, display)
 
+    template_name, template_language, template_variant_count = _select_rule_template(
+        rule, appointment.id
+    )
     metadata = {
         "source": "automation_engine",
         "automation_job_id": str(job.id),
         "automation_rule_key": rule.key,
         "appointment_id": str(appointment.id),
         "whatsapp_template": {
-            "name": rule.template_name,
-            "language_code": rule.template_language,
+            "name": template_name,
+            "language_code": template_language,
+            "body_parameters": _appointment_template_body_parameters(rule.key, display),
+            "variant_count": template_variant_count,
         },
         "appointment": display,
     }
@@ -620,7 +1664,7 @@ def mark_job_failed(
     )
     if job is None:
         raise AutomationError("Automation job not found.")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     job.status = "failed"
     job.locked_at = None
     job.last_error = error[:4000]

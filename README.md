@@ -1,210 +1,148 @@
 # Tia AI
 
-Tia AI is a production-first AI operating system for aesthetic clinics.
+Tia AI is an AI-powered operations platform for aesthetic clinics. It brings patient operations, bookings, payments, packages, messaging, automations, analytics, and clinic onboarding into one workspace, with deterministic business rules behind AI-assisted workflows.
 
-Current backend version: **0.3.1**
+> Current application version: **0.49.0.15**
 
-## Current foundation
+## What Tia does
 
-The backend currently includes:
+- Clinic setup for branches, services, doctors, schedules, prices, and booking policies
+- Patient CRM with notes, tags, conversations, and operational history
+- Appointment booking and lifecycle management
+- Payment ledger, allocations, refunds, and package accounting
+- Historical data import with preview, validation, append/replace semantics, and provenance tracking
+- Deterministic analytics and cohort/reporting workflows
+- AI-assisted clinic operations with backend-enforced business rules
+- External channel workflows through integrations and n8n workers
+- Automation jobs, reminders, handoffs, and operational activity tracking
+- Multi-tenant workspace authorization with Supabase Auth
 
-- FastAPI
-- SQLAlchemy 2
-- Alembic migrations
-- Supabase managed PostgreSQL
-- Supabase Auth
-- Multi-tenant workspaces
-- Workspace roles: `admin`, `member`
-- Clinic Core: branches, staff, doctors, services, working hours, booking settings
-- Database-backed health checks
-- GitHub Actions CI and protected migration workflow
-
-## Authentication architecture
-
-The frontend authenticates users with Supabase Auth and sends the Supabase access token to FastAPI:
+## Architecture
 
 ```text
-Authorization: Bearer <supabase_access_token>
+Next.js dashboard
+       │
+       ▼
+FastAPI application ─────► Gemini / LangGraph
+       │
+       ▼
+Supabase Auth + PostgreSQL
+       │
+       ▼
+n8n / external integrations
 ```
 
-Workspace-scoped requests also send:
+The AI layer does not own financial, booking, package, identity, or authorization truth. Those rules are enforced by deterministic backend services and the database.
+
+More detail: [Architecture](docs/ARCHITECTURE.md)
+
+## Tech stack
+
+**Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS, Supabase SSR/Auth  
+**Backend:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL/Supabase, LangGraph, Google Gemini  
+**Automation:** n8n and durable channel/integration workers
+
+## Repository structure
 
 ```text
-X-Workspace-ID: <workspace_uuid>
+backend/               FastAPI API, services, agents, models and migrations
+frontend/              Next.js dashboard and onboarding UI
+n8n/                   Automation/runtime workflow definitions and setup docs
+docs/                  Architecture and development documentation
+tools/                 Repository maintenance utilities
+.github/workflows/     CI and controlled database migration workflows
+.env.example           Environment variable reference
+VERSION                Application version
 ```
 
-FastAPI verifies the Supabase access token and then checks the authenticated user's active membership in the requested workspace.
+## Local development
 
-### Roles
-
-- `admin`: full Clinic Core read/write access and workspace member management.
-- `member`: read-only Clinic Core access.
-
-Admins can invite either admins or members, change workspace roles, and remove workspace members.
-
-Tia AI prevents changing or removing the last active admin in a workspace, so a clinic cannot accidentally lock itself out of administration.
-
-## Supabase keys
-
-Use:
-
-- `sb_publishable_...` for user-token verification/client operations.
-- `sb_secret_...` only in the trusted FastAPI backend.
-
-Never expose the secret key in the frontend.
-
-## Database access policy
-
-Tia AI currently uses FastAPI as the only application data gateway.
-
-Migration `0003_auth_rbac` enables PostgreSQL Row Level Security on the application tables and revokes direct Data API privileges from the `anon` and `authenticated` Postgres roles. This prevents a browser client from bypassing FastAPI workspace authorization.
-
-Migration `0004_admin_member_roles` reduces the workspace role model to `admin` and `member`. If a database already passed through the earlier role model, legacy elevated memberships are converted to `admin` automatically before the stricter check constraint is applied.
-
-The backend connects directly to managed PostgreSQL and performs tenant authorization before every workspace-scoped query.
-
-## Environment
-
-Copy the environment template:
+### Backend
 
 ```powershell
-Copy-Item ..\.env.example .env
-```
-
-Configure:
-
-```text
-DATABASE_URL=...
-MIGRATION_DATABASE_URL=...
-SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
-SUPABASE_SECRET_KEY=sb_secret_...
-CORS_ORIGINS=https://your-frontend.example.com
-```
-
-Use staging credentials in the staging environment and production credentials only in the protected production environment.
-
-## Install
-
-From `backend/`:
-
-```powershell
+cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-## Apply migrations
-
-```powershell
+Copy-Item ..\.env.example .env
 alembic upgrade head
-alembic current
+python -m uvicorn app.main:app --reload
 ```
 
-Expected current head:
+### Frontend
+
+Create `frontend/.env.local`:
 
 ```text
-0004_admin_member_roles (head)
+NEXT_PUBLIC_SUPABASE_URL=https://PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
+TIA_API_URL=http://127.0.0.1:8000
 ```
 
-## Create the Tia workspace
-
-If it does not already exist:
+Then:
 
 ```powershell
-python scripts/provision_workspace.py --name "Tia" --slug tia
+cd frontend
+npm ci
+npm run dev
 ```
 
-## Bootstrap the first admin
+See [Local development](docs/LOCAL_DEVELOPMENT.md).
 
-1. In Supabase, create the first real admin user under **Authentication > Users**.
-2. Copy that user's UUID.
-3. Run:
+## Database migrations
+
+Current Alembic head:
+
+```text
+0052_payment_reference_constraint_repair
+```
+
+Production migrations should run through the protected GitHub Actions database migration workflow.
+
+## Historical clinic data
+
+Tia supports deterministic historical imports for patients, appointments, payments/refunds, packages, and explicit allocations. Patient identity uses stable identifiers and normalized phone rules rather than patient-name matching. Provenance links source records to canonical entities for safe append/replace behavior.
+
+## Testing
+
+Backend:
 
 ```powershell
-python scripts/bootstrap_admin.py `
-  --workspace-slug tia `
-  --auth-user-id "SUPABASE_AUTH_USER_UUID" `
-  --email "admin@example.com" `
-  --full-name "Tia Admin"
+cd backend
+ruff check app tests alembic
+python -m compileall -q app alembic tests
+python -m pytest -q
 ```
 
-This links the Supabase Auth identity to the internal Tia AI user and creates an `admin` workspace membership.
-
-## Run
+Frontend:
 
 ```powershell
-uvicorn app.main:app --reload
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
 ```
 
-Health endpoints:
+Post-import reconciliation:
 
-```text
-GET /api/v1/health/live
-GET /api/v1/health/ready
+```powershell
+cd backend
+python scripts\run_post_import_smoke.py
 ```
 
-Auth endpoints:
+## CI/CD
 
-```text
-GET    /api/v1/auth/me
-GET    /api/v1/auth/workspace
-GET    /api/v1/auth/workspace/members
-POST   /api/v1/auth/workspace/invitations
-PATCH  /api/v1/auth/workspace/members/{membership_id}
-DELETE /api/v1/auth/workspace/members/{membership_id}
-```
+Pull requests and pushes to `main` run backend lint/compile/tests and frontend lint/type checking. Database migrations use a separate manually triggered workflow with GitHub environments for staging and production.
 
-Clinic endpoints remain under:
+## Security
 
-```text
-/api/v1/clinic/...
-```
+Never commit `.env`, `.env.local`, credentials, patient exports, database dumps, or clinic data. Supabase secret keys remain backend-only. See [SECURITY.md](SECURITY.md).
 
-Clinic read requests require an active `admin` or `member` membership. Clinic writes require `admin`.
+## Development workflow
 
-## GitHub environments
+Keep `main` deployable and use short-lived `feat/*`, `fix/*`, and `chore/*` branches. Use pull requests for business logic, migrations, integrations, or cross-module changes. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Create GitHub environments:
+## License
 
-- `staging`
-- `production`
-
-Add these secrets to each environment:
-
-```text
-MIGRATION_DATABASE_URL
-SUPABASE_URL
-SUPABASE_PUBLISHABLE_KEY
-SUPABASE_SECRET_KEY
-```
-
-Use the corresponding staging or production Supabase project values.
-
-## Migration history
-
-```text
-0001_foundation
-      ↓
-0002_clinic_core
-      ↓
-0003_auth_rbac
-      ↓
-0004_admin_member_roles
-```
-
-## Next milestone
-
-The next backend milestone is the CRM foundation:
-
-- patients
-- leads
-- patient notes
-- patient tags
-- conversations
-- messages
-- source attribution
-- patient identity matching
-
-This becomes the memory layer that the future Tia AI agent will use before the booking engine and messaging automations are connected.
+Proprietary. All rights reserved unless a separate license is added.

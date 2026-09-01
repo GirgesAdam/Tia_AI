@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -119,6 +120,13 @@ class HandoffRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default="ai",
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    context_json: Mapped[dict] = mapped_column(
+        "context",
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     assigned_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,

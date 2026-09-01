@@ -10,18 +10,13 @@ n8n owns external provider credentials and provider execution.
 No Meta access token, Google OAuth token, Gmail password, or raw Tia adapter
 credential is stored in `channel_connections.config`.
 
-## Customer email capability
+## Customer contact contract
 
-`email_communication` is a semantic capability. Python maps it to the
-`send_email_to_customer` write tool.
-
-The write tool has no `recipient` argument. It resolves the current patient's
-saved email from CRM, selects the workspace's active/default `n8n_gmail`
-connection, creates the email channel identity/conversation if needed, and
-writes an outbound `Message` plus queued `MessageDispatch`.
-
-Medical/human-support risk still collapses tool exposure to human handoff, so a
-simultaneous medical request cannot use email as a route around safety policy.
+Tia does not collect or persist patient/customer email addresses. Customer identity
+and CRM contact resolution use the external entity link and normalized phone number.
+The old patient-email semantic capability and `send_email_to_customer` tool were
+retired in v0.37.4.1. Staff/admin/doctor account emails remain separate operational
+fields and are unaffected.
 
 ## Delivery truth
 

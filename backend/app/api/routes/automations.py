@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -14,10 +14,18 @@ from app.database.session import get_db
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
+from app.models.message_dispatch import MessageDispatch
+from app.models.workspace import Workspace
+from app.schemas.clinic_integration import (
+    ClinicSyncWorkerTickRequest,
+    ClinicSyncWorkerTickResponse,
+)
 from app.schemas.automation import (
     AutomationExecuteResponse,
+    AutomationJobActionResponse,
     AutomationJobRead,
     AutomationJobStatus,
+    AutomationOperationsOverview,
     AutomationRuleRead,
     AutomationRuleUpdate,
     AutomationTickRequest,
@@ -28,14 +36,20 @@ from app.schemas.automation import (
     AutomationWorkerStatusUpdate,
     AutomationWorkerTokenRotated,
 )
+from app.services.activity import record_activity_event
+from app.services.clinic_integration_sync_runtime import run_scheduled_sync_tick
 from app.services.automations import (
+    AUTOMATION_JOB_STALE_MINUTES,
     AutomationError,
+    automation_operations_overview,
+    cancel_automation_job,
     claim_due_jobs,
     ensure_default_rules,
     execute_job,
     generate_worker_token,
     get_worker_by_token,
     plan_automation_jobs,
+    retry_automation_job,
 )
 
 router = APIRouter()
@@ -56,7 +70,7 @@ def get_automation_worker_access(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid automation worker token.",
         )
-    worker.last_seen_at = datetime.now(timezone.utc)
+    worker.last_seen_at = datetime.now(UTC)
     db.commit()
     return AutomationWorkerAccess(worker=worker)
 
@@ -86,8 +100,18 @@ def update_rule(
         raise HTTPException(status_code=404, detail="Automation rule not found.")
 
     changes = payload.model_dump(exclude_unset=True)
+    changed_fields = sorted(changes)
+    previous_enabled = rule.enabled
     if "config" in changes:
         rule.config_json = changes.pop("config") or {}
+    if "template_variants" in changes:
+        variants = changes.pop("template_variants")
+        config = dict(rule.config_json or {})
+        if variants:
+            config["template_variants"] = variants
+        else:
+            config.pop("template_variants", None)
+        rule.config_json = config
     for key, value in changes.items():
         setattr(rule, key, value)
 
@@ -100,12 +124,38 @@ def update_rule(
             )
         ):
             job.status = "cancelled"
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
             job.result_json = {"reason": "rule_disabled_by_admin"}
+
+    if changed_fields:
+        record_activity_event(
+            db,
+            workspace_id=access.workspace.id,
+            actor_type="staff",
+            actor_user_id=access.user.id,
+            action="automation.rule_updated",
+            entity_type="automation_rule",
+            entity_id=rule.id,
+            summary="Automation rule updated",
+            metadata={
+                "changed_fields": changed_fields,
+                "enabled_from": previous_enabled,
+                "enabled_to": rule.enabled,
+                "rule_key": rule.key,
+            },
+        )
 
     db.commit()
     db.refresh(rule)
     return rule
+
+
+@router.get("/overview", response_model=AutomationOperationsOverview)
+def automation_overview(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AutomationOperationsOverview:
+    return automation_operations_overview(db, workspace_id=access.workspace.id)
 
 
 @router.get("/jobs", response_model=list[AutomationJobRead])
@@ -114,16 +164,85 @@ def list_jobs(
     db: Annotated[Session, Depends(get_db)],
     job_status: Annotated[AutomationJobStatus | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> list[AutomationJob]:
-    stmt = select(AutomationJob).where(
-        AutomationJob.workspace_id == access.workspace.id
+) -> list[AutomationJobRead]:
+    stmt = (
+        select(AutomationJob, MessageDispatch.status, MessageDispatch.last_error)
+        .outerjoin(MessageDispatch, MessageDispatch.id == AutomationJob.dispatch_id)
+        .where(AutomationJob.workspace_id == access.workspace.id)
     )
     if job_status:
         stmt = stmt.where(AutomationJob.status == job_status)
-    return list(
-        db.scalars(
-            stmt.order_by(AutomationJob.created_at.desc()).limit(limit)
+    rows = db.execute(stmt.order_by(AutomationJob.created_at.desc()).limit(limit)).all()
+    now = datetime.now(UTC)
+    stale_before = now - timedelta(minutes=AUTOMATION_JOB_STALE_MINUTES)
+    result: list[AutomationJobRead] = []
+    for job, dispatch_status, dispatch_last_error in rows:
+        attention_reason = None
+        if job.status == "failed":
+            attention_reason = "execution_failed"
+        elif dispatch_status == "failed":
+            attention_reason = "delivery_failed"
+        elif (
+            job.status == "processing"
+            and job.locked_at is not None
+            and job.locked_at <= stale_before
+        ):
+            attention_reason = "stuck_processing"
+        result.append(
+            AutomationJobRead.model_validate(job).model_copy(
+                update={
+                    "dispatch_status": dispatch_status,
+                    "dispatch_last_error": dispatch_last_error,
+                    "attention_reason": attention_reason,
+                }
+            )
         )
+    return result
+
+
+@router.post("/jobs/{job_id}/retry", response_model=AutomationJobActionResponse)
+def retry_job(
+    job_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AutomationJobActionResponse:
+    try:
+        job, dispatch = retry_automation_job(
+            db,
+            workspace_id=access.workspace.id,
+            job_id=job_id,
+            actor_user_id=access.user.id,
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AutomationJobActionResponse(
+        job_id=job.id,
+        job_status=job.status,
+        dispatch_status=dispatch.status if dispatch is not None else None,
+        action="retry",
+    )
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=AutomationJobActionResponse)
+def cancel_job(
+    job_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AutomationJobActionResponse:
+    try:
+        job, dispatch = cancel_automation_job(
+            db,
+            workspace_id=access.workspace.id,
+            job_id=job_id,
+            actor_user_id=access.user.id,
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AutomationJobActionResponse(
+        job_id=job.id,
+        job_status=job.status,
+        dispatch_status=dispatch.status if dispatch is not None else None,
+        action="cancel",
     )
 
 
@@ -142,6 +261,18 @@ def create_worker(
         created_by_user_id=access.user.id,
     )
     db.add(worker)
+    db.flush()
+    record_activity_event(
+        db,
+        workspace_id=access.workspace.id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="automation.worker_created",
+        entity_type="automation_worker",
+        entity_id=worker.id,
+        summary="Automation worker created",
+        metadata={"status": worker.status},
+    )
     db.commit()
     db.refresh(worker)
     return AutomationWorkerCreated(
@@ -179,7 +310,20 @@ def update_worker_status(
     )
     if worker is None:
         raise HTTPException(status_code=404, detail="Automation worker not found.")
+    previous_status = worker.status
     worker.status = payload.status
+    if worker.status != previous_status:
+        record_activity_event(
+            db,
+            workspace_id=access.workspace.id,
+            actor_type="staff",
+            actor_user_id=access.user.id,
+            action="automation.worker_status_updated",
+            entity_type="automation_worker",
+            entity_id=worker.id,
+            summary="Automation worker status updated",
+            metadata={"from_status": previous_status, "to_status": worker.status},
+        )
     db.commit()
     db.refresh(worker)
     return worker
@@ -202,6 +346,17 @@ def rotate_worker_token(
     raw, token_hash = generate_worker_token()
     worker.token_hash = token_hash
     worker.status = "active"
+    record_activity_event(
+        db,
+        workspace_id=access.workspace.id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="automation.worker_token_rotated",
+        entity_type="automation_worker",
+        entity_id=worker.id,
+        summary="Automation worker token rotated",
+        metadata={"status": worker.status},
+    )
     db.commit()
     return AutomationWorkerTokenRotated(worker_id=worker.id, worker_token=raw)
 
@@ -227,6 +382,23 @@ def automation_tick(
         planned=planning.planned,
         cancelled=planning.cancelled,
         claimed=claimed,
+    )
+
+
+@router.post("/adapter/clinic-sync/tick", response_model=ClinicSyncWorkerTickResponse)
+def clinic_sync_tick(
+    payload: ClinicSyncWorkerTickRequest,
+    worker_access: Annotated[AutomationWorkerAccess, Depends(get_automation_worker_access)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicSyncWorkerTickResponse:
+    workspace = db.get(Workspace, worker_access.worker.workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Automation worker workspace not found.")
+    return run_scheduled_sync_tick(
+        db,
+        workspace=workspace,
+        page_size=payload.page_size,
+        max_pages_per_domain=payload.max_pages_per_domain,
     )
 
 

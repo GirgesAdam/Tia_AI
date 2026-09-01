@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 OperationalSeverity = Literal["pass", "warn", "fail"]
 OperationalStatus = Literal["ready", "degraded", "not_ready"]
 

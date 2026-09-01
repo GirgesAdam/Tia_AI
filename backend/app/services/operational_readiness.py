@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -13,6 +13,8 @@ from app.models.automation_worker import AutomationWorker
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
+from app.models.clinic_integration import ClinicIntegration
+from app.models.clinic_integration_sync import ClinicIntegrationSyncSchedule
 from app.models.conversation_flow_state import ConversationFlowState
 from app.models.doctor import Doctor
 from app.models.handoff_request import HandoffRequest
@@ -21,9 +23,9 @@ from app.models.onboarding_ai_session import OnboardingAISession
 from app.models.service import Service
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.operations import OperationalCheck, WorkspaceOperationalReadiness
+from app.integrations.clinic.registry import registered_clinic_adapter_keys
 
-
-EXPECTED_MIGRATION_HEAD = "0013_ai_onboarding_sessions"
+EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"
 STALE_LOCK_MINUTES = 15
 AUTOMATION_WORKER_HEARTBEAT_MINUTES = 5
 TEST_RULE_KEY_PREFIXES = ("staging_regression_", "final_gate_")
@@ -75,10 +77,7 @@ def _is_explicit_test_job(job: AutomationJob) -> bool:
     marker = None
     if isinstance(job.payload_json, dict):
         marker = job.payload_json.get("marker")
-    return bool(
-        job.dedupe_key.startswith(TEST_DEDUPE_PREFIXES)
-        or marker in TEST_PAYLOAD_MARKERS
-    )
+    return bool(job.dedupe_key.startswith(TEST_DEDUPE_PREFIXES) or marker in TEST_PAYLOAD_MARKERS)
 
 
 def build_workspace_operational_readiness(
@@ -86,17 +85,13 @@ def build_workspace_operational_readiness(
     *,
     workspace_id: UUID,
 ) -> WorkspaceOperationalReadiness:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_before = now - timedelta(minutes=STALE_LOCK_MINUTES)
-    worker_fresh_after = now - timedelta(
-        minutes=AUTOMATION_WORKER_HEARTBEAT_MINUTES
-    )
+    worker_fresh_after = now - timedelta(minutes=AUTOMATION_WORKER_HEARTBEAT_MINUTES)
     recent_since = now - timedelta(hours=24)
     checks: list[OperationalCheck] = []
 
-    migration_head = db.scalar(
-        text("SELECT version_num FROM alembic_version LIMIT 1")
-    )
+    migration_head = db.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
     if migration_head == EXPECTED_MIGRATION_HEAD:
         _check(
             checks,
@@ -116,6 +111,75 @@ def build_workspace_operational_readiness(
             ),
             value=migration_head,
         )
+
+    if migration_head == EXPECTED_MIGRATION_HEAD:
+        clinic_integration = db.get(ClinicIntegration, workspace_id)
+        integration_ok = bool(
+            clinic_integration is not None
+            and clinic_integration.status == "active"
+            and clinic_integration.adapter_key in registered_clinic_adapter_keys()
+        )
+        integration_details = (
+            {
+                "mode": clinic_integration.mode,
+                "adapter_key": clinic_integration.adapter_key,
+                "status": clinic_integration.status,
+            }
+            if clinic_integration is not None
+            else {}
+        )
+    else:
+        clinic_integration = None
+        integration_ok = False
+        integration_details = {"reason": "database migration is not current"}
+
+    _check(
+        checks,
+        key="clinic_integration",
+        severity="pass" if integration_ok else "fail",
+        message=(
+            "Clinic integration is active and its adapter is installed."
+            if integration_ok
+            else "Clinic integration is missing, inactive, or its adapter is unavailable."
+        ),
+        details=integration_details,
+    )
+
+    sync_schedule = (
+        db.get(ClinicIntegrationSyncSchedule, workspace_id)
+        if migration_head == EXPECTED_MIGRATION_HEAD
+        else None
+    )
+    runtime_sync_enabled = bool(
+        sync_schedule is not None
+        and sync_schedule.enabled
+        and clinic_integration is not None
+        and clinic_integration.status == "active"
+        and clinic_integration.mode in {"external_api", "hybrid"}
+    )
+    _check(
+        checks,
+        key="clinic_sync_schedule",
+        severity="pass" if runtime_sync_enabled else "warn",
+        message=(
+            "Scheduled external clinic sync is enabled."
+            if runtime_sync_enabled
+            else "Scheduled external clinic sync is not enabled."
+        ),
+        details={
+            "enabled": bool(sync_schedule.enabled) if sync_schedule is not None else False,
+            "interval_minutes": (
+                int(sync_schedule.interval_minutes) if sync_schedule is not None else None
+            ),
+            "next_run_at": (
+                sync_schedule.next_run_at.isoformat()
+                if sync_schedule is not None and sync_schedule.next_run_at is not None
+                else None
+            ),
+            "attempts": int(sync_schedule.attempts) if sync_schedule is not None else 0,
+            "last_error": sync_schedule.last_error if sync_schedule is not None else None,
+        },
+    )
 
     active_admins = _count(
         db,
@@ -172,19 +236,13 @@ def build_workspace_operational_readiness(
         .select_from(BookingSettings)
         .where(BookingSettings.workspace_id == workspace_id),
     )
-    clinic_ready = (
-        branches > 0
-        and services > 0
-        and doctors > 0
-        and booking_settings > 0
-    )
+    clinic_ready = branches > 0 and services > 0 and doctors > 0 and booking_settings > 0
     _check(
         checks,
         key="clinic_configuration",
         severity="pass" if clinic_ready else "fail",
         message=(
-            "Clinic has active branch/service/doctor configuration and "
-            "booking settings."
+            "Clinic has active branch/service/doctor configuration and booking settings."
             if clinic_ready
             else "Clinic configuration is incomplete."
         ),
@@ -240,12 +298,8 @@ def build_workspace_operational_readiness(
             )
         )
     )
-    runtime_enabled_rules = [
-        rule for rule in enabled_rule_rows if not _is_explicit_test_rule(rule)
-    ]
-    test_enabled_rules = [
-        rule for rule in enabled_rule_rows if _is_explicit_test_rule(rule)
-    ]
+    runtime_enabled_rules = [rule for rule in enabled_rule_rows if not _is_explicit_test_rule(rule)]
+    test_enabled_rules = [rule for rule in enabled_rule_rows if _is_explicit_test_rule(rule)]
 
     if runtime_enabled_rules:
         automation_severity = "pass"
@@ -271,6 +325,7 @@ def build_workspace_operational_readiness(
         value=len(runtime_enabled_rules),
         details={
             "runtime_enabled_rules": len(runtime_enabled_rules),
+            "scheduled_clinic_sync_enabled": runtime_sync_enabled,
             "explicit_test_rules": len(test_enabled_rules),
         },
     )
@@ -288,14 +343,11 @@ def build_workspace_operational_readiness(
     runtime_active_workers = [
         worker for worker in active_workers if not _is_explicit_test_worker(worker)
     ]
-    test_active_workers = [
-        worker for worker in active_workers if _is_explicit_test_worker(worker)
-    ]
+    test_active_workers = [worker for worker in active_workers if _is_explicit_test_worker(worker)]
     fresh_runtime_workers = [
         worker
         for worker in runtime_active_workers
-        if worker.last_seen_at is not None
-        and worker.last_seen_at >= worker_fresh_after
+        if worker.last_seen_at is not None and worker.last_seen_at >= worker_fresh_after
     ]
     newest_runtime_seen = next(
         (
@@ -306,22 +358,23 @@ def build_workspace_operational_readiness(
         None,
     )
 
-    if not runtime_enabled_rules:
+    worker_required = bool(runtime_enabled_rules or runtime_sync_enabled)
+    if not worker_required:
         worker_severity = "warn"
         worker_message = (
-            "No runtime automation rule requires a production worker heartbeat. "
+            "No runtime automation rule or scheduled clinic sync requires a production worker heartbeat. "
             f"Ignoring {len(test_active_workers)} explicit test worker(s)."
         )
     elif fresh_runtime_workers:
         worker_severity = "pass"
         worker_message = (
-            f"{len(fresh_runtime_workers)} runtime automation worker(s) seen "
+            f"{len(fresh_runtime_workers)} runtime worker(s) seen "
             f"within the last {AUTOMATION_WORKER_HEARTBEAT_MINUTES} minutes."
         )
     elif runtime_active_workers:
         worker_severity = "fail"
         worker_message = (
-            "Runtime automation rules are enabled, but configured runtime "
+            "Runtime automation or scheduled clinic sync requires a worker, but configured runtime "
             "worker(s) have no heartbeat within "
             f"{AUTOMATION_WORKER_HEARTBEAT_MINUTES} minutes. "
             "Verify the n8n automation scheduler is active."
@@ -329,7 +382,7 @@ def build_workspace_operational_readiness(
     else:
         worker_severity = "fail"
         worker_message = (
-            "Runtime automation rules are enabled, but no active runtime "
+            "Runtime automation or scheduled clinic sync requires a worker, but no active runtime "
             "automation worker is configured."
         )
 
@@ -341,15 +394,14 @@ def build_workspace_operational_readiness(
         value=len(fresh_runtime_workers),
         details={
             "runtime_enabled_rules": len(runtime_enabled_rules),
+            "scheduled_clinic_sync_enabled": runtime_sync_enabled,
             "explicit_test_rules": len(test_enabled_rules),
             "runtime_active_workers": len(runtime_active_workers),
             "explicit_test_workers": len(test_active_workers),
             "fresh_runtime_workers": len(fresh_runtime_workers),
             "fresh_within_minutes": AUTOMATION_WORKER_HEARTBEAT_MINUTES,
             "newest_runtime_last_seen_at": (
-                newest_runtime_seen.isoformat()
-                if newest_runtime_seen is not None
-                else None
+                newest_runtime_seen.isoformat() if newest_runtime_seen is not None else None
             ),
         },
     )
@@ -364,12 +416,8 @@ def build_workspace_operational_readiness(
             )
         )
     )
-    test_stale_jobs = [
-        job for job in stale_jobs if _is_explicit_test_job(job)
-    ]
-    runtime_stale_jobs = [
-        job for job in stale_jobs if not _is_explicit_test_job(job)
-    ]
+    test_stale_jobs = [job for job in stale_jobs if _is_explicit_test_job(job)]
+    runtime_stale_jobs = [job for job in stale_jobs if not _is_explicit_test_job(job)]
 
     if runtime_stale_jobs:
         stale_severity = "fail"
@@ -416,9 +464,7 @@ def build_workspace_operational_readiness(
         checks,
         key="failed_automation_jobs_24h",
         severity="warn" if failed_jobs else "pass",
-        message=(
-            f"{failed_jobs} failed automation job(s) in the last 24 hours."
-        ),
+        message=(f"{failed_jobs} failed automation job(s) in the last 24 hours."),
         value=failed_jobs,
     )
 
@@ -460,9 +506,7 @@ def build_workspace_operational_readiness(
         checks,
         key="failed_dispatches_24h",
         severity="warn" if failed_dispatches else "pass",
-        message=(
-            f"{failed_dispatches} failed message dispatch(es) in the last 24 hours."
-        ),
+        message=(f"{failed_dispatches} failed message dispatch(es) in the last 24 hours."),
         value=failed_dispatches,
     )
 
@@ -497,9 +541,7 @@ def build_workspace_operational_readiness(
         checks,
         key="expired_active_conversation_flows",
         severity="warn" if expired_active_flows else "pass",
-        message=(
-            f"{expired_active_flows} expired flow(s) are still marked active."
-        ),
+        message=(f"{expired_active_flows} expired flow(s) are still marked active."),
         value=expired_active_flows,
     )
 
@@ -553,18 +595,39 @@ def build_workspace_operational_readiness(
         value=gemini_configured,
     )
 
-    fallback = settings.gemini_onboarding_fallback_model
-    fallback_ok = bool(
-        fallback
-        and fallback != settings.gemini_onboarding_model
+    runtime_fallbacks = {
+        "agent": (settings.gemini_agent_model, settings.gemini_agent_fallback_model),
+        "router": (settings.gemini_router_model, settings.gemini_router_fallback_model),
+        "flow": (settings.gemini_flow_model, settings.gemini_flow_fallback_model),
+    }
+    runtime_fallback_ok = all(
+        bool(fallback and fallback != primary)
+        for primary, fallback in runtime_fallbacks.values()
     )
+    _check(
+        checks,
+        key="customer_agent_provider_failover",
+        severity="pass" if runtime_fallback_ok else "warn",
+        message=(
+            "Customer-agent runtime 5xx failover is configured for agent, router, and flow roles."
+            if runtime_fallback_ok
+            else "One or more customer-agent runtime roles has no distinct fallback model configured."
+        ),
+        value=runtime_fallback_ok,
+        details={
+            role: {"primary": primary, "fallback": fallback}
+            for role, (primary, fallback) in runtime_fallbacks.items()
+        },
+    )
+
+    fallback = settings.gemini_onboarding_fallback_model
+    fallback_ok = bool(fallback and fallback != settings.gemini_onboarding_model)
     _check(
         checks,
         key="onboarding_provider_failover",
         severity="pass" if fallback_ok else "warn",
         message=(
-            f"Onboarding failover configured: "
-            f"{settings.gemini_onboarding_model} → {fallback}."
+            f"Onboarding failover configured: {settings.gemini_onboarding_model} → {fallback}."
             if fallback_ok
             else "AI onboarding has no distinct fallback model configured."
         ),
@@ -575,11 +638,7 @@ def build_workspace_operational_readiness(
     warn_count = sum(c.severity == "warn" for c in checks)
     fail_count = sum(c.severity == "fail" for c in checks)
 
-    status = (
-        "not_ready"
-        if fail_count
-        else ("degraded" if warn_count else "ready")
-    )
+    status = "not_ready" if fail_count else ("degraded" if warn_count else "ready")
 
     return WorkspaceOperationalReadiness(
         status=status,
@@ -591,12 +650,13 @@ def build_workspace_operational_readiness(
         provider={
             "provider": settings.llm_provider,
             "agent_model": settings.gemini_agent_model,
+            "agent_fallback_model": settings.gemini_agent_fallback_model,
             "router_model": settings.gemini_router_model,
+            "router_fallback_model": settings.gemini_router_fallback_model,
             "flow_model": settings.gemini_flow_model,
+            "flow_fallback_model": settings.gemini_flow_fallback_model,
             "onboarding_primary_model": settings.gemini_onboarding_model,
             "onboarding_fallback_model": fallback,
-            "onboarding_max_output_tokens": (
-                settings.gemini_onboarding_max_output_tokens
-            ),
+            "onboarding_max_output_tokens": (settings.gemini_onboarding_max_output_tokens),
         },
     )

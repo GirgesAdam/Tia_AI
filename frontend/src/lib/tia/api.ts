@@ -7,7 +7,13 @@ import type { MeResponse } from "@/lib/types";
 const API_URL = (process.env.TIA_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 export class TiaApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(
+    public status: number,
+    message: string,
+    public technicalMessage?: string,
+  ) {
+    super(message);
+  }
 }
 
 async function accessToken() {
@@ -20,15 +26,28 @@ async function accessToken() {
   return token;
 }
 
-async function parseError(response: Response) {
+async function parseTechnicalError(response: Response) {
   try {
     const body = await response.json();
     if (typeof body?.detail === "string") return body.detail;
     return JSON.stringify(body);
-  } catch { return `${response.status} ${response.statusText}`; }
+  } catch {
+    return `${response.status} ${response.statusText}`;
+  }
 }
 
-export async function tiaRequest<T>(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {
+function userFacingApiError(status: number) {
+  if (status === 400 || status === 422) return "تعذر تنفيذ الطلب بالبيانات الحالية. راجع المدخلات وحاول مرة أخرى.";
+  if (status === 401) return "انتهت جلسة تسجيل الدخول. سجّل الدخول مرة أخرى للمتابعة.";
+  if (status === 403) return "ليس لديك صلاحية لتنفيذ هذا الإجراء.";
+  if (status === 404) return "تعذر العثور على البيانات المطلوبة. قد تكون تغيّرت أو حُذفت.";
+  if (status === 409) return "تعذر تنفيذ الإجراء بسبب تعارض في البيانات الحالية. حدّث الصفحة وحاول مرة أخرى.";
+  if (status === 429) return "تم إرسال طلبات كثيرة خلال وقت قصير. حاول مرة أخرى بعد قليل.";
+  if (status >= 500) return "تعذر إكمال العملية الآن. حاول مرة أخرى، وإذا استمرت المشكلة راجع مسؤول النظام.";
+  return "تعذر إكمال العملية. حاول مرة أخرى.";
+}
+
+export async function tiaRawRequest(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {
   const token = await accessToken();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
@@ -36,13 +55,43 @@ export async function tiaRequest<T>(path: string, init: RequestInit = {}, option
   if (options?.workspace !== false) {
     const cookieStore = await cookies();
     const workspaceId = cookieStore.get("tia_workspace_id")?.value;
-    if (!workspaceId) throw new TiaApiError(409, "Workspace is not selected.");
+    if (!workspaceId) throw new TiaApiError(409, "اختر العيادة التي تريد العمل عليها أولًا.", "Workspace is not selected.");
     headers.set("X-Workspace-ID", workspaceId);
   }
-  const response = await fetch(`${API_URL}/api/v1${path}`, { ...init, headers, cache: "no-store" });
-  if (!response.ok) throw new TiaApiError(response.status, await parseError(response));
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/v1${path}`, { ...init, headers, cache: "no-store" });
+  } catch (error) {
+    const technicalMessage = error instanceof Error ? error.message : String(error);
+    console.error("[Tia API] network request failed", {
+      path,
+      method: init.method || "GET",
+      detail: technicalMessage,
+    });
+    throw new TiaApiError(
+      503,
+      "تعذر الاتصال بخدمة Tia مؤقتًا. حاول مرة أخرى؛ لو كانت العملية طويلة قد تكون اكتملت بالفعل.",
+      technicalMessage,
+    );
+  }
+  if (!response.ok) {
+    const technicalMessage = await parseTechnicalError(response);
+    console.error("[Tia API] request failed", {
+      path,
+      method: init.method || "GET",
+      status: response.status,
+      detail: technicalMessage,
+    });
+    throw new TiaApiError(response.status, userFacingApiError(response.status), technicalMessage);
+  }
+  return response;
+}
+
+export async function tiaRequest<T>(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {
+  const response = await tiaRawRequest(path, init, options);
   if (response.status === 204) return undefined as T;
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
 export function getMe() {

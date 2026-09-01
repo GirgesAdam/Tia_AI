@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 from typing import Any, TypeVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ValidationError
 
-from app.agents.llm_runtime import LLMProviderError, invoke_model
+from app.agents.llm_runtime import invoke_model
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -47,6 +48,7 @@ def canonicalize_gemini_json_schema(
     - inline local `#/$defs/...` references;
     - remove `$defs` / `$ref`;
     - convert nullable `anyOf` to `type: [<type>, "null"]`;
+    - convert supported single-value `const` constraints to provider-supported `enum`;
     - remove local-only validation keywords.
 
     General unions are rejected rather than silently weakened. Tia's provider
@@ -61,7 +63,7 @@ def canonicalize_gemini_json_schema(
             raise StructuredOutputSchemaCompatibilityError(
                 f"Unsupported external JSON Schema reference: {ref}"
             )
-        name = ref[len(prefix):]
+        name = ref[len(prefix) :]
         if name not in definitions:
             raise StructuredOutputSchemaCompatibilityError(
                 f"Unknown JSON Schema definition: {name}"
@@ -83,9 +85,7 @@ def canonicalize_gemini_json_schema(
     ) -> dict[str, Any]:
         branches = node.get("anyOf")
         if not isinstance(branches, list):
-            raise StructuredOutputSchemaCompatibilityError(
-                "JSON Schema anyOf must be an array."
-            )
+            raise StructuredOutputSchemaCompatibilityError("JSON Schema anyOf must be an array.")
 
         null_indexes = [
             index
@@ -94,11 +94,7 @@ def canonicalize_gemini_json_schema(
             and branch.get("type") == "null"
             and set(branch.keys()) <= {"type", "title", "description"}
         ]
-        non_null = [
-            branch
-            for index, branch in enumerate(branches)
-            if index not in null_indexes
-        ]
+        non_null = [branch for index, branch in enumerate(branches) if index not in null_indexes]
 
         if len(null_indexes) != 1 or len(non_null) != 1:
             raise StructuredOutputSchemaCompatibilityError(
@@ -112,21 +108,13 @@ def canonicalize_gemini_json_schema(
             )
 
         current_type = base["type"]
-        type_values = (
-            list(current_type)
-            if isinstance(current_type, list)
-            else [current_type]
-        )
+        type_values = list(current_type) if isinstance(current_type, list) else [current_type]
         if "null" not in type_values:
             type_values.append("null")
         base["type"] = type_values
 
         for key, value in node.items():
-            if (
-                key == "anyOf"
-                or key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS
-                or key == "$defs"
-            ):
+            if key == "anyOf" or key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS or key == "$defs":
                 continue
             base[key] = walk(value, stack)
         return base
@@ -154,7 +142,19 @@ def canonicalize_gemini_json_schema(
 
         cleaned: dict[str, Any] = {}
         for key, item in value.items():
-            if key == "$defs" or key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS:
+            if key == "$defs":
+                continue
+            if key == "const":
+                # Gemini structured output supports enum for strings/numbers but
+                # does not support JSON Schema const. Preserve Pydantic Literal
+                # discriminators by compiling a supported single-value enum
+                # instead of silently dropping the constraint. Boolean/null
+                # const values remain local-only because Gemini documents enum
+                # support for strings and numbers only.
+                if (isinstance(item, str) or (isinstance(item, (int, float)) and not isinstance(item, bool))):
+                    cleaned["enum"] = [item]
+                continue
+            if key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS:
                 continue
             cleaned[key] = walk(item, stack)
         return cleaned
@@ -171,6 +171,17 @@ def canonicalize_gemini_json_schema(
 sanitize_gemini_json_schema = canonicalize_gemini_json_schema
 
 
+@lru_cache(maxsize=32)
+def _cached_provider_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    """Cache deterministic Pydantic->Gemini schema compilation per process.
+
+    Schema generation/canonicalization is pure for a model class and does not
+    consume provider tokens. Returning a deepcopy to callers prevents accidental
+    mutation of the cached canonical form.
+    """
+    return canonicalize_gemini_json_schema(schema.model_json_schema())
+
+
 def invoke_typed_structured_output(
     *,
     model: BaseChatModel,
@@ -183,9 +194,7 @@ def invoke_typed_structured_output(
     There is no function-calling schema shim, regex parser, free-form JSON
     recovery, or keyword intent fallback.
     """
-    provider_schema = canonicalize_gemini_json_schema(
-        schema.model_json_schema()
-    )
+    provider_schema = deepcopy(_cached_provider_schema(schema))
     structured = model.with_structured_output(
         schema=provider_schema,
         method="json_schema",

@@ -26,7 +26,9 @@ class Branch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     address_line2: Mapped[str | None] = mapped_column(String(300), nullable=True)
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     state: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    country_code: Mapped[str] = mapped_column(String(2), nullable=False, default="EG", server_default="EG")
+    country_code: Mapped[str] = mapped_column(
+        String(2), nullable=False, default="EG", server_default="EG"
+    )
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")

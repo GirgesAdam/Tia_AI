@@ -1,5 +1,5 @@
 {
-  "name": "Tia v0.18 - Automation Scheduler",
+  "name": "Tia Automation + Clinic Sync Scheduler",
   "nodes": [
     {
       "parameters": {
@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/automations/adapter/tick",
+        "url": "http://host.docker.internal:8000/api/v1/automations/adapter/tick",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -62,7 +62,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/automations/adapter/jobs/' + $json.job_id + '/execute' }}",
+        "url": "={{ 'http://host.docker.internal:8000/api/v1/automations/adapter/jobs/' + $json.job_id + '/execute' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -80,6 +80,31 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/automations/adapter/clinic-sync/tick",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"page_size\": 100,\n  \"max_pages_per_domain\": 10\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -280,
+        240
+      ],
+      "id": "6dd27cf9-1506-47e0-b33a-0a63f3da23ab",
+      "name": "Tia Clinic Sync Tick",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     }
   ],
   "connections": {
@@ -88,6 +113,11 @@
         [
           {
             "node": "Tia Plan + Claim",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tia Clinic Sync Tick",
             "type": "main",
             "index": 0
           }

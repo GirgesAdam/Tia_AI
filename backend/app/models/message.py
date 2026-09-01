@@ -10,7 +10,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 MESSAGE_SENDER_TYPES = ("patient", "ai", "staff", "system")
 MESSAGE_DIRECTIONS = ("inbound", "outbound", "internal")
-MESSAGE_STATUSES = ("received", "queued", "sent", "delivered", "read", "failed")
+MESSAGE_STATUSES = ("received", "queued", "sent", "delivered", "read", "failed", "cancelled")
 
 
 class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -25,7 +25,7 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="message_direction_valid",
         ),
         CheckConstraint(
-            "delivery_status IN ('received', 'queued', 'sent', 'delivered', 'read', 'failed')",
+            "delivery_status IN ('received', 'queued', 'sent', 'delivered', 'read', 'failed', 'cancelled')",
             name="message_delivery_status_valid",
         ),
         ForeignKeyConstraint(

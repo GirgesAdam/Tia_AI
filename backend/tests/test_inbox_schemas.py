@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.agent import AgentChatResponse
-from app.schemas.inbox import ResolveHandoffRequest, StaffReplyRequest
+from app.schemas.inbox import ResolveHandoffRequest, StaffReplyRequest, TakeoverRequest
 
 
 def test_staff_reply_strips_content() -> None:
@@ -36,3 +36,10 @@ def test_paused_agent_response_has_no_fake_outbound_message() -> None:
     assert response.agent_paused is True
     assert response.outbound_message_id is None
     assert response.reply is None
+
+
+def test_takeover_request_has_safe_deterministic_defaults() -> None:
+    payload = TakeoverRequest(reason="  customer wants a person  ")
+    assert payload.reason == "customer wants a person"
+    assert payload.category == "other"
+    assert payload.priority == "normal"

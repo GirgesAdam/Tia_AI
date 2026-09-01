@@ -1,0 +1,2 @@
+Booking Ref,Client Ref,Client Name,Phone,Treatment Code,Branch Ref,Doctor Key,Start ISO,Status
+BK-1,CLIENT-1,محمود علي,01012345678,LASER-U,NASR,DR-AHM,2026-08-25T18:15:00+03:00,OK

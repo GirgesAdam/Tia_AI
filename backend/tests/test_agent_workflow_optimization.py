@@ -1,4 +1,4 @@
-from datetime import datetime, time, timezone
+from datetime import UTC, datetime, time
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -20,8 +20,8 @@ def _slot(start_hour: int, start_minute: int, duration_minutes: int = 60):
     end = start + timedelta(minutes=duration_minutes)
 
     return SimpleNamespace(
-        start_at=start.astimezone(timezone.utc),
-        end_at=end.astimezone(timezone.utc),
+        start_at=start.astimezone(UTC),
+        end_at=end.astimezone(UTC),
     )
 
 

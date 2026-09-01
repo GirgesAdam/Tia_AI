@@ -1,31 +1,78 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
+from app.models.automation_job import AutomationJob
+from app.models.automation_rule import AutomationRule
+from app.models.branch import Branch
+from app.models.doctor import Doctor
 from app.models.lead import Lead
 from app.models.patient import Patient
+from app.models.patient_package import PatientPackage
+from app.models.service import Service
+from app.models.staff import Staff
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.booking import (
     AppointmentCancel,
     AppointmentCreate,
+    AppointmentAutomationRead,
+    AppointmentEntitySummary,
+    AppointmentListScope,
     AppointmentOperationalStatusUpdate,
+    AppointmentOperationsRead,
+    AppointmentPatientSummary,
     AppointmentRead,
     AppointmentReschedule,
     AppointmentStatus,
     AppointmentStatusHistoryRead,
     AvailabilityResponse,
     AvailabilitySlot,
+)
+from app.schemas.patient_packages import (
+    PatientPackageCancelRefundCreate,
+    PatientPackageCancelRefundRead,
+    PatientPackageCreate,
+    PatientPackagePaymentCreate,
+    PatientPackageRead,
+)
+from app.services.activity import record_activity_event
+from app.services.appointment_operations import (
+    AppointmentCancellationOverrideRequired,
+    AppointmentOperationError,
+    AppointmentOperationForbidden,
+    AppointmentOperationNotFound,
+    appointment_allowed_actions,
+    cancel_appointment_operation,
+    cancellation_override_required,
+    confirm_appointment_operation,
+    reschedule_appointment_operation,
+    update_operational_status_operation,
+)
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    require_tia_workspace_domain_write,
+)
+from app.services.patient_packages import (
+    PackageOperationError,
+    cancel_patient_package_with_refund,
+    create_patient_package,
+    list_patient_packages,
+    package_read,
+    record_package_payment,
+    reserve_package_usage,
+    validate_package_for_booking,
 )
 from app.services.booking import (
     BookingRuleError,
@@ -50,6 +97,25 @@ def booking_conflict(detail: str) -> HTTPException:
         status_code=status.HTTP_409_CONFLICT,
         detail=detail,
     )
+
+
+def require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
+    try:
+        require_tia_workspace_domain_write(
+            db,
+            workspace_id=workspace_id,
+            domain="appointments",
+        )
+    except ClinicIntegrationAuthorityError as exc:
+        raise booking_conflict(str(exc)) from exc
+
+
+def workspace_timezone(access: WorkspaceAccess, branch: Branch | None = None) -> ZoneInfo:
+    name = (branch.timezone if branch and branch.timezone else access.workspace.timezone) or "Africa/Cairo"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("Africa/Cairo")
 
 
 def get_appointment_or_404(db: Session, workspace_id: UUID, appointment_id: UUID) -> Appointment:
@@ -151,13 +217,14 @@ def make_appointment(
     idempotency_key: str | None,
     rescheduled_from_appointment_id: UUID | None = None,
 ) -> Appointment:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return Appointment(
         workspace_id=access.workspace.id,
         patient_id=payload.patient_id,
         branch_id=payload.branch_id,
         doctor_id=payload.doctor_id,
         service_id=payload.service_id,
+        patient_package_id=payload.patient_package_id,
         lead_id=payload.lead_id,
         created_by_user_id=access.user.id,
         rescheduled_from_appointment_id=rescheduled_from_appointment_id,
@@ -221,6 +288,7 @@ def create_appointment(
         Header(alias="Idempotency-Key", max_length=128),
     ] = None,
 ) -> Appointment:
+    require_local_appointment_write(db, access.workspace.id)
     if idempotency_key:
         existing = db.scalar(
             select(Appointment).where(
@@ -252,6 +320,20 @@ def create_appointment(
     except BookingRuleError as exc:
         raise booking_conflict(str(exc)) from exc
 
+    patient_package = None
+    if payload.patient_package_id is not None:
+        try:
+            patient_package = validate_package_for_booking(
+                db,
+                workspace_id=access.workspace.id,
+                package_id=payload.patient_package_id,
+                patient_id=payload.patient_id,
+                service_id=payload.service_id,
+                appointment_start_at=slot.start_at,
+            )
+        except PackageOperationError as exc:
+            raise booking_conflict(str(exc)) from exc
+
     settings = get_effective_booking_settings(db, access.workspace.id)
     initial_status = "pending" if settings.require_confirmation else "confirmed"
     appointment = make_appointment(
@@ -264,6 +346,14 @@ def create_appointment(
     try:
         db.add(appointment)
         db.flush()
+        if patient_package is not None:
+            reserve_package_usage(
+                db,
+                appointment=appointment,
+                package=patient_package,
+                actor_type="staff",
+                actor_user_id=access.user.id,
+            )
         add_history(
             db,
             appointment,
@@ -276,6 +366,17 @@ def create_appointment(
             if lead.service_id is None:
                 lead.service_id = payload.service_id
             lead.status = "booked"
+        record_activity_event(
+            db,
+            workspace_id=access.workspace.id,
+            actor_type="staff",
+            actor_user_id=access.user.id,
+            action="appointment.created",
+            entity_type="appointment",
+            entity_id=appointment.id,
+            summary="Appointment created",
+            metadata={"status": initial_status, "source": appointment.source, "patient_package_id": appointment.patient_package_id},
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -286,6 +387,149 @@ def create_appointment(
     return appointment
 
 
+@router.get("/patients/{patient_id}/packages", response_model=list[PatientPackageRead])
+def get_patient_packages(
+    patient_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    service_id: UUID | None = None,
+    usable_only: bool = False,
+) -> list[PatientPackageRead]:
+    get_patient_for_booking(db, access.workspace.id, patient_id)
+    return list_patient_packages(
+        db,
+        workspace_id=access.workspace.id,
+        patient_id=patient_id,
+        service_id=service_id,
+        usable_only=usable_only,
+    )
+
+
+@router.post(
+    "/patient-packages",
+    response_model=PatientPackageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_package_sale(
+    payload: PatientPackageCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None, Header(alias="Idempotency-Key", max_length=128)
+    ] = None,
+) -> PatientPackageRead:
+    try:
+        package = create_patient_package(
+            db,
+            workspace_id=access.workspace.id,
+            patient_id=payload.patient_id,
+            service_id=payload.service_id,
+            name=payload.name,
+            sessions_purchased=payload.sessions_purchased,
+            sale_price_minor=payload.sale_price_minor,
+            amount_paid_minor=payload.amount_paid_minor,
+            payment_method=payload.payment_method,
+            created_by_user_id=access.user.id,
+            purchased_at=payload.purchased_at,
+            expires_at=payload.expires_at,
+            external_reference=payload.external_reference,
+            external_id=payload.external_id,
+            idempotency_key=idempotency_key,
+        )
+        db.commit()
+        db.refresh(package)
+        return package_read(db, package)
+    except PackageOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
+
+
+@router.post(
+    "/patient-packages/{package_id}/payments",
+    response_model=PatientPackageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_package_payment(
+    package_id: UUID,
+    payload: PatientPackagePaymentCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None, Header(alias="Idempotency-Key", max_length=128)
+    ] = None,
+) -> PatientPackageRead:
+    try:
+        record_package_payment(
+            db,
+            workspace_id=access.workspace.id,
+            package_id=package_id,
+            amount_minor=payload.amount_minor,
+            payment_method=payload.payment_method,
+            external_reference=payload.external_reference,
+            created_by_user_id=access.user.id,
+            idempotency_key=idempotency_key,
+        )
+        package = db.get(PatientPackage, package_id)
+        if package is None or package.workspace_id != access.workspace.id:
+            raise PackageOperationError("Package not found.")
+        db.commit()
+        db.refresh(package)
+        return package_read(db, package)
+    except PackageOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
+
+
+@router.post(
+    "/patient-packages/{package_id}/cancel-refund",
+    response_model=PatientPackageCancelRefundRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def cancel_package_and_refund(
+    package_id: UUID,
+    payload: PatientPackageCancelRefundCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None, Header(alias="Idempotency-Key", max_length=128)
+    ] = None,
+) -> PatientPackageCancelRefundRead:
+    try:
+        (
+            package,
+            collected_minor,
+            consumed_value_minor,
+            previously_refunded_minor,
+            refunded_now_minor,
+            refund_transactions,
+        ) = cancel_patient_package_with_refund(
+            db,
+            workspace_id=access.workspace.id,
+            package_id=package_id,
+            reason=payload.reason,
+            created_by_user_id=access.user.id,
+            standalone_session_price_minor_at_purchase=(
+                payload.standalone_session_price_minor_at_purchase
+            ),
+            idempotency_key=idempotency_key,
+        )
+        db.commit()
+        db.refresh(package)
+        read = package_read(db, package)
+        return PatientPackageCancelRefundRead(
+            package=read,
+            collected_minor=collected_minor,
+            consumed_sessions=read.sessions_consumed,
+            consumed_value_minor=consumed_value_minor,
+            previously_refunded_minor=previously_refunded_minor,
+            refunded_now_minor=refunded_now_minor,
+            refund_transaction_ids=[row.id for row in refund_transactions],
+        )
+    except PackageOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
+
+
 @router.get("/appointments", response_model=list[AppointmentRead])
 def list_appointments(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
@@ -294,6 +538,7 @@ def list_appointments(
     doctor_id: UUID | None = None,
     branch_id: UUID | None = None,
     appointment_status: Annotated[AppointmentStatus | None, Query(alias="status")] = None,
+    scope: AppointmentListScope = "all",
     start_from: datetime | None = None,
     start_to: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
@@ -308,20 +553,37 @@ def list_appointments(
         stmt = stmt.where(Appointment.branch_id == branch_id)
     if appointment_status:
         stmt = stmt.where(Appointment.status == appointment_status)
+    now = datetime.now(UTC)
+    if scope == "today":
+        tz = workspace_timezone(access)
+        local_now = now.astimezone(tz)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_end = local_start + timedelta(days=1)
+        stmt = stmt.where(
+            Appointment.start_at >= local_start.astimezone(UTC),
+            Appointment.start_at < local_end.astimezone(UTC),
+        )
+    elif scope == "upcoming":
+        stmt = stmt.where(
+            Appointment.start_at >= now,
+            Appointment.status.in_(("pending", "confirmed")),
+        )
+    elif scope == "past":
+        stmt = stmt.where(Appointment.start_at < now)
     if start_from:
         if start_from.tzinfo is None or start_from.utcoffset() is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="start_from must include a timezone offset.",
             )
-        stmt = stmt.where(Appointment.start_at >= start_from.astimezone(timezone.utc))
+        stmt = stmt.where(Appointment.start_at >= start_from.astimezone(UTC))
     if start_to:
         if start_to.tzinfo is None or start_to.utcoffset() is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="start_to must include a timezone offset.",
             )
-        stmt = stmt.where(Appointment.start_at < start_to.astimezone(timezone.utc))
+        stmt = stmt.where(Appointment.start_at < start_to.astimezone(UTC))
     stmt = stmt.order_by(Appointment.start_at.desc()).limit(limit).offset(offset)
     return list(db.scalars(stmt))
 
@@ -357,30 +619,152 @@ def get_appointment_history(
     )
 
 
+@router.get("/appointments/{appointment_id}/operations", response_model=AppointmentOperationsRead)
+def get_appointment_operations(
+    appointment_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AppointmentOperationsRead:
+    row = db.execute(
+        select(Appointment, Patient, Branch, Service, Doctor, Staff)
+        .join(
+            Patient,
+            and_(
+                Patient.workspace_id == Appointment.workspace_id,
+                Patient.id == Appointment.patient_id,
+            ),
+        )
+        .join(
+            Branch,
+            and_(
+                Branch.workspace_id == Appointment.workspace_id,
+                Branch.id == Appointment.branch_id,
+            ),
+        )
+        .join(
+            Service,
+            and_(
+                Service.workspace_id == Appointment.workspace_id,
+                Service.id == Appointment.service_id,
+            ),
+        )
+        .join(
+            Doctor,
+            and_(
+                Doctor.workspace_id == Appointment.workspace_id,
+                Doctor.id == Appointment.doctor_id,
+            ),
+        )
+        .join(
+            Staff,
+            and_(
+                Staff.workspace_id == Doctor.workspace_id,
+                Staff.id == Doctor.staff_id,
+            ),
+        )
+        .where(
+            Appointment.workspace_id == access.workspace.id,
+            Appointment.id == appointment_id,
+        )
+    ).one_or_none()
+    if row is None:
+        raise not_found("Appointment")
+
+    appointment, patient, branch, service, doctor, staff = row
+    history = list(
+        db.scalars(
+            select(AppointmentStatusHistory)
+            .where(
+                AppointmentStatusHistory.workspace_id == access.workspace.id,
+                AppointmentStatusHistory.appointment_id == appointment.id,
+            )
+            .order_by(AppointmentStatusHistory.created_at)
+        )
+    )
+    automation_rows = list(
+        db.execute(
+            select(AutomationJob, AutomationRule)
+            .join(
+                AutomationRule,
+                and_(
+                    AutomationRule.workspace_id == AutomationJob.workspace_id,
+                    AutomationRule.id == AutomationJob.rule_id,
+                ),
+            )
+            .where(
+                AutomationJob.workspace_id == access.workspace.id,
+                AutomationJob.appointment_id == appointment.id,
+                AutomationJob.job_kind == "appointment_rule",
+            )
+            .order_by(AutomationJob.scheduled_for, AutomationJob.created_at)
+        ).all()
+    )
+
+    now = datetime.now(UTC)
+    settings = get_effective_booking_settings(db, access.workspace.id)
+    override_required = cancellation_override_required(
+        appointment_status=appointment.status,
+        start_at=appointment.start_at,
+        cancellation_notice_minutes=settings.cancellation_notice_minutes,
+        now=now,
+    )
+    patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "العميل"
+    doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "الدكتور"
+
+    return AppointmentOperationsRead(
+        appointment=AppointmentRead.model_validate(appointment),
+        patient=AppointmentPatientSummary(id=patient.id, name=patient_name, phone=patient.phone),
+        branch=AppointmentEntitySummary(id=branch.id, name=branch.name),
+        service=AppointmentEntitySummary(id=service.id, name=service.name),
+        doctor=AppointmentEntitySummary(id=doctor.id, name=doctor_name),
+        timezone=workspace_timezone(access, branch).key,
+        history=[AppointmentStatusHistoryRead.model_validate(item) for item in history],
+        automations=[
+            AppointmentAutomationRead(
+                id=job.id,
+                rule_key=rule.key,
+                rule_name=rule.name,
+                status=job.status,
+                scheduled_for=job.scheduled_for,
+                attempts=job.attempts,
+                last_error=job.last_error,
+            )
+            for job, rule in automation_rows
+        ],
+        allowed_actions=list(
+            appointment_allowed_actions(
+                appointment_status=appointment.status,
+                start_at=appointment.start_at,
+                now=now,
+            )
+        ),
+        cancellation_override_required=override_required,
+        can_override_cancellation_policy=(access.membership.role == WORKSPACE_ROLE_ADMIN),
+    )
+
+
 @router.post("/appointments/{appointment_id}/confirm", response_model=AppointmentRead)
 def confirm_appointment(
     appointment_id: UUID,
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
-    appointment = get_appointment_or_404(db, access.workspace.id, appointment_id)
-    if appointment.status == "confirmed":
-        return appointment
-    if appointment.status != "pending":
-        raise booking_conflict(f"Cannot confirm an appointment with status '{appointment.status}'.")
-
-    old_status = appointment.status
-    appointment.status = "confirmed"
-    appointment.confirmed_at = datetime.now(timezone.utc)
-    add_history(
-        db,
-        appointment,
-        changed_by_user_id=access.user.id,
-        from_status=old_status,
-        to_status="confirmed",
-        reason="appointment_confirmed",
-    )
-    db.commit()
+    require_local_appointment_write(db, access.workspace.id)
+    try:
+        appointment = confirm_appointment_operation(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            changed_by_user_id=access.user.id,
+            reason="appointment_confirmed",
+        )
+        db.commit()
+    except AppointmentOperationNotFound as exc:
+        db.rollback()
+        raise not_found("Appointment") from exc
+    except AppointmentOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
 
@@ -392,42 +776,30 @@ def cancel_appointment(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
-    appointment = get_appointment_or_404(db, access.workspace.id, appointment_id)
-    if appointment.status == "cancelled":
-        return appointment
-    if appointment.status in {"completed", "no_show", "rescheduled"}:
-        raise booking_conflict(f"Cannot cancel an appointment with status '{appointment.status}'.")
-
-    now = datetime.now(timezone.utc)
-    settings = get_effective_booking_settings(db, access.workspace.id)
-    inside_notice_window = appointment.start_at - now < timedelta(
-        minutes=settings.cancellation_notice_minutes
-    )
-    if inside_notice_window:
-        if not payload.override_policy:
-            raise booking_conflict(
-                "Cancellation is inside the configured notice window. An admin override is required."
-            )
-        if access.membership.role != WORKSPACE_ROLE_ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only an admin can override the cancellation notice policy.",
-            )
-
-    old_status = appointment.status
-    appointment.status = "cancelled"
-    appointment.cancelled_at = now
-    appointment.cancellation_reason = payload.reason
-    add_history(
-        db,
-        appointment,
-        changed_by_user_id=access.user.id,
-        from_status=old_status,
-        to_status="cancelled",
-        reason=payload.reason,
-        metadata={"override_policy": payload.override_policy},
-    )
-    db.commit()
+    require_local_appointment_write(db, access.workspace.id)
+    try:
+        appointment = cancel_appointment_operation(
+            db,
+            workspace=access.workspace,
+            appointment_id=appointment_id,
+            changed_by_user_id=access.user.id,
+            reason=payload.reason,
+            override_policy=payload.override_policy,
+            actor_is_admin=(access.membership.role == WORKSPACE_ROLE_ADMIN),
+        )
+        db.commit()
+    except AppointmentOperationNotFound as exc:
+        db.rollback()
+        raise not_found("Appointment") from exc
+    except AppointmentOperationForbidden as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AppointmentCancellationOverrideRequired as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
+    except AppointmentOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
 
@@ -443,95 +815,26 @@ def reschedule_appointment(
         Header(alias="Idempotency-Key", max_length=128),
     ] = None,
 ) -> Appointment:
-    if idempotency_key:
-        existing = db.scalar(
-            select(Appointment).where(
-                Appointment.workspace_id == access.workspace.id,
-                Appointment.idempotency_key == idempotency_key,
-            )
-        )
-        if existing is not None:
-            return existing
-
-    current = get_appointment_or_404(db, access.workspace.id, appointment_id)
-    if current.status not in {"pending", "confirmed"}:
-        raise booking_conflict(
-            f"Only pending or confirmed appointments can be rescheduled; current status is '{current.status}'."
-        )
-
-    branch_id = payload.branch_id or current.branch_id
-    doctor_id = payload.doctor_id or current.doctor_id
-
+    require_local_appointment_write(db, access.workspace.id)
     try:
-        slot = find_exact_slot(
-            db=db,
+        replacement, _ = reschedule_appointment_operation(
+            db,
             workspace=access.workspace,
-            branch_id=branch_id,
-            service_id=current.service_id,
-            doctor_id=doctor_id,
+            appointment_id=appointment_id,
             requested_start_at=payload.start_at,
-            exclude_appointment_id=current.id,
-        )
-    except BookingRuleError as exc:
-        raise booking_conflict(str(exc)) from exc
-
-    new_payload = AppointmentCreate(
-        patient_id=current.patient_id,
-        branch_id=branch_id,
-        doctor_id=doctor_id,
-        service_id=current.service_id,
-        lead_id=current.lead_id,
-        start_at=payload.start_at,
-        source=current.source,
-        customer_note=current.customer_note,
-    )
-    new_status = current.status
-    old_start = current.start_at
-    old_end = current.end_at
-    old_status = current.status
-
-    replacement = make_appointment(
-        access=access,
-        payload=new_payload,
-        slot=slot,
-        initial_status=new_status,
-        idempotency_key=idempotency_key,
-        rescheduled_from_appointment_id=current.id,
-    )
-    if new_status == "confirmed":
-        replacement.confirmed_at = datetime.now(timezone.utc)
-
-    try:
-        current.status = "rescheduled"
-        db.flush()
-        db.add(replacement)
-        db.flush()
-
-        add_history(
-            db,
-            current,
             changed_by_user_id=access.user.id,
-            from_status=old_status,
-            to_status="rescheduled",
+            branch_id=payload.branch_id,
+            doctor_id=payload.doctor_id,
             reason=payload.reason or "appointment_rescheduled",
-            metadata={
-                "replacement_appointment_id": str(replacement.id),
-                "old_start_at": old_start.isoformat(),
-                "old_end_at": old_end.isoformat(),
-                "new_start_at": replacement.start_at.isoformat(),
-                "new_end_at": replacement.end_at.isoformat(),
-            },
-        )
-        add_history(
-            db,
-            replacement,
-            changed_by_user_id=access.user.id,
-            from_status=None,
-            to_status=new_status,
-            reason="rescheduled_from_previous_appointment",
-            metadata={"previous_appointment_id": str(current.id)},
+            idempotency_key=idempotency_key,
         )
         db.commit()
+    except AppointmentOperationNotFound as exc:
+        db.rollback()
+        raise not_found("Appointment") from exc
+    except AppointmentOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     except IntegrityError as exc:
         db.rollback()
         raise booking_conflict(
@@ -548,37 +851,23 @@ def update_operational_status(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
-    appointment = get_appointment_or_404(db, access.workspace.id, appointment_id)
-    allowed_transitions: dict[str, set[str]] = {
-        "confirmed": {"checked_in", "no_show"},
-        "checked_in": {"in_progress"},
-        "in_progress": {"completed"},
-        "pending": {"no_show"},
-    }
-    if payload.status not in allowed_transitions.get(appointment.status, set()):
-        raise booking_conflict(
-            f"Cannot change appointment status from '{appointment.status}' to '{payload.status}'."
+    require_local_appointment_write(db, access.workspace.id)
+    try:
+        appointment = update_operational_status_operation(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            target_status=payload.status,
+            changed_by_user_id=access.user.id,
+            reason=payload.reason,
         )
-
-    now = datetime.now(timezone.utc)
-    if payload.status == "no_show" and now < appointment.start_at:
-        raise booking_conflict("An appointment cannot be marked no-show before its start time.")
-
-    old_status = appointment.status
-    appointment.status = payload.status
-    if payload.status == "completed":
-        appointment.completed_at = now
-    elif payload.status == "no_show":
-        appointment.no_show_at = now
-
-    add_history(
-        db,
-        appointment,
-        changed_by_user_id=access.user.id,
-        from_status=old_status,
-        to_status=payload.status,
-        reason=payload.reason,
-    )
-    db.commit()
+        db.commit()
+    except AppointmentOperationNotFound as exc:
+        db.rollback()
+        raise not_found("Appointment") from exc
+    except AppointmentOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
+

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agents.llm_runtime import LLMProviderError
+from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
@@ -151,9 +151,7 @@ def list_channel_connections(
         Query(alias="status"),
     ] = None,
 ) -> list[ChannelConnection]:
-    stmt = select(ChannelConnection).where(
-        ChannelConnection.workspace_id == access.workspace.id
-    )
+    stmt = select(ChannelConnection).where(ChannelConnection.workspace_id == access.workspace.id)
     if connection_status:
         stmt = stmt.where(ChannelConnection.status == connection_status)
     return list(db.scalars(stmt.order_by(ChannelConnection.created_at)))
@@ -294,13 +292,8 @@ def process_channel_inbound(
             detail=str(exc),
         ) from exc
     except LLMProviderError as exc:
-        http_status = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-            if exc.retryable
-            else status.HTTP_502_BAD_GATEWAY
-        )
         raise HTTPException(
-            status_code=http_status,
+            status_code=provider_error_http_status(exc),
             detail="Gemini provider request failed.",
         ) from exc
     except StructuredOutputError as exc:
@@ -376,6 +369,7 @@ def report_channel_dispatch_result(
         ) from exc
     return MessageDispatchRead.model_validate(dispatch)
 
+
 @router.post(
     "/adapter/outbox/provider-status",
     response_model=ProviderStatusResponse,
@@ -413,4 +407,3 @@ def report_provider_delivery_status(
         dispatch_id=dispatch.id if dispatch else None,
         dispatch_status=dispatch.status if dispatch else None,
     )
-

@@ -28,7 +28,11 @@ AppointmentSource = Literal[
     "email",
     "other",
 ]
-OperationalAppointmentStatus = Literal["checked_in", "in_progress", "completed", "no_show"]
+OperationalAppointmentStatus = Literal["completed", "no_show"]
+AppointmentListScope = Literal["all", "today", "upcoming", "past"]
+AppointmentOperationAction = Literal[
+    "confirm", "reschedule", "cancel", "complete", "no_show"
+]
 
 
 def require_timezone_aware(value: datetime) -> datetime:
@@ -40,6 +44,7 @@ def require_timezone_aware(value: datetime) -> datetime:
 class AvailabilitySlot(BaseModel):
     branch_id: UUID
     doctor_id: UUID
+    doctor_assignment_known: bool = True
     service_id: UUID
     start_at: datetime
     end_at: datetime
@@ -57,7 +62,9 @@ class AppointmentCreate(BaseModel):
     patient_id: UUID
     branch_id: UUID
     doctor_id: UUID
+    doctor_assignment_known: bool = True
     service_id: UUID
+    patient_package_id: UUID | None = None
     lead_id: UUID | None = None
     start_at: datetime
     source: AppointmentSource = "staff"
@@ -121,7 +128,9 @@ class AppointmentRead(BaseModel):
     patient_id: UUID
     branch_id: UUID
     doctor_id: UUID
+    doctor_assignment_known: bool = True
     service_id: UUID
+    patient_package_id: UUID | None = None
     lead_id: UUID | None
     created_by_user_id: UUID | None
     rescheduled_from_appointment_id: UUID | None
@@ -134,6 +143,11 @@ class AppointmentRead(BaseModel):
     duration_minutes: int
     price_minor: int
     currency: str
+    payment_status: str = "unknown"
+    amount_paid_minor: int | None = None
+    payment_method: str = "unknown"
+    billing_context: str = "standard"
+    package_external_id: str | None = None
     customer_note: str | None
     cancellation_reason: str | None
     confirmed_at: datetime | None
@@ -158,3 +172,38 @@ class AppointmentStatusHistoryRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class AppointmentPatientSummary(BaseModel):
+    id: UUID
+    name: str
+    phone: str | None
+
+
+class AppointmentEntitySummary(BaseModel):
+    id: UUID
+    name: str
+
+
+class AppointmentAutomationRead(BaseModel):
+    id: UUID
+    rule_key: str
+    rule_name: str
+    status: str
+    scheduled_for: datetime
+    attempts: int
+    last_error: str | None
+
+
+class AppointmentOperationsRead(BaseModel):
+    appointment: AppointmentRead
+    patient: AppointmentPatientSummary
+    branch: AppointmentEntitySummary
+    service: AppointmentEntitySummary
+    doctor: AppointmentEntitySummary
+    timezone: str
+    history: list[AppointmentStatusHistoryRead]
+    automations: list[AppointmentAutomationRead]
+    allowed_actions: list[AppointmentOperationAction]
+    cancellation_override_required: bool
+    can_override_cancellation_policy: bool

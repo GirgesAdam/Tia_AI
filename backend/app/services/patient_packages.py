@@ -1,0 +1,782 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from uuid import UUID
+
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.orm import Session
+
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    require_tia_workspace_domain_write,
+)
+from app.models.appointment import Appointment
+from app.models.patient import Patient
+from app.models.patient_package import PackageUsage, PatientPackage
+from app.models.payment_transaction import PAYMENT_METHODS, PaymentTransaction
+from app.models.service import Service
+from app.schemas.patient_packages import PatientPackageRead
+from app.services.activity import ActivityActorType, record_activity_event
+from app.services.payments import refresh_appointment_payment_snapshots
+
+
+class PackageOperationError(ValueError):
+    pass
+
+
+class PackageNotFound(PackageOperationError):
+    pass
+
+
+def _effective_status(package: PatientPackage, *, on_date: date | None = None) -> str:
+    on_date = on_date or datetime.now(UTC).date()
+    if package.status == "cancelled":
+        return "cancelled"
+    if package.expires_at is not None and package.expires_at < on_date:
+        return "expired"
+    return package.status
+
+
+def _usage_totals(db: Session, *, workspace_id: UUID, package_id: UUID) -> tuple[int, int]:
+    rows = db.execute(
+        select(PackageUsage.status, func.coalesce(func.sum(PackageUsage.sessions_used), 0))
+        .where(
+            PackageUsage.workspace_id == workspace_id,
+            PackageUsage.patient_package_id == package_id,
+            PackageUsage.status.in_(("reserved", "consumed")),
+        )
+        .group_by(PackageUsage.status)
+    ).all()
+    values = {str(status): int(total or 0) for status, total in rows}
+    return values.get("reserved", 0), values.get("consumed", 0)
+
+
+def package_read(db: Session, package: PatientPackage, *, on_date: date | None = None) -> PatientPackageRead:
+    reserved, consumed = _usage_totals(
+        db, workspace_id=package.workspace_id, package_id=package.id
+    )
+    opening_balance = (
+        int(package.opening_sessions_remaining)
+        if package.opening_sessions_remaining is not None
+        else int(package.sessions_purchased)
+    )
+    remaining = max(0, opening_balance - reserved - consumed)
+    effective = _effective_status(package, on_date=on_date)
+    if effective == "active" and remaining == 0:
+        effective = "exhausted"
+    return PatientPackageRead(
+        id=package.id,
+        workspace_id=package.workspace_id,
+        patient_id=package.patient_id,
+        service_id=package.service_id,
+        purchase_transaction_id=package.purchase_transaction_id,
+        external_id=package.external_id,
+        name=package.name,
+        sessions_purchased=package.sessions_purchased,
+        sessions_reserved=reserved,
+        sessions_consumed=consumed,
+        sessions_remaining=remaining,
+        sale_price_minor=package.sale_price_minor,
+        standalone_session_price_minor_at_purchase=(
+            package.standalone_session_price_minor_at_purchase
+        ),
+        currency=package.currency,
+        purchased_at=package.purchased_at,
+        expires_at=package.expires_at,
+        status=package.status,
+        effective_status=effective,
+        source=package.source,
+        created_at=package.created_at,
+        updated_at=package.updated_at,
+    )
+
+
+def list_patient_packages(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    service_id: UUID | None = None,
+    usable_only: bool = False,
+    on_date: date | None = None,
+) -> list[PatientPackageRead]:
+    query = select(PatientPackage).where(
+        PatientPackage.workspace_id == workspace_id,
+        PatientPackage.patient_id == patient_id,
+    )
+    if service_id is not None:
+        query = query.where(PatientPackage.service_id == service_id)
+    packages = list(db.scalars(query.order_by(PatientPackage.purchased_at.desc())).all())
+    reads = [package_read(db, package, on_date=on_date) for package in packages]
+    if usable_only:
+        reads = [item for item in reads if item.effective_status == "active" and item.sessions_remaining > 0]
+    return reads
+
+
+def create_patient_package(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    service_id: UUID,
+    name: str,
+    sessions_purchased: int,
+    sale_price_minor: int,
+    amount_paid_minor: int | None = None,
+    payment_method: str,
+    created_by_user_id: UUID | None,
+    purchased_at: datetime | None = None,
+    expires_at: date | None = None,
+    external_reference: str | None = None,
+    external_id: str | None = None,
+    idempotency_key: str | None = None,
+    actor_type: ActivityActorType = "staff",
+) -> PatientPackage:
+    if sessions_purchased <= 0:
+        raise PackageOperationError("Package sessions must be positive.")
+    if sale_price_minor < 0:
+        raise PackageOperationError("Package price cannot be negative.")
+    effective_initial_payment = sale_price_minor if amount_paid_minor is None else amount_paid_minor
+    if effective_initial_payment < 0 or effective_initial_payment > sale_price_minor:
+        raise PackageOperationError("Initial package payment must be between zero and the package price.")
+    if effective_initial_payment > 0 and (
+        payment_method not in PAYMENT_METHODS or payment_method == "unknown"
+    ):
+        raise PackageOperationError("A paid package requires a supported payment method.")
+    purchased_at = (purchased_at or datetime.now(UTC))
+    if purchased_at.tzinfo is None or purchased_at.utcoffset() is None:
+        raise PackageOperationError("Package purchase time must include a timezone offset.")
+    purchased_at = purchased_at.astimezone(UTC)
+    if expires_at is not None and expires_at < purchased_at.date():
+        raise PackageOperationError("Package expiry cannot be before the purchase date.")
+
+    if idempotency_key:
+        existing = db.scalar(
+            select(PatientPackage).where(
+                PatientPackage.workspace_id == workspace_id,
+                PatientPackage.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.patient_id != patient_id
+                or existing.service_id != service_id
+                or existing.sessions_purchased != sessions_purchased
+                or existing.sale_price_minor != sale_price_minor
+            ):
+                raise PackageOperationError("Idempotency key was already used for another package sale.")
+            return existing
+
+    patient = db.scalar(
+        select(Patient).where(Patient.workspace_id == workspace_id, Patient.id == patient_id)
+    )
+    service = db.scalar(
+        select(Service).where(Service.workspace_id == workspace_id, Service.id == service_id)
+    )
+    if patient is None:
+        raise PackageNotFound("Patient not found.")
+    if service is None or not service.is_active:
+        raise PackageNotFound("Service not found or inactive.")
+
+    transaction = None
+    if effective_initial_payment > 0:
+        try:
+            require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+        except ClinicIntegrationAuthorityError as exc:
+            raise PackageOperationError(str(exc)) from exc
+        transaction = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=None,
+            origin_appointment_id=None,
+            patient_id=patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=None,
+            transaction_type="payment",
+            amount_minor=effective_initial_payment,
+            currency="EGP",
+            payment_method=payment_method,
+            source="staff",
+            external_reference=external_reference,
+            reason="Prepaid package purchase",
+            idempotency_key=(f"package-payment:{idempotency_key}"[:128] if idempotency_key else None),
+            created_at=purchased_at,
+        )
+        db.add(transaction)
+        db.flush()
+
+    package = PatientPackage(
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        service_id=service_id,
+        purchase_transaction_id=transaction.id if transaction else None,
+        created_by_user_id=created_by_user_id,
+        external_id=external_id,
+        name=name.strip(),
+        sessions_purchased=sessions_purchased,
+        sale_price_minor=sale_price_minor,
+        standalone_session_price_minor_at_purchase=service.price_minor,
+        currency="EGP",
+        purchased_at=purchased_at,
+        expires_at=expires_at,
+        status="active",
+        source="staff",
+        idempotency_key=idempotency_key,
+    )
+    db.add(package)
+    db.flush()
+    if transaction is not None:
+        transaction.patient_package_id = package.id
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type=actor_type,
+        actor_user_id=created_by_user_id,
+        action="package.created",
+        entity_type="patient_package",
+        entity_id=package.id,
+        summary="Prepaid package created",
+        metadata={
+            "service_id": service_id,
+            "sessions_purchased": sessions_purchased,
+            "sale_price_minor": sale_price_minor,
+            "amount_paid_minor": effective_initial_payment,
+            "standalone_session_price_minor_at_purchase": service.price_minor,
+            "has_payment": transaction is not None,
+        },
+    )
+    return package
+
+
+def _package_financial_rows(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package: PatientPackage,
+    for_update: bool = False,
+) -> tuple[list[PaymentTransaction], list[PaymentTransaction]]:
+    payment_filter = or_(
+        PaymentTransaction.patient_package_id == package.id,
+        (
+            PaymentTransaction.id == package.purchase_transaction_id
+            if package.purchase_transaction_id is not None
+            else False
+        ),
+    )
+    payment_stmt = (
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.transaction_type == "payment",
+            payment_filter,
+        )
+        .order_by(PaymentTransaction.created_at.asc(), PaymentTransaction.id.asc())
+    )
+    if for_update:
+        payment_stmt = payment_stmt.with_for_update()
+    payments = list(db.scalars(payment_stmt).all())
+    payment_ids = [row.id for row in payments]
+    if not payment_ids:
+        return payments, []
+    refund_stmt = select(PaymentTransaction).where(
+        PaymentTransaction.workspace_id == workspace_id,
+        PaymentTransaction.transaction_type == "refund",
+        or_(
+            PaymentTransaction.patient_package_id == package.id,
+            PaymentTransaction.reference_transaction_id.in_(payment_ids),
+        ),
+    )
+    if for_update:
+        refund_stmt = refund_stmt.with_for_update()
+    refunds = list(db.scalars(refund_stmt).all())
+    return payments, refunds
+
+
+def record_package_payment(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+    amount_minor: int,
+    payment_method: str,
+    created_by_user_id: UUID | None,
+    external_reference: str | None = None,
+    idempotency_key: str | None = None,
+    actor_type: ActivityActorType = "staff",
+) -> PaymentTransaction:
+    if amount_minor <= 0:
+        raise PackageOperationError("Package payment amount must be positive.")
+    if payment_method not in PAYMENT_METHODS or payment_method == "unknown":
+        raise PackageOperationError("A package payment requires a supported payment method.")
+    try:
+        require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+    except ClinicIntegrationAuthorityError as exc:
+        raise PackageOperationError(str(exc)) from exc
+
+    if idempotency_key:
+        existing = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.transaction_type != "payment"
+                or existing.patient_package_id != package_id
+                or existing.amount_minor != amount_minor
+            ):
+                raise PackageOperationError("Idempotency key was already used for another package payment.")
+            return existing
+
+    package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
+    if _effective_status(package) != "active":
+        raise PackageOperationError("Payments can only be added to an active package.")
+    payments, _refunds = _package_financial_rows(
+        db, workspace_id=workspace_id, package=package, for_update=True
+    )
+    gross_collected = sum(int(row.amount_minor) for row in payments)
+    remaining_due = max(int(package.sale_price_minor) - gross_collected, 0)
+    if amount_minor > remaining_due:
+        raise PackageOperationError(
+            f"Package payment exceeds remaining package balance of {remaining_due} minor units."
+        )
+    transaction = PaymentTransaction(
+        workspace_id=workspace_id,
+        appointment_id=None,
+        origin_appointment_id=None,
+        patient_id=package.patient_id,
+        created_by_user_id=created_by_user_id,
+        reference_transaction_id=None,
+        patient_package_id=package.id,
+        transaction_type="payment",
+        amount_minor=amount_minor,
+        currency=package.currency,
+        payment_method=payment_method,
+        source="staff",
+        external_reference=external_reference,
+        reason="Prepaid package payment",
+        idempotency_key=idempotency_key,
+        created_at=datetime.now(UTC),
+    )
+    db.add(transaction)
+    db.flush()
+    if package.purchase_transaction_id is None:
+        package.purchase_transaction_id = transaction.id
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type=actor_type,
+        actor_user_id=created_by_user_id,
+        action="package.payment_recorded",
+        entity_type="patient_package",
+        entity_id=package.id,
+        summary="Package payment recorded",
+        metadata={"amount_minor": amount_minor, "payment_method": payment_method},
+    )
+    return transaction
+
+
+def cancel_patient_package_with_refund(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+    reason: str,
+    created_by_user_id: UUID,
+    standalone_session_price_minor_at_purchase: int | None = None,
+    idempotency_key: str | None = None,
+) -> tuple[PatientPackage, int, int, int, int, list[PaymentTransaction]]:
+    """Cancel a package and refund unused value at the non-package session price.
+
+    Reserved sessions are released (no-show is already handled as a release), while
+    consumed sessions are repriced using the standalone service price snapshot from
+    the purchase date. Refunds are created against the original package payments and
+    never against appointment sessions.
+    """
+    reason = reason.strip()
+    if not reason:
+        raise PackageOperationError("Refund reason cannot be empty.")
+    try:
+        require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+    except ClinicIntegrationAuthorityError as exc:
+        raise PackageOperationError(str(exc)) from exc
+
+    package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
+    reserved, consumed = _usage_totals(db, workspace_id=workspace_id, package_id=package.id)
+    if package.opening_sessions_remaining is not None:
+        if not package.sessions_total_known:
+            raise PackageOperationError(
+                "This migrated package does not include the original total session count, "
+                "so a safe package refund cannot be calculated automatically."
+            )
+        consumed += max(
+            0,
+            int(package.sessions_purchased) - int(package.opening_sessions_remaining),
+        )
+    if package.standalone_session_price_minor_at_purchase is None:
+        if standalone_session_price_minor_at_purchase is not None:
+            package.standalone_session_price_minor_at_purchase = (
+                standalone_session_price_minor_at_purchase
+            )
+        elif consumed > 0:
+            raise PackageOperationError(
+                "Standalone session price at package purchase is required before refunding a legacy package with consumed sessions."
+            )
+    elif (
+        standalone_session_price_minor_at_purchase is not None
+        and standalone_session_price_minor_at_purchase
+        != package.standalone_session_price_minor_at_purchase
+    ):
+        raise PackageOperationError(
+            "Standalone session price at purchase is already fixed for this package."
+        )
+
+    payments, refunds = _package_financial_rows(
+        db, workspace_id=workspace_id, package=package, for_update=True
+    )
+    collected_minor = sum(int(row.amount_minor) for row in payments)
+    previously_refunded_minor = sum(int(row.amount_minor) for row in refunds)
+    unit_price = int(package.standalone_session_price_minor_at_purchase or 0)
+    consumed_value_minor = consumed * unit_price
+    refundable_minor = max(
+        collected_minor - consumed_value_minor - previously_refunded_minor,
+        0,
+    )
+
+    refunds_by_payment: dict[UUID, int] = {}
+    for row in refunds:
+        if row.reference_transaction_id is not None:
+            refunds_by_payment[row.reference_transaction_id] = (
+                refunds_by_payment.get(row.reference_transaction_id, 0) + int(row.amount_minor)
+            )
+
+    created_refunds: list[PaymentTransaction] = []
+    remaining_to_refund = refundable_minor
+    # Refund newest collections first so the oldest collected value remains against
+    # already-consumed standalone treatment in a deterministic way.
+    for index, payment in enumerate(reversed(payments)):
+        if remaining_to_refund <= 0:
+            break
+        available_on_payment = max(
+            int(payment.amount_minor) - refunds_by_payment.get(payment.id, 0), 0
+        )
+        amount = min(available_on_payment, remaining_to_refund)
+        if amount <= 0:
+            continue
+        refund_key = (
+            f"package-refund:{idempotency_key}:{index}"[:128]
+            if idempotency_key
+            else None
+        )
+        if refund_key:
+            existing = db.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == workspace_id,
+                    PaymentTransaction.idempotency_key == refund_key,
+                )
+            )
+            if existing is not None:
+                if (
+                    existing.transaction_type != "refund"
+                    or existing.patient_package_id != package.id
+                    or existing.reference_transaction_id != payment.id
+                ):
+                    raise PackageOperationError(
+                        "Idempotency key was already used for another package refund."
+                    )
+                remaining_to_refund -= int(existing.amount_minor)
+                created_refunds.append(existing)
+                continue
+        refund = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=None,
+            origin_appointment_id=None,
+            patient_id=package.patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=payment.id,
+            patient_package_id=package.id,
+            transaction_type="refund",
+            amount_minor=amount,
+            currency=package.currency,
+            payment_method=payment.payment_method,
+            source="staff",
+            external_reference=None,
+            reason=reason[:500],
+            idempotency_key=refund_key,
+            created_at=datetime.now(UTC),
+        )
+        db.add(refund)
+        db.flush()
+        created_refunds.append(refund)
+        remaining_to_refund -= amount
+
+    if remaining_to_refund > 0:
+        raise PackageOperationError("Package refund could not be reconciled to original payments.")
+
+    usages = list(
+        db.scalars(
+            select(PackageUsage)
+            .where(
+                PackageUsage.workspace_id == workspace_id,
+                PackageUsage.patient_package_id == package.id,
+                PackageUsage.status == "reserved",
+            )
+            .with_for_update()
+        ).all()
+    )
+    released_appointment_ids: set[UUID] = set()
+    for usage in usages:
+        usage.status = "released"
+        usage.used_at = None
+        released_appointment_ids.add(usage.appointment_id)
+
+    # Cancelling the commercial package must also remove package coverage from
+    # appointments that are still scheduled. Keep the appointment itself intact
+    # so the clinic can still treat the patient as a normal pay-per-session visit.
+    # The released PackageUsage row stays as immutable history.
+    if released_appointment_ids:
+        db.execute(
+            update(Appointment)
+            .where(
+                Appointment.workspace_id == workspace_id,
+                Appointment.id.in_(released_appointment_ids),
+                Appointment.patient_package_id == package.id,
+                Appointment.billing_context == "package_prepaid",
+            )
+            .values(
+                patient_package_id=None,
+                billing_context="standard",
+                package_external_id=None,
+            )
+        )
+        refresh_appointment_payment_snapshots(
+            db,
+            workspace_id=workspace_id,
+            appointment_ids=released_appointment_ids,
+        )
+
+    package.status = "cancelled"
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=created_by_user_id,
+        action="package.cancelled_refund",
+        entity_type="patient_package",
+        entity_id=package.id,
+        summary="Package cancelled and unused value refunded",
+        metadata={
+            "consumed_sessions": consumed,
+            "released_reservations": reserved,
+            "consumed_value_minor": consumed_value_minor,
+            "refunded_now_minor": refundable_minor,
+            "previously_refunded_minor": previously_refunded_minor,
+        },
+    )
+    return (
+        package,
+        collected_minor,
+        consumed_value_minor,
+        previously_refunded_minor,
+        refundable_minor,
+        created_refunds,
+    )
+
+
+def _locked_package(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+) -> PatientPackage:
+    package = db.scalar(
+        select(PatientPackage)
+        .where(PatientPackage.workspace_id == workspace_id, PatientPackage.id == package_id)
+        .with_for_update()
+    )
+    if package is None:
+        raise PackageNotFound("Package not found.")
+    return package
+
+
+def validate_package_for_booking(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+    patient_id: UUID,
+    service_id: UUID,
+    appointment_start_at: datetime,
+    sessions: int = 1,
+) -> PatientPackage:
+    package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
+    if package.patient_id != patient_id:
+        raise PackageOperationError("Selected package belongs to another patient.")
+    if package.service_id != service_id:
+        raise PackageOperationError("Selected package is for a different service.")
+    if _effective_status(package, on_date=appointment_start_at.date()) != "active":
+        raise PackageOperationError("Selected package is not active on the appointment date.")
+    if appointment_start_at.astimezone(UTC) < package.purchased_at.astimezone(UTC):
+        raise PackageOperationError("Appointment cannot use a package before its purchase time.")
+    reserved, consumed = _usage_totals(db, workspace_id=workspace_id, package_id=package.id)
+    remaining = package.sessions_purchased - reserved - consumed
+    if remaining < sessions:
+        raise PackageOperationError(
+            f"Selected package has only {max(0, remaining)} session(s) remaining."
+        )
+    return package
+
+
+def reserve_package_usage(
+    db: Session,
+    *,
+    appointment: Appointment,
+    package: PatientPackage,
+    sessions: int = 1,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+) -> PackageUsage:
+    existing = db.scalar(
+        select(PackageUsage).where(
+            PackageUsage.workspace_id == appointment.workspace_id,
+            PackageUsage.appointment_id == appointment.id,
+        )
+    )
+    if existing is not None:
+        if existing.patient_package_id != package.id:
+            raise PackageOperationError("Appointment is already linked to another package.")
+        if existing.status == "released":
+            # Re-reservation is allowed only after the caller has revalidated capacity.
+            existing.status = "reserved"
+            existing.used_at = None
+        return existing
+    usage = PackageUsage(
+        workspace_id=appointment.workspace_id,
+        patient_package_id=package.id,
+        appointment_id=appointment.id,
+        sessions_used=sessions,
+        status="reserved",
+        used_at=None,
+    )
+    appointment.patient_package_id = package.id
+    appointment.billing_context = "package_prepaid"
+    appointment.package_external_id = package.external_id or str(package.id)
+    appointment.payment_status = "paid"
+    appointment.amount_paid_minor = None
+    appointment.payment_method = "unknown"
+    db.add(usage)
+    db.flush()
+    record_activity_event(
+        db,
+        workspace_id=appointment.workspace_id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        action="package.session_reserved",
+        entity_type="patient_package",
+        entity_id=package.id,
+        summary="Package session reserved",
+        metadata={"appointment_id": appointment.id, "sessions": sessions},
+    )
+    return usage
+
+
+def consume_package_usage(
+    db: Session,
+    *,
+    appointment: Appointment,
+    used_at: datetime | None = None,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+) -> PackageUsage | None:
+    usage = db.scalar(
+        select(PackageUsage)
+        .where(
+            PackageUsage.workspace_id == appointment.workspace_id,
+            PackageUsage.appointment_id == appointment.id,
+        )
+        .with_for_update()
+    )
+    if usage is None:
+        return None
+    if usage.status == "consumed":
+        return usage
+    if usage.status == "released":
+        raise PackageOperationError("Released package entitlement cannot be consumed.")
+    usage.status = "consumed"
+    usage.used_at = (used_at or datetime.now(UTC)).astimezone(UTC)
+    record_activity_event(
+        db,
+        workspace_id=appointment.workspace_id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        action="package.session_consumed",
+        entity_type="patient_package",
+        entity_id=usage.patient_package_id,
+        summary="Package session consumed",
+        metadata={"appointment_id": appointment.id, "sessions": usage.sessions_used},
+    )
+    return usage
+
+
+def release_package_usage(
+    db: Session,
+    *,
+    appointment: Appointment,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+    reason: str,
+) -> PackageUsage | None:
+    usage = db.scalar(
+        select(PackageUsage)
+        .where(
+            PackageUsage.workspace_id == appointment.workspace_id,
+            PackageUsage.appointment_id == appointment.id,
+        )
+        .with_for_update()
+    )
+    if usage is None or usage.status == "released":
+        return usage
+    if usage.status == "consumed":
+        raise PackageOperationError("Consumed package entitlement cannot be released.")
+    usage.status = "released"
+    usage.used_at = None
+    record_activity_event(
+        db,
+        workspace_id=appointment.workspace_id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        action="package.session_released",
+        entity_type="patient_package",
+        entity_id=usage.patient_package_id,
+        summary="Package session released",
+        metadata={"appointment_id": appointment.id, "reason": reason[:80]},
+    )
+    return usage
+
+
+def transfer_package_usage(
+    db: Session,
+    *,
+    from_appointment: Appointment,
+    to_appointment: Appointment,
+) -> PackageUsage | None:
+    usage = db.scalar(
+        select(PackageUsage)
+        .where(
+            PackageUsage.workspace_id == from_appointment.workspace_id,
+            PackageUsage.appointment_id == from_appointment.id,
+        )
+        .with_for_update()
+    )
+    if usage is None:
+        return None
+    if usage.status != "reserved":
+        raise PackageOperationError("Only a reserved package session can be rescheduled.")
+    usage.appointment_id = to_appointment.id
+    to_appointment.patient_package_id = from_appointment.patient_package_id
+    to_appointment.billing_context = from_appointment.billing_context
+    to_appointment.package_external_id = from_appointment.package_external_id
+    to_appointment.payment_status = "paid"
+    to_appointment.amount_paid_minor = None
+    to_appointment.payment_method = "unknown"
+    return usage

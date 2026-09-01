@@ -68,13 +68,9 @@ def _parse_uuid(value: Any, *, field_name: str) -> UUID:
         try:
             return UUID(value)
         except ValueError as exc:
-            raise SupabaseAuthError(
-                f"Supabase returned an invalid {field_name}."
-            ) from exc
+            raise SupabaseAuthError(f"Supabase returned an invalid {field_name}.") from exc
 
-    raise SupabaseAuthError(
-        f"Supabase did not return a valid {field_name}."
-    )
+    raise SupabaseAuthError(f"Supabase did not return a valid {field_name}.")
 
 
 def verify_access_token(token: str) -> VerifiedAuthIdentity:
@@ -93,9 +89,7 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
             timeout=10.0,
         )
     except httpx.HTTPError as exc:
-        raise SupabaseAuthError(
-            "Could not reach Supabase Auth server."
-        ) from exc
+        raise SupabaseAuthError("Could not reach Supabase Auth server.") from exc
 
     if response.status_code != 200:
         try:
@@ -111,14 +105,10 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
     try:
         user_data = response.json()
     except ValueError as exc:
-        raise SupabaseAuthError(
-            "Supabase returned a non-JSON user response."
-        ) from exc
+        raise SupabaseAuthError("Supabase returned a non-JSON user response.") from exc
 
     if not isinstance(user_data, dict):
-        raise SupabaseAuthError(
-            "Supabase returned an invalid user response."
-        )
+        raise SupabaseAuthError("Supabase returned an invalid user response.")
 
     auth_user_id = _parse_uuid(
         user_data.get("id"),
@@ -127,18 +117,13 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
 
     raw_email = user_data.get("email")
     if not isinstance(raw_email, str) or not raw_email.strip():
-        raise SupabaseAuthError(
-            "Authenticated clinic users must have an email identity."
-        )
+        raise SupabaseAuthError("Authenticated clinic users must have an email identity.")
 
     user_metadata = user_data.get("user_metadata")
     full_name: str | None = None
 
     if isinstance(user_metadata, dict):
-        candidate = (
-            user_metadata.get("full_name")
-            or user_metadata.get("name")
-        )
+        candidate = user_metadata.get("full_name") or user_metadata.get("name")
         if isinstance(candidate, str) and candidate.strip():
             full_name = candidate.strip()[:200]
 
@@ -151,14 +136,9 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
 
 def invite_user_by_email(email: str) -> InvitedAuthUser:
     try:
-        response = (
-            get_admin_auth_client()
-            .auth.admin.invite_user_by_email(email)
-        )
+        response = get_admin_auth_client().auth.admin.invite_user_by_email(email)
     except Exception as exc:
-        raise SupabaseAuthError(
-            "Supabase could not send the invitation."
-        ) from exc
+        raise SupabaseAuthError("Supabase could not send the invitation.") from exc
 
     raw_user = getattr(response, "user", None) or response
     user_data = _to_mapping(raw_user)

@@ -19,7 +19,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
-
 ONBOARDING_AI_STATUSES = (
     "drafting",
     "awaiting_confirmation",

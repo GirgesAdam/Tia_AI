@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.crm import MessageCreate, PatientCreate, normalize_phone
+from app.schemas.crm import (
+    ConversationRead,
+    MessageCreate,
+    PatientCreate,
+    normalize_patient_identity_phone,
+    normalize_phone,
+)
 
 
 def test_phone_normalization_accepts_common_formatting() -> None:
@@ -9,6 +15,18 @@ def test_phone_normalization_accepts_common_formatting() -> None:
     assert display == "+20 100-123-4567"
     assert normalized == "+201001234567"
 
+
+
+
+def test_phone_normalization_canonicalizes_egyptian_mobile_variants() -> None:
+    variants = [
+        "01012345678",
+        "+20 101 234 5678",
+        "00201012345678",
+        "201012345678",
+    ]
+    normalized = {normalize_patient_identity_phone(value)[1] for value in variants}
+    assert normalized == {"+201012345678"}
 
 def test_patient_rejects_invalid_phone() -> None:
     with pytest.raises(ValidationError):
@@ -27,3 +45,8 @@ def test_patient_message_must_be_inbound() -> None:
 def test_text_message_requires_content() -> None:
     with pytest.raises(ValidationError):
         MessageCreate(sender_type="staff", direction="outbound", content="   ")
+
+
+def test_conversation_read_requires_phase4_ownership_fields() -> None:
+    required = {"owner_type", "unread_count", "ownership_changed_at"}
+    assert required.issubset(ConversationRead.model_fields)

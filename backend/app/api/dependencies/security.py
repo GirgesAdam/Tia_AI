@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Callable
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
@@ -165,3 +166,9 @@ def get_manageable_workspace(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
 ) -> Workspace:
     return access.workspace
+
+
+def get_workspace_admin_user_id(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+) -> UUID:
+    return access.user.id

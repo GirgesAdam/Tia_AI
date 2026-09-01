@@ -92,8 +92,8 @@ export default function PrivacyPolicyPage() {
                 settings.
               </li>
               <li>
-                Customer and CRM information such as name, phone number, email
-                address, conversation history, notes, and identifiers supplied by
+                Customer and CRM information such as name, phone number,
+                conversation history, notes, and identifiers supplied by
                 connected messaging services.
               </li>
               <li>

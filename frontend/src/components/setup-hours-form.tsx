@@ -1,8 +1,43 @@
-const days=["الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"];
-export function SetupHoursFields({defaultStart="10:00",defaultEnd="22:00"}:{defaultStart?:string;defaultEnd?:string}){
-  return <div className="space-y-2">{days.map((day,i)=><div key={day} className="grid grid-cols-[90px_1fr_1fr] items-center gap-2 rounded-xl bg-[var(--surface-2)] p-2">
-    <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" name={`day_${i}`} defaultChecked={i!==4}/>{day}</label>
-    <input type="time" name={`start_${i}`} defaultValue={defaultStart} className="rounded-lg border border-[var(--border)] bg-white px-2 py-1.5 text-xs"/>
-    <input type="time" name={`end_${i}`} defaultValue={defaultEnd} className="rounded-lg border border-[var(--border)] bg-white px-2 py-1.5 text-xs"/>
-  </div>)}</div>
+const days = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"];
+
+type HourRow = { weekday: number; start_time: string; end_time: string };
+
+export function SetupHoursFields({
+  defaultStart = "10:00",
+  defaultEnd = "22:00",
+  hours,
+}: {
+  defaultStart?: string;
+  defaultEnd?: string;
+  hours?: HourRow[];
+}) {
+  return (
+    <div className="space-y-2">
+      {days.map((day, index) => {
+        const saved = hours?.find((row) => row.weekday === index);
+        const hasSavedSet = Array.isArray(hours);
+        return (
+          <div key={day} className="grid gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-[110px_1fr_1fr] sm:items-center">
+            <label className="flex items-center gap-2 text-xs font-bold text-slate-800">
+              <input
+                type="checkbox"
+                name={`day_${index}`}
+                defaultChecked={hasSavedSet ? Boolean(saved) : index !== 4}
+                className="size-4 accent-teal-700"
+              />
+              {day}
+            </label>
+            <label className="grid grid-cols-[36px_1fr] items-center gap-2 text-[11px] font-semibold text-[var(--muted)] sm:block">
+              <span className="sm:hidden">من</span>
+              <input type="time" name={`start_${index}`} defaultValue={(saved?.start_time || defaultStart).slice(0, 5)} className="form-control h-9 min-h-9 py-1 text-xs" aria-label={`بداية ${day}`} />
+            </label>
+            <label className="grid grid-cols-[36px_1fr] items-center gap-2 text-[11px] font-semibold text-[var(--muted)] sm:block">
+              <span className="sm:hidden">إلى</span>
+              <input type="time" name={`end_${index}`} defaultValue={(saved?.end_time || defaultEnd).slice(0, 5)} className="form-control h-9 min-h-9 py-1 text-xs" aria-label={`نهاية ${day}`} />
+            </label>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

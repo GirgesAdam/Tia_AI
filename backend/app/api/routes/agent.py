@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.agents.llm_runtime import LLMProviderError
+from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
@@ -35,13 +35,8 @@ def chat_with_tia_agent(
             detail=str(exc),
         ) from exc
     except LLMProviderError as exc:
-        http_status = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-            if exc.retryable
-            else status.HTTP_502_BAD_GATEWAY
-        )
         raise HTTPException(
-            status_code=http_status,
+            status_code=provider_error_http_status(exc),
             detail="Gemini provider request failed.",
         ) from exc
     except FlowStateConflictError as exc:

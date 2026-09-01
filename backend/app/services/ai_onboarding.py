@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agents.onboarding_planner import plan_onboarding_turn
+from app.core.doctor_names import normalize_doctor_name_parts
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.doctor import Doctor
@@ -25,7 +26,6 @@ from app.schemas.onboarding_ai import (
     OnboardingPlan,
     OnboardingTurnDecision,
 )
-
 
 SESSION_TTL_HOURS = 24
 
@@ -45,7 +45,7 @@ class OnboardingExecutionError(RuntimeError):
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _event(
@@ -106,9 +106,7 @@ def get_or_create_session(
             raise OnboardingSessionConflictError("Onboarding session not found.")
         _expire_if_needed(db, session)
         if not session.is_active:
-            raise OnboardingSessionConflictError(
-                f"Onboarding session is {session.status}."
-            )
+            raise OnboardingSessionConflictError(f"Onboarding session is {session.status}.")
         return session
 
     existing = db.scalar(
@@ -178,17 +176,11 @@ def _recent_history(db: Session, session: OnboardingAISession) -> list[dict]:
 
 def _current_setup_snapshot(db: Session, workspace_id: UUID) -> dict:
     branches = list(
-        db.scalars(
-            select(Branch)
-            .where(Branch.workspace_id == workspace_id)
-            .order_by(Branch.name)
-        )
+        db.scalars(select(Branch).where(Branch.workspace_id == workspace_id).order_by(Branch.name))
     )
     services = list(
         db.scalars(
-            select(Service)
-            .where(Service.workspace_id == workspace_id)
-            .order_by(Service.name)
+            select(Service).where(Service.workspace_id == workspace_id).order_by(Service.name)
         )
     )
     staff = list(
@@ -200,9 +192,7 @@ def _current_setup_snapshot(db: Session, workspace_id: UUID) -> dict:
     )
     doctors = list(
         db.scalars(
-            select(Doctor)
-            .where(Doctor.workspace_id == workspace_id)
-            .order_by(Doctor.created_at)
+            select(Doctor).where(Doctor.workspace_id == workspace_id).order_by(Doctor.created_at)
         )
     )
     staff_by_id = {row.id: row for row in staff}
@@ -231,8 +221,7 @@ def _current_setup_snapshot(db: Session, workspace_id: UUID) -> dict:
         "doctors": [
             {
                 "name": (
-                    f"{staff_by_id[row.staff_id].first_name} "
-                    f"{staff_by_id[row.staff_id].last_name}"
+                    f"{staff_by_id[row.staff_id].first_name} {staff_by_id[row.staff_id].last_name}"
                 ).strip()
                 if row.staff_id in staff_by_id
                 else "Doctor",
@@ -243,9 +232,7 @@ def _current_setup_snapshot(db: Session, workspace_id: UUID) -> dict:
             for row in doctors
         ],
         "booking_settings_exists": db.scalar(
-            select(BookingSettings.id).where(
-                BookingSettings.workspace_id == workspace_id
-            )
+            select(BookingSettings.id).where(BookingSettings.workspace_id == workspace_id)
         )
         is not None,
     }
@@ -283,21 +270,15 @@ def validate_plan(plan: OnboardingPlan) -> list[str]:
     for doctor in plan.doctors:
         for key in doctor.branch_keys:
             if key not in branch_set:
-                errors.append(
-                    f"Doctor {doctor.key} references unknown branch key {key}."
-                )
+                errors.append(f"Doctor {doctor.key} references unknown branch key {key}.")
         for key in doctor.service_keys:
             if key not in service_set:
-                errors.append(
-                    f"Doctor {doctor.key} references unknown service key {key}."
-                )
+                errors.append(f"Doctor {doctor.key} references unknown service key {key}.")
         if (
             doctor.primary_branch_key is not None
             and doctor.primary_branch_key not in doctor.branch_keys
         ):
-            errors.append(
-                f"Doctor {doctor.key} primary branch must be in branch_keys."
-            )
+            errors.append(f"Doctor {doctor.key} primary branch must be in branch_keys.")
         if doctor.apply_working_hours:
             for hours in doctor.working_hours:
                 if hours.branch_key not in doctor.branch_keys:
@@ -306,12 +287,7 @@ def validate_plan(plan: OnboardingPlan) -> list[str]:
                         f"unassigned branch {hours.branch_key}."
                     )
 
-    has_change = bool(
-        plan.branches
-        or plan.services
-        or plan.doctors
-        or plan.booking_settings.apply
-    )
+    has_change = bool(plan.branches or plan.services or plan.doctors or plan.booking_settings.apply)
     if not has_change:
         errors.append("Plan does not contain any configuration change.")
 
@@ -323,13 +299,9 @@ def _summary(plan: OnboardingPlan) -> dict:
         "branches": len(plan.branches),
         "services": len(plan.services),
         "doctors": len(plan.doctors),
-        "branch_schedules": sum(
-            1 for row in plan.branches if row.apply_working_hours
-        ),
+        "branch_schedules": sum(1 for row in plan.branches if row.apply_working_hours),
         "doctor_schedules": sum(
-            len(row.working_hours)
-            for row in plan.doctors
-            if row.apply_working_hours
+            len(row.working_hours) for row in plan.doctors if row.apply_working_hours
         ),
         "booking_settings": plan.booking_settings.apply,
     }
@@ -353,11 +325,7 @@ def _response(
     capabilities: list[str] | None = None,
     readiness_refresh_required: bool = False,
 ) -> OnboardingAIResponse:
-    plan = (
-        OnboardingPlan.model_validate(session.plan)
-        if session.plan
-        else None
-    )
+    plan = OnboardingPlan.model_validate(session.plan) if session.plan else None
     return OnboardingAIResponse(
         session_id=session.id,
         status=session.status,
@@ -389,9 +357,7 @@ def _set_plan(
         session.status = "drafting"
         session.plan = decision.plan.model_dump(mode="json")
         session.plan_summary = _summary(decision.plan)
-        session.missing_information = list(
-            dict.fromkeys([*decision.missing_information, *errors])
-        )
+        session.missing_information = list(dict.fromkeys([*decision.missing_information, *errors]))
         event_type = "plan_revised" if session.plan else "plan_proposed"
         _event(
             db,
@@ -444,9 +410,7 @@ def _upsert_branch(
             Branch.code == item.code,
         )
     )
-    values = item.model_dump(
-        exclude={"key", "apply_working_hours", "working_hours"}
-    )
+    values = item.model_dump(exclude={"key", "apply_working_hours", "working_hours"})
     if row is None:
         row = Branch(workspace_id=workspace_id, **values)
         db.add(row)
@@ -497,7 +461,14 @@ def _upsert_service(db: Session, workspace_id: UUID, item) -> Service:
     return row
 
 
-def _find_staff(db: Session, workspace_id: UUID, item) -> Staff | None:
+def _find_staff(
+    db: Session,
+    workspace_id: UUID,
+    item,
+    *,
+    first_name: str,
+    last_name: str,
+) -> Staff | None:
     if item.email:
         row = db.scalar(
             select(Staff).where(
@@ -510,8 +481,8 @@ def _find_staff(db: Session, workspace_id: UUID, item) -> Staff | None:
     return db.scalar(
         select(Staff).where(
             Staff.workspace_id == workspace_id,
-            func.lower(Staff.first_name) == item.first_name.lower(),
-            func.lower(Staff.last_name) == item.last_name.lower(),
+            func.lower(Staff.first_name) == first_name.lower(),
+            func.lower(Staff.last_name) == last_name.lower(),
         )
     )
 
@@ -521,13 +492,16 @@ def _upsert_doctor(
     workspace_id: UUID,
     item,
 ) -> tuple[Staff, Doctor]:
-    staff = _find_staff(db, workspace_id, item)
+    first_name, last_name = normalize_doctor_name_parts(item.first_name, item.last_name)
+    staff = _find_staff(
+        db, workspace_id, item, first_name=first_name, last_name=last_name
+    )
     if staff is None:
         staff = Staff(
             workspace_id=workspace_id,
             user_id=None,
-            first_name=item.first_name,
-            last_name=item.last_name,
+            first_name=first_name,
+            last_name=last_name,
             email=item.email,
             phone=item.phone,
             job_title="doctor",
@@ -536,8 +510,8 @@ def _upsert_doctor(
         db.add(staff)
         db.flush()
     else:
-        staff.first_name = item.first_name
-        staff.last_name = item.last_name
+        staff.first_name = first_name
+        staff.last_name = last_name
         staff.email = item.email
         staff.phone = item.phone
         staff.job_title = "doctor"
@@ -584,9 +558,7 @@ def execute_plan(
             readiness_refresh_required=True,
         )
     if session.status != "awaiting_confirmation":
-        raise OnboardingSessionConflictError(
-            "Onboarding plan is not awaiting confirmation."
-        )
+        raise OnboardingSessionConflictError("Onboarding plan is not awaiting confirmation.")
 
     plan = OnboardingPlan.model_validate(session.plan)
     errors = validate_plan(plan)
@@ -607,16 +579,12 @@ def execute_plan(
     try:
         branch_by_key: dict[str, Branch] = {}
         for item in plan.branches:
-            branch_by_key[item.key] = _upsert_branch(
-                db, session.workspace_id, item
-            )
+            branch_by_key[item.key] = _upsert_branch(db, session.workspace_id, item)
         db.flush()
 
         service_by_key: dict[str, Service] = {}
         for item in plan.services:
-            service_by_key[item.key] = _upsert_service(
-                db, session.workspace_id, item
-            )
+            service_by_key[item.key] = _upsert_service(db, session.workspace_id, item)
         db.flush()
 
         doctor_results: list[dict] = []
@@ -690,8 +658,7 @@ def execute_plan(
                     branch = branch_by_key[hours.branch_key]
                     db.execute(
                         delete(DoctorWorkingHour).where(
-                            DoctorWorkingHour.workspace_id
-                            == session.workspace_id,
+                            DoctorWorkingHour.workspace_id == session.workspace_id,
                             DoctorWorkingHour.doctor_id == doctor.id,
                             DoctorWorkingHour.branch_id == branch.id,
                         )
@@ -721,9 +688,7 @@ def execute_plan(
         if plan.booking_settings.apply:
             values = plan.booking_settings.model_dump(exclude={"apply"})
             settings = db.scalar(
-                select(BookingSettings).where(
-                    BookingSettings.workspace_id == session.workspace_id
-                )
+                select(BookingSettings).where(BookingSettings.workspace_id == session.workspace_id)
             )
             if settings is None:
                 settings = BookingSettings(
@@ -829,17 +794,13 @@ def process_onboarding_message(
         if not session.plan:
             session.version += 1
             session.status = "drafting"
-            session.missing_information = [
-                "مفيش خطة محفوظة للتأكيد. اشرح إعدادات العيادة الأول."
-            ]
+            session.missing_information = ["مفيش خطة محفوظة للتأكيد. اشرح إعدادات العيادة الأول."]
             session.last_decision = decision.model_dump(mode="json")
             db.commit()
             db.refresh(session)
             return _response(
                 session,
-                assistant_message=(
-                    "محتاجين نكوّن خطة إعداد الأول قبل ما أنفذ أي تعديل."
-                ),
+                assistant_message=("محتاجين نكوّن خطة إعداد الأول قبل ما أنفذ أي تعديل."),
                 capabilities=decision.capabilities,
             )
         return execute_plan(

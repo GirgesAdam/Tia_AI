@@ -19,6 +19,7 @@ class MigrationSettings(BaseSettings):
         extra="ignore",
     )
 
+
 config = context.config
 
 if config.config_file_name is not None:

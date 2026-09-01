@@ -2,9 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.llm_runtime import LLMProviderError
 from app.agents import onboarding_planner
-
+from app.agents.llm_runtime import LLMProviderError
 
 PROVIDER_DECISION = SimpleNamespace(marker="provider-decision")
 
@@ -126,7 +125,7 @@ def test_no_configured_fallback_surfaces_primary_503(monkeypatch) -> None:
 
 
 def test_default_models_keep_37_primary_and_36_fallback() -> None:
-    from app.core.config import settings
+    from app.core.config import Settings
 
-    assert settings.gemini_onboarding_model == "gemini-3.7-flash"
-    assert settings.gemini_onboarding_fallback_model == "gemini-3.6-flash"
+    assert Settings.model_fields["gemini_onboarding_model"].default == "gemini-3.7-flash"
+    assert Settings.model_fields["gemini_onboarding_fallback_model"].default == "gemini-3.6-flash"

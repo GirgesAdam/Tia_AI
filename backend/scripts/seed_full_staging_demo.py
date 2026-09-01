@@ -57,6 +57,8 @@ from staging_scenarios import (
     MOCK_CHANNEL_TOKEN,
     MOCK_PAUSED_CHANNEL_TOKEN,
     PATIENT_KEYS,
+    REGRESSION_WORKSPACE_ID,
+    REGRESSION_WORKSPACE_SLUG,
     SEED_MARKER,
     SEED_VERSION,
     sid,
@@ -136,7 +138,7 @@ def ensure_clinic(
         sid(workspace.id, "staff:regression-doctor-main"),
         workspace_id=workspace.id,
         user_id=None,
-        first_name="د. ريجريشن",
+        first_name="ريجريشن",
         last_name="الأول",
         email="regression-doctor-1@tia.example",
         phone="+200000110001",
@@ -149,7 +151,7 @@ def ensure_clinic(
         sid(workspace.id, "staff:regression-doctor-second"),
         workspace_id=workspace.id,
         user_id=None,
-        first_name="د. سارة",
+        first_name="سارة",
         last_name="تجريبية",
         email="regression-doctor-2@tia.example",
         phone="+200000110002",
@@ -411,7 +413,6 @@ def create_patients(db: Session, workspace: Workspace, branch: Branch) -> dict[s
             last_name=last,
             phone=phone,
             phone_normalized=phone,
-            email=f"{key}@staging-regression.tia.example",
             preferred_language="ar",
             preferred_branch_id=branch.id,
             source=source,
@@ -746,7 +747,6 @@ def create_channels(
                 external_user_id=patients[key].phone_normalized.lstrip("+"),
                 display_name=f"{patients[key].first_name} {patients[key].last_name}",
                 phone=patients[key].phone,
-                email=patients[key].email,
                 metadata_json={"seed": SEED_MARKER},
             )
         )
@@ -1155,14 +1155,14 @@ def main() -> int:
     SessionLocal = sessionmaker(bind=engine, class_=Session, autoflush=False, expire_on_commit=False)
 
     with SessionLocal() as db:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
-        if workspace is None:
+        primary_workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
+        if primary_workspace is None:
             print("Workspace slug 'tia' was not found.", file=sys.stderr)
             return 1
 
         admin_membership = db.scalar(
             select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.workspace_id == primary_workspace.id,
                 WorkspaceMember.role == "admin",
                 WorkspaceMember.is_active.is_(True),
             ).limit(1)
@@ -1174,6 +1174,52 @@ def main() -> int:
         if admin_user is None:
             print("Admin user record is missing.", file=sys.stderr)
             return 1
+
+        workspace = db.get(Workspace, REGRESSION_WORKSPACE_ID)
+        if workspace is None:
+            slug_conflict = db.scalar(
+                select(Workspace).where(Workspace.slug == REGRESSION_WORKSPACE_SLUG)
+            )
+            if slug_conflict is not None:
+                print(
+                    f"Regression workspace slug {REGRESSION_WORKSPACE_SLUG!r} exists with an unexpected id.",
+                    file=sys.stderr,
+                )
+                return 1
+            workspace = Workspace(
+                id=REGRESSION_WORKSPACE_ID,
+                name="Tia Regression",
+                slug=REGRESSION_WORKSPACE_SLUG,
+                timezone=primary_workspace.timezone,
+                is_active=True,
+            )
+            db.add(workspace)
+            db.flush()
+        else:
+            workspace.name = "Tia Regression"
+            workspace.slug = REGRESSION_WORKSPACE_SLUG
+            workspace.timezone = primary_workspace.timezone
+            workspace.is_active = True
+
+        regression_membership = db.scalar(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id == admin_user.id,
+            )
+        )
+        if regression_membership is None:
+            db.add(
+                WorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id=admin_user.id,
+                    role="admin",
+                    is_active=True,
+                )
+            )
+        else:
+            regression_membership.role = "admin"
+            regression_membership.is_active = True
+        db.flush()
 
         try:
             cleanup_seed_owned(db, workspace.id)

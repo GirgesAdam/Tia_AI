@@ -20,6 +20,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.core.config import settings
 from staging_scenarios import (
+    REGRESSION_WORKSPACE_ID,
     MOCK_AUTOMATION_TOKEN,
     MOCK_CHANNEL_TOKEN,
     MOCK_PAUSED_CHANNEL_TOKEN,
@@ -27,7 +28,7 @@ from staging_scenarios import (
 )
 
 DEFAULT_EMAIL = "adam1ezzat1@gmail.com"
-DEFAULT_WORKSPACE_ID = "cd044141-edf4-43fc-8783-a9e7e147010b"
+DEFAULT_WORKSPACE_ID = str(REGRESSION_WORKSPACE_ID)
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_FRONTEND_URL = "http://127.0.0.1:3000"
 

@@ -1,6 +1,8 @@
 from datetime import datetime
 from uuid import UUID
+
 from pydantic import BaseModel
+
 
 class DashboardAppointmentRead(BaseModel):
     id: UUID
@@ -14,6 +16,7 @@ class DashboardAppointmentRead(BaseModel):
     end_at: datetime
     price_minor: int
     currency: str
+
 
 class DashboardSummaryRead(BaseModel):
     active_patients: int

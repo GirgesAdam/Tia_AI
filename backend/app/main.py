@@ -9,7 +9,6 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.database.session import engine
 
-
 configure_logging()
 
 

@@ -33,20 +33,15 @@ ConversationChannel = Literal[
     "other",
 ]
 ConversationStatus = Literal["open", "pending", "closed"]
+ConversationOwnerType = Literal["ai", "human"]
 MessageSenderType = Literal["patient", "ai", "staff", "system"]
 MessageDirection = Literal["inbound", "outbound", "internal"]
-MessageDeliveryStatus = Literal["received", "queued", "sent", "delivered", "read", "failed"]
-
-
-def normalize_email(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    if not normalized:
-        return None
-    if len(normalized) > 320 or "@" not in normalized:
-        raise ValueError("A valid email address is required.")
-    return normalized
+MessageDeliveryStatus = Literal["received", "queued", "sent", "delivered", "read", "failed", "cancelled"]
+CRMTaskType = Literal["follow_up", "general"]
+CRMTaskStatus = Literal["pending", "in_progress", "completed", "cancelled"]
+CRMTaskPriority = Literal["low", "normal", "high", "urgent"]
+CRMTaskSource = Literal["manual", "ai", "system"]
+CRMTaskExecutionMode = Literal["human", "ai"]
 
 
 def normalize_phone(value: str | None) -> tuple[str | None, str | None]:
@@ -69,6 +64,26 @@ def normalize_phone(value: str | None) -> tuple[str | None, str | None]:
     return display, normalized
 
 
+def normalize_patient_identity_phone(value: str | None) -> tuple[str | None, str | None]:
+    """Return a stable phone identity key for clinic imports without rewriting legacy CRM storage.
+
+    Tia is currently Egypt/EGP-first, so common Egyptian mobile representations
+    (010..., +2010..., 002010..., 2010...) are treated as the same source identity.
+    Other numbers keep the normal CRM representation.
+    """
+
+    display, normalized = normalize_phone(value)
+    if not normalized:
+        return display, normalized
+    if normalized.startswith("0020") and len(normalized) == 14:
+        return display, f"+{normalized[2:]}"
+    if normalized.startswith("01") and len(normalized) == 11:
+        return display, f"+20{normalized[1:]}"
+    if normalized.startswith("20") and len(normalized) == 12:
+        return display, f"+{normalized}"
+    return display, normalized
+
+
 def normalize_required_text(value: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -80,7 +95,6 @@ class PatientCreate(BaseModel):
     first_name: str = Field(max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
-    email: str | None = Field(default=None, max_length=320)
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str = Field(default="ar", min_length=2, max_length=10)
@@ -103,13 +117,6 @@ class PatientCreate(BaseModel):
             return stripped or None
         return value
 
-    @field_validator("email", mode="before")
-    @classmethod
-    def validate_email(cls, value: object) -> object:
-        if value is None or isinstance(value, str):
-            return normalize_email(value)
-        return value
-
     @field_validator("phone", mode="before")
     @classmethod
     def validate_phone(cls, value: object) -> object:
@@ -123,7 +130,6 @@ class PatientUpdate(BaseModel):
     first_name: str | None = Field(default=None, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
-    email: str | None = Field(default=None, max_length=320)
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str | None = Field(default=None, min_length=2, max_length=10)
@@ -148,13 +154,6 @@ class PatientUpdate(BaseModel):
             return stripped or None
         return value
 
-    @field_validator("email", mode="before")
-    @classmethod
-    def validate_email(cls, value: object) -> object:
-        if value is None or isinstance(value, str):
-            return normalize_email(value)
-        return value
-
     @field_validator("phone", mode="before")
     @classmethod
     def validate_phone(cls, value: object) -> object:
@@ -170,7 +169,6 @@ class PatientRead(BaseModel):
     first_name: str
     last_name: str | None
     phone: str | None
-    email: str | None
     gender: str | None
     birth_date: date | None
     preferred_language: str
@@ -180,6 +178,7 @@ class PatientRead(BaseModel):
     status: PatientStatus
     marketing_consent: bool
     marketing_consent_at: datetime | None
+    source_created_at: datetime | None = None
     last_contact_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -232,6 +231,123 @@ class PatientNoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PatientTimelineAppointment(BaseModel):
+    id: UUID
+    status: str
+    start_at: datetime
+    end_at: datetime
+    service_name: str
+    branch_name: str
+    doctor_name: str
+    price_minor: int
+    currency: str
+    from_status: str | None = None
+    to_status: str | None = None
+    reason: str | None = None
+
+
+class PatientTimelineMessage(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    sender_type: str
+    direction: str
+    message_type: str
+    content: str | None
+    delivery_status: str
+    channel: str
+
+
+class PatientTimelineHandoff(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    event_type: str
+    status: str
+    category: str
+    priority: str
+    reason: str
+
+
+class PatientTimelineNote(BaseModel):
+    id: UUID
+    note_type: PatientNoteType
+    content: str
+    is_pinned: bool
+
+
+class PatientTimelineTask(BaseModel):
+    id: UUID
+    event_type: Literal["created", "completed"]
+    status: CRMTaskStatus
+    priority: CRMTaskPriority
+    task_type: CRMTaskType
+    title: str
+    due_at: datetime
+    assigned_user_id: UUID | None = None
+
+
+class PatientTimelinePayment(BaseModel):
+    id: UUID
+    appointment_id: UUID | None
+    transaction_type: Literal["payment", "refund"]
+    amount_minor: int
+    currency: str
+    payment_method: str
+    reference_transaction_id: UUID | None = None
+    reason: str | None = None
+
+
+PatientTimelineKind = Literal[
+    "patient_created",
+    "note",
+    "appointment",
+    "appointment_status",
+    "message",
+    "handoff",
+    "task",
+    "payment",
+]
+
+
+class PatientTimelineEvent(BaseModel):
+    id: str
+    kind: PatientTimelineKind
+    occurred_at: datetime
+    actor_type: str | None = None
+    actor_user_id: UUID | None = None
+    actor_name: str | None = None
+    appointment: PatientTimelineAppointment | None = None
+    message: PatientTimelineMessage | None = None
+    handoff: PatientTimelineHandoff | None = None
+    note: PatientTimelineNote | None = None
+    task: PatientTimelineTask | None = None
+    payment: PatientTimelinePayment | None = None
+
+
+class PatientCRMStats(BaseModel):
+    total_appointments: int
+    completed_appointments: int
+    no_show_appointments: int
+    upcoming_appointments: int
+    total_conversations: int
+    open_conversations: int
+    active_handoffs: int
+    active_leads: int
+    open_tasks: int = 0
+    overdue_tasks: int = 0
+    next_task_at: datetime | None = None
+    next_appointment_at: datetime | None = None
+    last_appointment_at: datetime | None = None
+
+
+class PatientProfileRead(BaseModel):
+    patient: PatientRead
+    stats: PatientCRMStats
+    tags: list[PatientTagRead]
+    notes: list[PatientNoteRead]
+    timeline: list[PatientTimelineEvent]
+    latest_conversation_id: UUID | None = None
+
+
 class LeadCreate(BaseModel):
     patient_id: UUID
     service_id: UUID | None = None
@@ -249,7 +365,7 @@ class LeadCreate(BaseModel):
         return value.strip().upper()
 
     @model_validator(mode="after")
-    def validate_lost_reason(self) -> "LeadCreate":
+    def validate_lost_reason(self) -> LeadCreate:
         if self.lost_reason and self.status != "lost":
             raise ValueError("lost_reason can only be set when status is lost.")
         return self
@@ -291,6 +407,80 @@ class LeadRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CRMTaskCreate(BaseModel):
+    patient_id: UUID
+    lead_id: UUID | None = None
+    conversation_id: UUID | None = None
+    assigned_user_id: UUID | None = None
+    task_type: CRMTaskType = "follow_up"
+    execution_mode: CRMTaskExecutionMode = "human"
+    priority: CRMTaskPriority = "normal"
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    due_at: datetime
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        return normalize_required_text(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+
+class CRMTaskUpdate(BaseModel):
+    assigned_user_id: UUID | None = None
+    status: CRMTaskStatus | None = None
+    priority: CRMTaskPriority | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    due_at: datetime | None = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str | None) -> str | None:
+        return normalize_required_text(value) if value is not None else None
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+
+class CRMTaskRead(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    patient_id: UUID
+    lead_id: UUID | None
+    conversation_id: UUID | None
+    assigned_user_id: UUID | None
+    created_by_user_id: UUID | None
+    completed_by_user_id: UUID | None
+    task_type: CRMTaskType
+    source: CRMTaskSource
+    execution_mode: CRMTaskExecutionMode
+    status: CRMTaskStatus
+    priority: CRMTaskPriority
+    title: str
+    description: str | None
+    due_at: datetime
+    completed_at: datetime | None
+    patient_name: str
+    assigned_user_name: str | None = None
+    assigned_user_email: str | None = None
+    is_overdue: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class ConversationCreate(BaseModel):
     patient_id: UUID
     channel: ConversationChannel
@@ -314,6 +504,9 @@ class ConversationRead(BaseModel):
     status: ConversationStatus
     external_conversation_id: str | None
     assigned_user_id: UUID | None
+    owner_type: ConversationOwnerType
+    unread_count: int
+    ownership_changed_at: datetime
     subject: str | None
     started_at: datetime
     last_message_at: datetime | None
@@ -334,7 +527,7 @@ class MessageCreate(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_message(self) -> "MessageCreate":
+    def validate_message(self) -> MessageCreate:
         if self.message_type == "text" and not (self.content and self.content.strip()):
             raise ValueError("Text messages require non-empty content.")
         if self.sender_type == "patient" and self.direction != "inbound":

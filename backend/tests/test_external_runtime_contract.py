@@ -7,45 +7,33 @@ from app.agents.capability_policy import (
 from app.agents.semantic_router import SemanticCapabilityDecision
 
 
-def test_email_is_semantic_capability_and_authorized_write() -> None:
-    assert CAPABILITY_TOOL_POLICY["email_communication"] == frozenset(
-        {"send_email_to_customer"}
-    )
-    assert WRITE_TOOL_CAPABILITY["send_email_to_customer"] == "email_communication"
+def test_customer_email_capability_is_not_exposed() -> None:
+    assert "email_communication" not in CAPABILITY_TOOL_POLICY
+    assert "send_email_to_customer" not in WRITE_TOOL_CAPABILITY
+    assert CAPABILITY_TOOL_POLICY["follow_up_request"] == frozenset({"create_follow_up_task"})
+    assert WRITE_TOOL_CAPABILITY["create_follow_up_task"] == "follow_up_request"
 
 
-def test_semantic_schema_accepts_email_communication() -> None:
-    schema = SemanticCapabilityDecision.model_json_schema()
-    raw = str(schema)
-    assert "email_communication" in raw
-    assert "communications" in raw
+def test_semantic_schema_does_not_offer_customer_email_capability() -> None:
+    raw = str(SemanticCapabilityDecision.model_json_schema())
+    assert "email_communication" not in raw
+    assert "follow_up_request" in raw
 
 
-def test_email_tool_cannot_accept_arbitrary_recipient_argument() -> None:
+def test_agent_tools_do_not_include_customer_email_delivery() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/agents/tools/clinic_tools.py"
-    ).read_text(encoding="utf-8")
-    start = source.index("def send_email_to_customer")
-    end = source.index("def escalate_to_human", start)
-    tool_source = source[start:end]
-    assert "subject: str, body: str" in tool_source
-    assert "recipient" not in tool_source.split("-> str", 1)[0]
-    assert "queue_patient_email" in tool_source
+    source = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
+    assert "send_email_to_customer" not in source
+    assert "queue_patient_email" not in source
+    assert "ctx.patient.email" not in source
 
 
-def test_outbound_email_is_durable_outbox_not_direct_gmail_api() -> None:
+def test_patient_email_outbound_service_is_retired() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/services/outbound_communications.py"
-    ).read_text(encoding="utf-8")
-    assert "MessageDispatch(" in source
-    assert 'status="queued"' in source
-    assert 'provider == "n8n_gmail"' in source
-    assert 'external_conversation_id = f"email:{patient.id}"' in source
-    assert "len(email) > 254" in source
-    assert "requests." not in source
-    assert "httpx." not in source
+    source = (backend / "app/services/outbound_communications.py").read_text(encoding="utf-8")
+    assert "queue_patient_email" not in source
+    assert "Patient.email" not in source
+    assert "patient/customer email addresses" in source
 
 
 def test_real_runtime_provisioners_do_not_store_provider_secrets() -> None:
@@ -60,9 +48,7 @@ def test_real_runtime_provisioners_do_not_store_provider_secrets() -> None:
 
 def test_readiness_ignores_staging_mock_channels() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/services/operational_readiness.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     # Assert behavior-bearing predicates, not the exact formatting of a
     # human-readable message split across adjacent Python string literals.

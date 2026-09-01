@@ -59,9 +59,7 @@ def test_medical_risk_overrides_simultaneous_booking_write() -> None:
 
 
 def test_write_tool_requires_semantic_capability() -> None:
-    policy = resolve_capability_policy(
-        decision(capabilities=["availability_discovery"])
-    )
+    policy = resolve_capability_policy(decision(capabilities=["availability_discovery"]))
     with pytest.raises(ToolAuthorizationError):
         authorize_tool_execution(policy, "book_appointment")
 

@@ -14,6 +14,7 @@ class DefaultAutomationRule:
     template_name: str
     template_language: str
     max_lateness_minutes: int
+    enabled_by_default: bool = False
 
 
 DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
@@ -26,26 +27,18 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         template_name="tia_booking_confirmation_ar",
         template_language="ar",
         max_lateness_minutes=60,
+        enabled_by_default=False,
     ),
     DefaultAutomationRule(
-        key="appointment_reminder_24h",
-        name="Appointment reminder - 24 hours",
+        key="appointment_reminder_6h",
+        name="Appointment reminder - 6 hours",
         trigger_kind="before_appointment",
-        offset_minutes=-1440,
+        offset_minutes=-360,
         channel="whatsapp",
-        template_name="tia_appointment_reminder_24h_ar",
+        template_name="tia_appointment_reminder_6h_ar",
         template_language="ar",
         max_lateness_minutes=30,
-    ),
-    DefaultAutomationRule(
-        key="appointment_reminder_2h",
-        name="Appointment reminder - 2 hours",
-        trigger_kind="before_appointment",
-        offset_minutes=-120,
-        channel="whatsapp",
-        template_name="tia_appointment_reminder_2h_ar",
-        template_language="ar",
-        max_lateness_minutes=20,
+        enabled_by_default=True,
     ),
     DefaultAutomationRule(
         key="post_visit_followup",
@@ -56,6 +49,7 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         template_name="tia_post_visit_followup_ar",
         template_language="ar",
         max_lateness_minutes=1440,
+        enabled_by_default=True,
     ),
     DefaultAutomationRule(
         key="no_show_followup",
@@ -66,6 +60,7 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         template_name="tia_no_show_followup_ar",
         template_language="ar",
         max_lateness_minutes=720,
+        enabled_by_default=False,
     ),
 )
 

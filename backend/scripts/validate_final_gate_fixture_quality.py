@@ -102,11 +102,6 @@ def validate(workspace_id: UUID) -> list[str]:
                 patient.marketing_consent is False,
                 f"Test patient {patient.id} must never have marketing consent.",
             )
-            if patient.email:
-                _require(
-                    patient.email.endswith(".example"),
-                    f"Test patient email is not on a reserved .example domain: {patient.email}",
-                )
 
         secondary_branch = db.get(Branch, ids["secondary_branch"])
         secondary_service = db.get(Service, ids["secondary_service"])
@@ -168,11 +163,6 @@ def validate(workspace_id: UUID) -> list[str]:
                 _safe_phone(patient.phone),
                 f"Full staging patient {patient.id} has a real-looking mobile number.",
             )
-            if patient.email:
-                _require(
-                    patient.email.endswith(".example"),
-                    f"Full staging patient {patient.id} email is not .example.",
-                )
 
         notes.append(f"Validated Final Gate patients: {len(patients)}")
         notes.append(f"Validated full-staging marked patients: {len(regression_patients)}")

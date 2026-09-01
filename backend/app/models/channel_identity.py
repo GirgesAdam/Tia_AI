@@ -47,7 +47,6 @@ class ChannelIdentity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(
         "metadata",
         JSONB,

@@ -3,15 +3,17 @@ from pathlib import Path
 
 def test_normalizer_is_contact_only_and_staging_guarded() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "scripts" / "normalize_staging_fixture_contacts.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "scripts" / "normalize_staging_fixture_contacts.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "settings.is_production" in source
     assert "+200000" in source
     assert ".example" in source
     assert "row.phone =" in source
-    assert "row.email =" in source
+    assert "row.email =" in source  # branch/staff contacts only
+    patient_block = source[source.index("for index, key in enumerate(PATIENT_KEYS"):source.index("db.commit()") ]
+    assert "row.email" not in patient_block
 
     forbidden_business_mutations = (
         "Appointment(",
@@ -28,9 +30,7 @@ def test_normalizer_is_contact_only_and_staging_guarded() -> None:
 
 def test_focused_gate_normalizes_legacy_contacts_before_quality_validation() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "scripts" / "run_frontend_e2e_gate.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "scripts" / "run_frontend_e2e_gate.py").read_text(encoding="utf-8")
 
     normalizer = "normalize_staging_fixture_contacts.py"
     validator = "validate_final_gate_fixture_quality.py"

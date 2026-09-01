@@ -7,8 +7,23 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AutomationWorkerStatus = Literal["active", "paused", "revoked"]
-AutomationJobStatus = Literal["queued", "processing", "dispatched", "skipped", "failed", "cancelled"]
+AutomationJobStatus = Literal[
+    "queued", "processing", "dispatched", "skipped", "failed", "cancelled"
+]
 AutomationChannel = Literal["auto", "whatsapp", "email", "sms"]
+
+
+class AutomationTemplateVariant(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    language_code: str = Field(default="ar", min_length=1, max_length=20)
+
+    @field_validator("name", "language_code")
+    @classmethod
+    def clean_variant_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Value cannot be empty.")
+        return value
 
 
 class AutomationRuleRead(BaseModel):
@@ -32,6 +47,7 @@ class AutomationRuleRead(BaseModel):
 
 class AutomationRuleUpdate(BaseModel):
     enabled: bool | None = None
+    template_variants: list[AutomationTemplateVariant] | None = Field(default=None, max_length=20)
     offset_minutes: int | None = Field(default=None, ge=-10080, le=10080)
     channel: AutomationChannel | None = None
     template_name: str | None = Field(default=None, min_length=1, max_length=160)
@@ -95,9 +111,11 @@ class AutomationJobRead(BaseModel):
 
     id: UUID
     workspace_id: UUID
-    rule_id: UUID
-    appointment_id: UUID
+    rule_id: UUID | None
+    appointment_id: UUID | None
+    crm_task_id: UUID | None
     patient_id: UUID
+    job_kind: Literal["appointment_rule", "crm_follow_up"]
     status: AutomationJobStatus
     scheduled_for: datetime
     attempts: int
@@ -110,7 +128,33 @@ class AutomationJobRead(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    dispatch_status: str | None = None
+    dispatch_last_error: str | None = None
+    attention_reason: Literal["execution_failed", "delivery_failed", "stuck_processing"] | None = None
 
+
+
+
+class AutomationOperationsOverview(BaseModel):
+    now: datetime
+    enabled_rules: int
+    queued_jobs: int
+    due_jobs: int
+    processing_jobs: int
+    failed_jobs: int
+    delivery_failed_jobs: int
+    attention_count: int
+    next_job_at: datetime | None
+    worker_state: Literal["healthy", "stale", "missing", "not_required"]
+    worker_last_seen_at: datetime | None
+    worker_fresh_within_minutes: int
+
+
+class AutomationJobActionResponse(BaseModel):
+    job_id: UUID
+    job_status: AutomationJobStatus
+    dispatch_status: str | None = None
+    action: Literal["retry", "cancel"]
 
 class AutomationTickRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
@@ -119,8 +163,10 @@ class AutomationTickRequest(BaseModel):
 
 class AutomationClaimedJob(BaseModel):
     job_id: UUID
-    rule_key: str
-    appointment_id: UUID
+    job_kind: Literal["appointment_rule", "crm_follow_up"]
+    rule_key: str | None = None
+    appointment_id: UUID | None = None
+    crm_task_id: UUID | None = None
     patient_id: UUID
     scheduled_for: datetime
     attempt: int

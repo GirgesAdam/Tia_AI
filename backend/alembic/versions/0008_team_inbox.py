@@ -5,17 +5,18 @@ Revises: 0007_agent_foundation
 Create Date: 2026-08-13
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 from uuid import uuid4
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0008_team_inbox"
-down_revision: Union[str, Sequence[str], None] = "0007_agent_foundation"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0007_agent_foundation"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -105,7 +106,9 @@ def upgrade() -> None:
     op.create_index("ix_handoff_requests_workspace_id", "handoff_requests", ["workspace_id"])
     op.create_index("ix_handoff_requests_conversation_id", "handoff_requests", ["conversation_id"])
     op.create_index("ix_handoff_requests_patient_id", "handoff_requests", ["patient_id"])
-    op.create_index("ix_handoff_requests_assigned_user_id", "handoff_requests", ["assigned_user_id"])
+    op.create_index(
+        "ix_handoff_requests_assigned_user_id", "handoff_requests", ["assigned_user_id"]
+    )
     op.create_index(
         "uq_handoff_requests_active_conversation",
         "handoff_requests",
@@ -181,7 +184,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_handoff_events"),
     )
     op.create_index("ix_handoff_events_workspace_id", "handoff_events", ["workspace_id"])
-    op.create_index("ix_handoff_events_handoff_request_id", "handoff_events", ["handoff_request_id"])
+    op.create_index(
+        "ix_handoff_events_handoff_request_id", "handoff_events", ["handoff_request_id"]
+    )
     op.create_index("ix_handoff_events_conversation_id", "handoff_events", ["conversation_id"])
     op.create_index("ix_handoff_events_actor_user_id", "handoff_events", ["actor_user_id"])
     op.create_index(

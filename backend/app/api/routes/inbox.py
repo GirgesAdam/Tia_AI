@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import (
@@ -21,25 +21,34 @@ from app.models.patient import Patient
 from app.models.user import User
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.inbox import (
+    ConversationOwnerType,
+    ConversationReadReceipt,
+    ConversationStatus,
     HandoffAssignRequest,
     HandoffCategory,
     HandoffPriority,
     HandoffQueueItem,
     HandoffRead,
     HandoffStatus,
+    InboxAssigneeRead,
+    InboxConversationListItem,
     InboxConversationRead,
     InboxMessageRead,
     InboxPatientRead,
     ResolveHandoffRequest,
     StaffReplyRequest,
     StaffReplyResponse,
+    TakeoverRequest,
 )
 from app.services.channels import queue_message_dispatch
+from app.services.conversation_ownership import mark_conversation_read
+from app.services.handoff_intelligence import build_handoff_context
 from app.services.handoffs import (
     HandoffStateError,
     add_staff_reply,
     assign_handoff,
     claim_handoff,
+    create_handoff,
     ensure_active_workspace_user,
     get_active_handoff,
     resolve_handoff,
@@ -74,7 +83,7 @@ def _get_handoff(
         HandoffRequest.id == handoff_id,
     )
     if for_update:
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     handoff = db.scalar(stmt)
     if handoff is None:
         raise _not_found("Handoff")
@@ -93,11 +102,43 @@ def _get_conversation(
         Conversation.id == conversation_id,
     )
     if for_update:
-        stmt = stmt.with_for_update()
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     conversation = db.scalar(stmt)
     if conversation is None:
         raise _not_found("Conversation")
     return conversation
+
+
+
+
+def _lock_handoff_and_conversation(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    handoff_id: UUID,
+) -> tuple[HandoffRequest, Conversation]:
+    # Read the foreign key first without a lock, then take ownership-sensitive
+    # locks in the same order used by escalation and staff reply: conversation,
+    # then handoff. This avoids the handoff->conversation / conversation->handoff
+    # deadlock pattern under concurrent claim/escalation.
+    handoff_ref = _get_handoff(
+        db,
+        workspace_id=workspace_id,
+        handoff_id=handoff_id,
+    )
+    conversation = _get_conversation(
+        db,
+        workspace_id=workspace_id,
+        conversation_id=handoff_ref.conversation_id,
+        for_update=True,
+    )
+    handoff = _get_handoff(
+        db,
+        workspace_id=workspace_id,
+        handoff_id=handoff_id,
+        for_update=True,
+    )
+    return handoff, conversation
 
 
 def _queue_item(
@@ -131,9 +172,129 @@ def _queue_item(
         patient_phone=patient.phone,
         channel=conversation.channel,
         conversation_last_message_at=conversation.last_message_at,
+        conversation_owner_type=conversation.owner_type,
+        conversation_unread_count=conversation.unread_count,
         assigned_user_name=assigned_user.full_name if assigned_user else None,
         assigned_user_email=assigned_user.email if assigned_user else None,
     )
+
+
+@router.get("/conversations", response_model=list[InboxConversationListItem])
+def list_inbox_conversations(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    owner_type: ConversationOwnerType | None = None,
+    conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
+    assigned_to_me: bool = False,
+    unread_only: bool = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[InboxConversationListItem]:
+    stmt = (
+        select(Conversation, Patient, User)
+        .join(
+            Patient,
+            (Patient.workspace_id == Conversation.workspace_id)
+            & (Patient.id == Conversation.patient_id),
+        )
+        .outerjoin(User, User.id == Conversation.assigned_user_id)
+        .where(Conversation.workspace_id == access.workspace.id)
+    )
+    if owner_type:
+        stmt = stmt.where(Conversation.owner_type == owner_type)
+    if conversation_status:
+        stmt = stmt.where(Conversation.status == conversation_status)
+    if assigned_to_me:
+        stmt = stmt.where(Conversation.assigned_user_id == access.user.id)
+    if unread_only:
+        stmt = stmt.where(Conversation.unread_count > 0)
+
+    stmt = (
+        stmt.order_by(
+            Conversation.last_message_at.desc().nullslast(),
+            Conversation.started_at.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = list(db.execute(stmt).all())
+    if not rows:
+        return []
+
+    conversation_ids = [conversation.id for conversation, _, _ in rows]
+    active_handoffs = {
+        handoff.conversation_id: handoff
+        for handoff in db.scalars(
+            select(HandoffRequest).where(
+                HandoffRequest.workspace_id == access.workspace.id,
+                HandoffRequest.conversation_id.in_(conversation_ids),
+                HandoffRequest.status.in_(("pending", "claimed")),
+            )
+        )
+    }
+
+    ranked_messages = (
+        select(
+            Message.id.label("message_id"),
+            func.row_number()
+            .over(
+                partition_by=Message.conversation_id,
+                order_by=(Message.created_at.desc(), Message.id.desc()),
+            )
+            .label("row_number"),
+        )
+        .where(
+            Message.workspace_id == access.workspace.id,
+            Message.conversation_id.in_(conversation_ids),
+        )
+        .subquery()
+    )
+    latest_messages = {
+        message.conversation_id: message
+        for message in db.scalars(
+            select(Message)
+            .join(ranked_messages, Message.id == ranked_messages.c.message_id)
+            .where(ranked_messages.c.row_number == 1)
+        )
+    }
+
+    items: list[InboxConversationListItem] = []
+    for conversation, patient, assigned_user in rows:
+        handoff = active_handoffs.get(conversation.id)
+        message = latest_messages.get(conversation.id)
+        items.append(
+            InboxConversationListItem(
+                id=conversation.id,
+                workspace_id=conversation.workspace_id,
+                patient_id=conversation.patient_id,
+                channel=conversation.channel,
+                status=conversation.status,
+                owner_type=conversation.owner_type,
+                unread_count=conversation.unread_count,
+                assigned_user_id=conversation.assigned_user_id,
+                assigned_user=(
+                    InboxAssigneeRead(
+                        id=assigned_user.id,
+                        full_name=assigned_user.full_name,
+                        email=assigned_user.email,
+                    )
+                    if assigned_user
+                    else None
+                ),
+                subject=conversation.subject,
+                started_at=conversation.started_at,
+                last_message_at=conversation.last_message_at,
+                patient=InboxPatientRead(
+                    id=patient.id,
+                    first_name=patient.first_name,
+                    last_name=patient.last_name,
+                    phone=patient.phone,
+                ),
+                active_handoff=HandoffRead.model_validate(handoff) if handoff else None,
+                last_message=InboxMessageRead.model_validate(message) if message else None,
+            )
+        )
+    return items
 
 
 @router.get("/handoffs", response_model=list[HandoffQueueItem])
@@ -153,9 +314,7 @@ def list_handoffs(
         (HandoffRequest.priority == "normal", 2),
         else_=3,
     )
-    stmt = select(HandoffRequest).where(
-        HandoffRequest.workspace_id == access.workspace.id
-    )
+    stmt = select(HandoffRequest).where(HandoffRequest.workspace_id == access.workspace.id)
     if handoff_status:
         stmt = stmt.where(HandoffRequest.status == handoff_status)
     else:
@@ -167,11 +326,7 @@ def list_handoffs(
     if assigned_to_me:
         stmt = stmt.where(HandoffRequest.assigned_user_id == access.user.id)
 
-    stmt = (
-        stmt.order_by(priority_order, HandoffRequest.created_at)
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = stmt.order_by(priority_order, HandoffRequest.created_at).limit(limit).offset(offset)
     return [_queue_item(db, item) for item in db.scalars(stmt)]
 
 
@@ -198,6 +353,11 @@ def get_inbox_conversation(
     if patient is None:
         raise _not_found("Patient")
 
+    assigned_user = (
+        db.scalar(select(User).where(User.id == conversation.assigned_user_id))
+        if conversation.assigned_user_id
+        else None
+    )
     handoff = get_active_handoff(
         db,
         workspace_id=access.workspace.id,
@@ -245,6 +405,9 @@ def get_inbox_conversation(
         channel_connection_id=conversation.channel_connection_id,
         status=conversation.status,
         assigned_user_id=conversation.assigned_user_id,
+        owner_type=conversation.owner_type,
+        unread_count=conversation.unread_count,
+        ownership_changed_at=conversation.ownership_changed_at,
         subject=conversation.subject,
         started_at=conversation.started_at,
         last_message_at=conversation.last_message_at,
@@ -254,12 +417,43 @@ def get_inbox_conversation(
             first_name=patient.first_name,
             last_name=patient.last_name,
             phone=patient.phone,
-            email=patient.email,
+        ),
+        assigned_user=(
+            InboxAssigneeRead(
+                id=assigned_user.id,
+                full_name=assigned_user.full_name,
+                email=assigned_user.email,
+            )
+            if assigned_user
+            else None
         ),
         active_handoff=HandoffRead.model_validate(handoff) if handoff else None,
         handoff_history=[HandoffRead.model_validate(item) for item in handoff_history],
         messages=[InboxMessageRead.model_validate(message) for message in messages],
         handoff_events=events,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/read",
+    response_model=ConversationReadReceipt,
+)
+def mark_inbox_conversation_read(
+    conversation_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ConversationReadReceipt:
+    conversation = _get_conversation(
+        db,
+        workspace_id=access.workspace.id,
+        conversation_id=conversation_id,
+        for_update=True,
+    )
+    mark_conversation_read(conversation)
+    db.commit()
+    return ConversationReadReceipt(
+        conversation_id=conversation.id,
+        unread_count=conversation.unread_count,
     )
 
 
@@ -272,17 +466,10 @@ def claim_inbox_handoff(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
-    handoff = _get_handoff(
+    handoff, conversation = _lock_handoff_and_conversation(
         db,
         workspace_id=access.workspace.id,
         handoff_id=handoff_id,
-        for_update=True,
-    )
-    conversation = _get_conversation(
-        db,
-        workspace_id=access.workspace.id,
-        conversation_id=handoff.conversation_id,
-        for_update=True,
     )
     try:
         return claim_handoff(
@@ -306,17 +493,10 @@ def assign_inbox_handoff(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
-    handoff = _get_handoff(
+    handoff, conversation = _lock_handoff_and_conversation(
         db,
         workspace_id=access.workspace.id,
         handoff_id=handoff_id,
-        for_update=True,
-    )
-    conversation = _get_conversation(
-        db,
-        workspace_id=access.workspace.id,
-        conversation_id=handoff.conversation_id,
-        for_update=True,
     )
     try:
         target_user = ensure_active_workspace_user(
@@ -330,6 +510,58 @@ def assign_inbox_handoff(
             conversation=conversation,
             target_user=target_user,
             actor_user=access.user,
+        )
+    except HandoffStateError as exc:
+        db.rollback()
+        raise _conflict(exc) from exc
+
+
+@router.post(
+    "/conversations/{conversation_id}/takeover",
+    response_model=HandoffRead,
+)
+def take_over_conversation(
+    conversation_id: UUID,
+    payload: TakeoverRequest,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> HandoffRequest:
+    conversation = _get_conversation(
+        db,
+        workspace_id=access.workspace.id,
+        conversation_id=conversation_id,
+    )
+    patient = db.scalar(
+        select(Patient).where(
+            Patient.workspace_id == access.workspace.id,
+            Patient.id == conversation.patient_id,
+        )
+    )
+    if patient is None:
+        raise _not_found("Patient")
+
+    try:
+        handoff = create_handoff(
+            db,
+            workspace_id=access.workspace.id,
+            conversation=conversation,
+            patient=patient,
+            reason=payload.reason or "Manual staff takeover.",
+            category=payload.category,
+            priority=payload.priority,
+            source="staff",
+            created_by_user_id=access.user.id,
+            handoff_context=build_handoff_context(
+                trigger="manual_takeover",
+                semantic_reason=payload.reason or "Manual staff takeover.",
+            ),
+            commit=False,
+        )
+        return claim_handoff(
+            db,
+            handoff=handoff,
+            conversation=conversation,
+            user=access.user,
         )
     except HandoffStateError as exc:
         db.rollback()
@@ -380,6 +612,7 @@ def send_staff_reply(
             conversation=conversation,
             user=access.user,
             content=payload.content,
+            commit=False,
         )
     except HandoffStateError as exc:
         db.rollback()
@@ -389,7 +622,14 @@ def send_staff_reply(
         db,
         message=message,
         conversation=conversation,
+        commit=False,
     )
+    # Persist the staff message, handoff audit event, and provider outbox row as
+    # one unit. A crash can no longer leave a visible reply with no dispatch.
+    db.commit()
+    db.refresh(message)
+    if dispatch is not None:
+        db.refresh(dispatch)
 
     return StaffReplyResponse(
         message=InboxMessageRead.model_validate(message),
@@ -408,17 +648,10 @@ def resolve_inbox_handoff(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
-    handoff = _get_handoff(
+    handoff, conversation = _lock_handoff_and_conversation(
         db,
         workspace_id=access.workspace.id,
         handoff_id=handoff_id,
-        for_update=True,
-    )
-    conversation = _get_conversation(
-        db,
-        workspace_id=access.workspace.id,
-        conversation_id=handoff.conversation_id,
-        for_update=True,
     )
 
     is_admin = access.membership.role == WORKSPACE_ROLE_ADMIN

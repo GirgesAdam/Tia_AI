@@ -5,15 +5,16 @@ Revises: 0001_foundation
 Create Date: 2026-08-12
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0002_clinic_core"
-down_revision: Union[str, Sequence[str], None] = "0001_foundation"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0001_foundation"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,8 +33,12 @@ def upgrade() -> None:
         sa.Column("country_code", sa.String(length=2), server_default="EG", nullable=False),
         sa.Column("timezone", sa.String(length=64), nullable=True),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("workspace_id", "id", name="uq_branches_workspace_id_id"),
@@ -52,8 +57,12 @@ def upgrade() -> None:
         sa.Column("phone", sa.String(length=40), nullable=True),
         sa.Column("job_title", sa.String(length=120), nullable=True),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -76,14 +85,27 @@ def upgrade() -> None:
         sa.Column("buffer_after_minutes", sa.Integer(), server_default="0", nullable=False),
         sa.Column("price_minor", sa.Integer(), server_default="0", nullable=False),
         sa.Column("currency", sa.String(length=3), server_default="EGP", nullable=False),
-        sa.Column("requires_medical_review", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column(
+            "requires_medical_review", sa.Boolean(), server_default=sa.false(), nullable=False
+        ),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("duration_minutes > 0 AND duration_minutes <= 1440", name="ck_services_service_duration_valid"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "duration_minutes > 0 AND duration_minutes <= 1440",
+            name="ck_services_service_duration_valid",
+        ),
         sa.CheckConstraint("price_minor >= 0", name="ck_services_service_price_non_negative"),
-        sa.CheckConstraint("buffer_before_minutes >= 0", name="ck_services_service_buffer_before_non_negative"),
-        sa.CheckConstraint("buffer_after_minutes >= 0", name="ck_services_service_buffer_after_non_negative"),
+        sa.CheckConstraint(
+            "buffer_before_minutes >= 0", name="ck_services_service_buffer_before_non_negative"
+        ),
+        sa.CheckConstraint(
+            "buffer_after_minutes >= 0", name="ck_services_service_buffer_after_non_negative"
+        ),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("workspace_id", "id", name="uq_services_workspace_id_id"),
@@ -101,11 +123,17 @@ def upgrade() -> None:
         sa.Column("bio", sa.String(length=2000), nullable=True),
         sa.Column("booking_enabled", sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(
-            ["workspace_id", "staff_id"], ["staff.workspace_id", "staff.id"],
-            ondelete="CASCADE", name="fk_doctors_workspace_staff"
+            ["workspace_id", "staff_id"],
+            ["staff.workspace_id", "staff.id"],
+            ondelete="CASCADE",
+            name="fk_doctors_workspace_staff",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("workspace_id", "id", name="uq_doctors_workspace_id_id"),
@@ -122,18 +150,28 @@ def upgrade() -> None:
         sa.Column("branch_id", sa.Uuid(), nullable=False),
         sa.Column("is_primary", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["workspace_id", "doctor_id"], ["doctors.workspace_id", "doctors.id"],
-            ondelete="CASCADE", name="fk_doctor_branches_doctor"
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.ForeignKeyConstraint(
-            ["workspace_id", "branch_id"], ["branches.workspace_id", "branches.id"],
-            ondelete="CASCADE", name="fk_doctor_branches_branch"
+            ["workspace_id", "doctor_id"],
+            ["doctors.workspace_id", "doctors.id"],
+            ondelete="CASCADE",
+            name="fk_doctor_branches_doctor",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "branch_id"],
+            ["branches.workspace_id", "branches.id"],
+            ondelete="CASCADE",
+            name="fk_doctor_branches_branch",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("workspace_id", "doctor_id", "branch_id", name="uq_doctor_branches_assignment"),
+        sa.UniqueConstraint(
+            "workspace_id", "doctor_id", "branch_id", name="uq_doctor_branches_assignment"
+        ),
     )
     op.create_index("ix_doctor_branches_workspace_id", "doctor_branches", ["workspace_id"])
     op.create_index("ix_doctor_branches_doctor_id", "doctor_branches", ["doctor_id"])
@@ -148,20 +186,36 @@ def upgrade() -> None:
         sa.Column("custom_duration_minutes", sa.Integer(), nullable=True),
         sa.Column("custom_price_minor", sa.Integer(), nullable=True),
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("custom_duration_minutes IS NULL OR custom_duration_minutes > 0", name="ck_doctor_services_doctor_service_duration_valid"),
-        sa.CheckConstraint("custom_price_minor IS NULL OR custom_price_minor >= 0", name="ck_doctor_services_doctor_service_price_non_negative"),
-        sa.ForeignKeyConstraint(
-            ["workspace_id", "doctor_id"], ["doctors.workspace_id", "doctors.id"],
-            ondelete="CASCADE", name="fk_doctor_services_doctor"
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "custom_duration_minutes IS NULL OR custom_duration_minutes > 0",
+            name="ck_doctor_services_doctor_service_duration_valid",
+        ),
+        sa.CheckConstraint(
+            "custom_price_minor IS NULL OR custom_price_minor >= 0",
+            name="ck_doctor_services_doctor_service_price_non_negative",
         ),
         sa.ForeignKeyConstraint(
-            ["workspace_id", "service_id"], ["services.workspace_id", "services.id"],
-            ondelete="CASCADE", name="fk_doctor_services_service"
+            ["workspace_id", "doctor_id"],
+            ["doctors.workspace_id", "doctors.id"],
+            ondelete="CASCADE",
+            name="fk_doctor_services_doctor",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workspace_id", "service_id"],
+            ["services.workspace_id", "services.id"],
+            ondelete="CASCADE",
+            name="fk_doctor_services_service",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("workspace_id", "doctor_id", "service_id", name="uq_doctor_services_assignment"),
+        sa.UniqueConstraint(
+            "workspace_id", "doctor_id", "service_id", name="uq_doctor_services_assignment"
+        ),
     )
     op.create_index("ix_doctor_services_workspace_id", "doctor_services", ["workspace_id"])
     op.create_index("ix_doctor_services_doctor_id", "doctor_services", ["doctor_id"])
@@ -175,18 +229,39 @@ def upgrade() -> None:
         sa.Column("weekday", sa.Integer(), nullable=False),
         sa.Column("start_time", sa.Time(), nullable=False),
         sa.Column("end_time", sa.Time(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_branch_working_hours_branch_working_hours_weekday_valid"),
-        sa.CheckConstraint("end_time > start_time", name="ck_branch_working_hours_branch_working_hours_interval_valid"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "weekday >= 0 AND weekday <= 6",
+            name="ck_branch_working_hours_branch_working_hours_weekday_valid",
+        ),
+        sa.CheckConstraint(
+            "end_time > start_time",
+            name="ck_branch_working_hours_branch_working_hours_interval_valid",
+        ),
         sa.ForeignKeyConstraint(
-            ["workspace_id", "branch_id"], ["branches.workspace_id", "branches.id"],
-            ondelete="CASCADE", name="fk_branch_working_hours_branch"
+            ["workspace_id", "branch_id"],
+            ["branches.workspace_id", "branches.id"],
+            ondelete="CASCADE",
+            name="fk_branch_working_hours_branch",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("workspace_id", "branch_id", "weekday", "start_time", "end_time", name="uq_branch_working_hours_interval"),
+        sa.UniqueConstraint(
+            "workspace_id",
+            "branch_id",
+            "weekday",
+            "start_time",
+            "end_time",
+            name="uq_branch_working_hours_interval",
+        ),
     )
-    op.create_index("ix_branch_working_hours_workspace_id", "branch_working_hours", ["workspace_id"])
+    op.create_index(
+        "ix_branch_working_hours_workspace_id", "branch_working_hours", ["workspace_id"]
+    )
     op.create_index("ix_branch_working_hours_branch_id", "branch_working_hours", ["branch_id"])
 
     op.create_table(
@@ -198,19 +273,44 @@ def upgrade() -> None:
         sa.Column("weekday", sa.Integer(), nullable=False),
         sa.Column("start_time", sa.Time(), nullable=False),
         sa.Column("end_time", sa.Time(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_doctor_working_hours_doctor_working_hours_weekday_valid"),
-        sa.CheckConstraint("end_time > start_time", name="ck_doctor_working_hours_doctor_working_hours_interval_valid"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "weekday >= 0 AND weekday <= 6",
+            name="ck_doctor_working_hours_doctor_working_hours_weekday_valid",
+        ),
+        sa.CheckConstraint(
+            "end_time > start_time",
+            name="ck_doctor_working_hours_doctor_working_hours_interval_valid",
+        ),
         sa.ForeignKeyConstraint(
             ["workspace_id", "doctor_id", "branch_id"],
-            ["doctor_branches.workspace_id", "doctor_branches.doctor_id", "doctor_branches.branch_id"],
-            ondelete="CASCADE", name="fk_doctor_working_hours_assignment"
+            [
+                "doctor_branches.workspace_id",
+                "doctor_branches.doctor_id",
+                "doctor_branches.branch_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_doctor_working_hours_assignment",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("workspace_id", "doctor_id", "branch_id", "weekday", "start_time", "end_time", name="uq_doctor_working_hours_interval"),
+        sa.UniqueConstraint(
+            "workspace_id",
+            "doctor_id",
+            "branch_id",
+            "weekday",
+            "start_time",
+            "end_time",
+            name="uq_doctor_working_hours_interval",
+        ),
     )
-    op.create_index("ix_doctor_working_hours_workspace_id", "doctor_working_hours", ["workspace_id"])
+    op.create_index(
+        "ix_doctor_working_hours_workspace_id", "doctor_working_hours", ["workspace_id"]
+    )
     op.create_index("ix_doctor_working_hours_doctor_id", "doctor_working_hours", ["doctor_id"])
     op.create_index("ix_doctor_working_hours_branch_id", "doctor_working_hours", ["branch_id"])
 
@@ -221,20 +321,40 @@ def upgrade() -> None:
         sa.Column("slot_interval_minutes", sa.Integer(), server_default="15", nullable=False),
         sa.Column("minimum_notice_minutes", sa.Integer(), server_default="60", nullable=False),
         sa.Column("booking_horizon_days", sa.Integer(), server_default="90", nullable=False),
-        sa.Column("cancellation_notice_minutes", sa.Integer(), server_default="720", nullable=False),
+        sa.Column(
+            "cancellation_notice_minutes", sa.Integer(), server_default="720", nullable=False
+        ),
         sa.Column("allow_same_day_booking", sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.Column("require_confirmation", sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.Column("default_currency", sa.String(length=3), server_default="EGP", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("slot_interval_minutes > 0 AND slot_interval_minutes <= 240", name="ck_booking_settings_booking_slot_interval_valid"),
-        sa.CheckConstraint("minimum_notice_minutes >= 0", name="ck_booking_settings_booking_minimum_notice_non_negative"),
-        sa.CheckConstraint("booking_horizon_days > 0 AND booking_horizon_days <= 730", name="ck_booking_settings_booking_horizon_valid"),
-        sa.CheckConstraint("cancellation_notice_minutes >= 0", name="ck_booking_settings_booking_cancellation_notice_non_negative"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "slot_interval_minutes > 0 AND slot_interval_minutes <= 240",
+            name="ck_booking_settings_booking_slot_interval_valid",
+        ),
+        sa.CheckConstraint(
+            "minimum_notice_minutes >= 0",
+            name="ck_booking_settings_booking_minimum_notice_non_negative",
+        ),
+        sa.CheckConstraint(
+            "booking_horizon_days > 0 AND booking_horizon_days <= 730",
+            name="ck_booking_settings_booking_horizon_valid",
+        ),
+        sa.CheckConstraint(
+            "cancellation_notice_minutes >= 0",
+            name="ck_booking_settings_booking_cancellation_notice_non_negative",
+        ),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_booking_settings_workspace_id", "booking_settings", ["workspace_id"], unique=True)
+    op.create_index(
+        "ix_booking_settings_workspace_id", "booking_settings", ["workspace_id"], unique=True
+    )
 
 
 def downgrade() -> None:

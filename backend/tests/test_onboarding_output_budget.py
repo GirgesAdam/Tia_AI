@@ -12,9 +12,7 @@ def test_onboarding_has_its_own_larger_output_budget() -> None:
 
 
 def test_all_provider_top_level_fields_remain_required() -> None:
-    schema = canonicalize_gemini_json_schema(
-        OnboardingProviderDecision.model_json_schema()
-    )
+    schema = canonicalize_gemini_json_schema(OnboardingProviderDecision.model_json_schema())
 
     properties = set(schema["properties"])
     required = set(schema["required"])

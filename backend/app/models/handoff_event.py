@@ -10,6 +10,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 HANDOFF_EVENT_TYPES = (
     "created",
+    "escalated",
     "claimed",
     "assigned",
     "staff_replied",
@@ -23,7 +24,7 @@ class HandoffEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "handoff_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('created', 'claimed', 'assigned', 'staff_replied', "
+            "event_type IN ('created', 'escalated', 'claimed', 'assigned', 'staff_replied', "
             "'resolved', 'reopened')",
             name="handoff_event_type_valid",
         ),

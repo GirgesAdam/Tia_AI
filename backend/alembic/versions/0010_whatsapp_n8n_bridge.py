@@ -5,16 +5,17 @@ Revises: 0009_channel_layer
 Create Date: 2026-08-13
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0010_whatsapp_n8n_bridge"
-down_revision: Union[str, Sequence[str], None] = "0009_channel_layer"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0009_channel_layer"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -103,7 +104,9 @@ def upgrade() -> None:
     )
 
     op.execute(sa.text('ALTER TABLE public."channel_delivery_events" ENABLE ROW LEVEL SECURITY'))
-    op.execute(sa.text('REVOKE ALL ON TABLE public."channel_delivery_events" FROM anon, authenticated'))
+    op.execute(
+        sa.text('REVOKE ALL ON TABLE public."channel_delivery_events" FROM anon, authenticated')
+    )
 
 
 def downgrade() -> None:

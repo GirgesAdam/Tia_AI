@@ -15,11 +15,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
-
 FLOW_EVENT_TYPES = (
     "started",
     "updated",
     "options_presented",
+    "requirement_selected",
     "write_authorized",
     "write_completed",
     "completed",
@@ -36,7 +36,7 @@ class ConversationFlowEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             "event_type IN ('started', 'updated', 'options_presented', "
-            "'write_authorized', 'write_completed', 'completed', 'cancelled', "
+            "'requirement_selected', 'write_authorized', 'write_completed', 'completed', 'cancelled', "
             "'interrupted', 'expired', 'conflict')",
             name="conversation_flow_event_type_valid",
         ),

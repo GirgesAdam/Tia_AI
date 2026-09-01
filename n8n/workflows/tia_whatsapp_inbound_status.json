@@ -106,9 +106,7 @@
       ],
       "id": "20eac207-a79e-4c8b-a5bf-ae6f3493ff47",
       "name": "Tia Process With AI",
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 2000
+      "retryOnFail": false
     },
     {
       "parameters": {

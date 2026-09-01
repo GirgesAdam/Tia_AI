@@ -24,9 +24,7 @@ def test_regression_artifacts_are_explicitly_classified() -> None:
 
 def test_readiness_reports_runtime_worker_heartbeat_separately() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/services/operational_readiness.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     assert 'key="automation_worker_heartbeat"' in source
     assert "runtime_enabled_rules" in source
@@ -37,9 +35,7 @@ def test_readiness_reports_runtime_worker_heartbeat_separately() -> None:
 
 def test_test_only_stale_jobs_are_warning_not_runtime_failure() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/services/operational_readiness.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     assert 'stale_severity = "warn"' in source
     assert "no runtime stale job exists" in source
@@ -48,9 +44,7 @@ def test_test_only_stale_jobs_are_warning_not_runtime_failure() -> None:
 
 def test_diagnostic_has_no_database_mutation_calls() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "scripts/inspect_automation_runtime.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "scripts/inspect_automation_runtime.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
     forbidden_db_methods = {"commit", "flush", "add", "add_all", "delete"}
@@ -69,9 +63,7 @@ def test_diagnostic_has_no_database_mutation_calls() -> None:
 
 def test_cleanup_targets_only_explicit_test_artifacts() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "scripts/cleanup_test_automation_artifacts.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "scripts/cleanup_test_automation_artifacts.py").read_text(encoding="utf-8")
 
     assert "settings.is_production" in source
     assert 'like("final-gate-%")' in source

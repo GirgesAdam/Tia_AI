@@ -1,0 +1,8 @@
+{
+  "entity_type": "patient",
+  "canonical_id": "REPLACE_WITH_TIA_PATIENT_UUID",
+  "external_id": "CLIENT-009",
+  "metadata": {
+    "source": "phase2.6-prototype"
+  }
+}

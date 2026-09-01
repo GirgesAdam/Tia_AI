@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.core.channel_delivery import apply_provider_delivery_status, delivery_rank
 from app.models.message_dispatch import MESSAGE_DISPATCH_STATUSES
 from app.schemas.channel import DispatchResultRequest, ProviderStatusRequest
-from app.core.channel_delivery import apply_provider_delivery_status, delivery_rank
 
 
 def test_dispatch_state_supports_read_receipts() -> None:
@@ -37,8 +37,8 @@ def test_delivery_status_never_downgrades() -> None:
         last_error=None,
         next_attempt_at=None,
         locked_at=None,
-        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc),
-        delivered_at=datetime(2026, 8, 13, 0, 1, tzinfo=timezone.utc),
+        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=UTC),
+        delivered_at=datetime(2026, 8, 13, 0, 1, tzinfo=UTC),
         read_at=None,
     )
     message = SimpleNamespace(delivery_status="delivered")
@@ -47,7 +47,7 @@ def test_delivery_status_never_downgrades() -> None:
         dispatch=dispatch,
         message=message,
         provider_status="sent",
-        occurred_at=datetime(2026, 8, 13, 0, 2, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 8, 13, 0, 2, tzinfo=UTC),
         error=None,
         metadata={},
     )
@@ -63,12 +63,12 @@ def test_read_receipt_advances_dispatch_and_message() -> None:
         last_error=None,
         next_attempt_at=None,
         locked_at=None,
-        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc),
+        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=UTC),
         delivered_at=None,
         read_at=None,
     )
     message = SimpleNamespace(delivery_status="sent")
-    occurred_at = datetime(2026, 8, 13, 0, 3, tzinfo=timezone.utc)
+    occurred_at = datetime(2026, 8, 13, 0, 3, tzinfo=UTC)
 
     apply_provider_delivery_status(
         dispatch=dispatch,
@@ -92,8 +92,8 @@ def test_late_failure_does_not_override_delivered() -> None:
         last_error=None,
         next_attempt_at=None,
         locked_at=None,
-        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=timezone.utc),
-        delivered_at=datetime(2026, 8, 13, 0, 1, tzinfo=timezone.utc),
+        sent_at=datetime(2026, 8, 13, 0, 0, tzinfo=UTC),
+        delivered_at=datetime(2026, 8, 13, 0, 1, tzinfo=UTC),
         read_at=None,
     )
     message = SimpleNamespace(delivery_status="delivered")
@@ -102,7 +102,7 @@ def test_late_failure_does_not_override_delivered() -> None:
         dispatch=dispatch,
         message=message,
         provider_status="failed",
-        occurred_at=datetime(2026, 8, 13, 0, 2, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 8, 13, 0, 2, tzinfo=UTC),
         error="late provider failure",
         metadata={},
     )

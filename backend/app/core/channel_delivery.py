@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -25,7 +25,7 @@ def apply_provider_delivery_status(
     error: str | None,
     metadata: dict,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     happened_at = occurred_at or now
 
     dispatch.metadata_json = {

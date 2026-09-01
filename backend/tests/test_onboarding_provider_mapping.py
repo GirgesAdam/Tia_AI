@@ -98,7 +98,6 @@ def test_flat_provider_dto_maps_to_executable_domain_plan() -> None:
     assert domain.plan.booking_settings.slot_interval_minutes == 15
 
 
-
 def test_compact_every_day_schedule_expands_to_seven_domain_rows() -> None:
     decision = OnboardingProviderDecision(
         action="propose",

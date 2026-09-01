@@ -10,9 +10,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 WORKSPACE_ROLE_ADMIN: Final = "admin"
 WORKSPACE_ROLE_MEMBER: Final = "member"
-WORKSPACE_ROLES: Final[frozenset[str]] = frozenset(
-    {WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER}
-)
+WORKSPACE_ROLES: Final[frozenset[str]] = frozenset({WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER})
 
 
 class WorkspaceMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):

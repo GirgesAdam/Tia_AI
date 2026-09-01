@@ -12,6 +12,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+extend-ignore = ["E501", "UP047"]
+[tool.ruff.lint.per-file-ignores]
+"app/api/routes/*.py" = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

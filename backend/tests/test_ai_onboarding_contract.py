@@ -86,14 +86,12 @@ def test_onboarding_has_no_keyword_confirmation_shortcut() -> None:
     )
     assert 'if "ايوة" in' not in source
     assert 'if "confirm" in message' not in source
-    assert "decision.action == \"confirm\"" in source
+    assert 'decision.action == "confirm"' in source
 
 
 def test_write_requires_awaiting_confirmation_state() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/services/ai_onboarding.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/services/ai_onboarding.py").read_text(encoding="utf-8")
     assert 'session.status != "awaiting_confirmation"' in source
     assert 'session.status = "executing"' in source
     assert 'session.status = "completed"' in source

@@ -149,7 +149,6 @@ class NormalizedInboundMessage(BaseModel):
     external_conversation_id: str | None = Field(default=None, max_length=255)
     display_name: str | None = Field(default=None, max_length=200)
     phone: str | None = Field(default=None, max_length=40)
-    email: str | None = Field(default=None, max_length=320)
     message_type: Literal["text"] = "text"
     text: str = Field(min_length=1, max_length=10000)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -168,7 +167,6 @@ class NormalizedInboundMessage(BaseModel):
         "external_conversation_id",
         "display_name",
         "phone",
-        "email",
     )
     @classmethod
     def normalize_optional(cls, value: str | None) -> str | None:
@@ -227,7 +225,7 @@ class DispatchResultRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_failed_result(self) -> "DispatchResultRequest":
+    def validate_failed_result(self) -> DispatchResultRequest:
         if self.status != "failed" and self.retry_after_seconds is not None:
             raise ValueError("retry_after_seconds can only be used when status is failed.")
         return self

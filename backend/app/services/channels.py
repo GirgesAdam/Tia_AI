@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.channel_adapter import (
     channel_to_patient_source,
     hash_adapter_token,
@@ -18,14 +19,25 @@ from app.models.channel_delivery_event import ChannelDeliveryEvent
 from app.models.channel_identity import ChannelIdentity
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.conversation import Conversation
+from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatResponse
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
-from app.schemas.crm import normalize_email, normalize_phone
+from app.schemas.crm import normalize_phone
 from app.services.agent_chat import run_agent_for_existing_inbound
+from app.services.crm_tasks import reconcile_ai_followup_dispatch
+from app.services.crm_campaigns import guard_campaign_dispatch_before_claim, reconcile_campaign_dispatch
+from app.services.conversation_ownership import (
+    DISPATCH_SEND_LEASE,
+    OWNER_HUMAN,
+    ai_dispatch_is_sendable,
+    cancel_dispatch_for_ownership,
+    record_customer_inbound,
+    return_to_ai,
+)
 
 
 class ChannelError(ValueError):
@@ -82,6 +94,7 @@ def get_connection_by_adapter_token(
     )
 
 
+
 def _patient_display_name(payload: NormalizedInboundMessage, channel: str) -> str:
     if payload.display_name:
         return payload.display_name[:120]
@@ -97,8 +110,6 @@ def _resolve_patient_for_new_identity(
     payload: NormalizedInboundMessage,
 ) -> Patient:
     display_phone, normalized_phone = normalize_phone(payload.phone)
-    normalized_email = normalize_email(payload.email)
-
     patient = None
     if normalized_phone:
         patient = db.scalar(
@@ -108,26 +119,11 @@ def _resolve_patient_for_new_identity(
             )
         )
 
-    if patient is None and normalized_email:
-        email_matches = list(
-            db.scalars(
-                select(Patient)
-                .where(
-                    Patient.workspace_id == connection.workspace_id,
-                    Patient.email == normalized_email,
-                )
-                .limit(2)
-            )
-        )
-        if len(email_matches) == 1:
-            patient = email_matches[0]
 
     if patient is not None:
         if patient.phone is None and display_phone:
             patient.phone = display_phone
             patient.phone_normalized = normalized_phone
-        if patient.email is None and normalized_email:
-            patient.email = normalized_email
         return patient
 
     patient = Patient(
@@ -136,7 +132,6 @@ def _resolve_patient_for_new_identity(
         last_name=None,
         phone=display_phone,
         phone_normalized=normalized_phone,
-        email=normalized_email,
         preferred_language="ar",
         source=channel_to_patient_source(connection.channel),
         source_detail=f"{connection.provider}:{connection.display_name}"[:200],
@@ -176,8 +171,6 @@ def _resolve_identity(
             identity.display_name = payload.display_name
         if payload.phone:
             identity.phone = payload.phone
-        if payload.email:
-            identity.email = normalize_email(payload.email)
         identity.metadata_json = {**(identity.metadata_json or {}), **payload.metadata}
         return identity, patient
 
@@ -193,7 +186,6 @@ def _resolve_identity(
         external_user_id=payload.external_user_id,
         display_name=payload.display_name,
         phone=payload.phone,
-        email=normalize_email(payload.email),
         metadata_json=payload.metadata,
     )
     db.add(identity)
@@ -208,26 +200,25 @@ def _resolve_conversation(
     patient: Patient,
     payload: NormalizedInboundMessage,
 ) -> Conversation:
-    external_conversation_id = (
-        payload.external_conversation_id or payload.external_user_id
-    )
+    external_conversation_id = payload.external_conversation_id or payload.external_user_id
     conversation = db.scalar(
-        select(Conversation).where(
+        select(Conversation)
+        .where(
             Conversation.workspace_id == connection.workspace_id,
             Conversation.channel_connection_id == connection.id,
             Conversation.external_conversation_id == external_conversation_id,
         )
+        .with_for_update()
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if conversation is not None:
         if conversation.patient_id != patient.id:
             raise ChannelConflictError(
                 "External conversation is already linked to another patient."
             )
         if conversation.status == "closed":
-            conversation.status = "open"
-            conversation.closed_at = None
+            return_to_ai(conversation, now=now)
         return conversation
 
     conversation = Conversation(
@@ -237,6 +228,9 @@ def _resolve_conversation(
         channel_connection_id=connection.id,
         external_conversation_id=external_conversation_id,
         status="open",
+        owner_type="ai",
+        unread_count=0,
+        ownership_changed_at=now,
         started_at=now,
         last_message_at=now,
     )
@@ -267,9 +261,7 @@ def accept_normalized_inbound(
                 Conversation.id == message.conversation_id,
             )
         )
-        patient = (
-            db.get(Patient, conversation.patient_id) if conversation is not None else None
-        )
+        patient = db.get(Patient, conversation.patient_id) if conversation is not None else None
         if conversation is None or patient is None:
             raise ChannelError("Existing inbound event references missing CRM data.")
         return AcceptedInbound(
@@ -289,9 +281,7 @@ def accept_normalized_inbound(
     )
     if existing_message is not None:
         event = db.scalar(
-            select(ChannelInboundEvent).where(
-                ChannelInboundEvent.message_id == existing_message.id
-            )
+            select(ChannelInboundEvent).where(ChannelInboundEvent.message_id == existing_message.id)
         )
         conversation = db.scalar(
             select(Conversation).where(
@@ -299,9 +289,7 @@ def accept_normalized_inbound(
                 Conversation.id == existing_message.conversation_id,
             )
         )
-        patient = (
-            db.get(Patient, conversation.patient_id) if conversation is not None else None
-        )
+        patient = db.get(Patient, conversation.patient_id) if conversation is not None else None
         if event is None or conversation is None or patient is None:
             raise ChannelConflictError(
                 "External message id already exists but cannot be safely replayed."
@@ -326,7 +314,7 @@ def accept_normalized_inbound(
         payload=payload,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     inbound = Message(
         workspace_id=connection.workspace_id,
         conversation_id=conversation.id,
@@ -345,7 +333,7 @@ def accept_normalized_inbound(
             **payload.metadata,
         },
     )
-    conversation.last_message_at = now
+    record_customer_inbound(conversation, now=now)
     patient.last_contact_at = now
     db.add(inbound)
     db.flush()
@@ -457,8 +445,8 @@ def _processed_event_response(
         inbound_message_id=inbound.id,
         outbound_message_id=outbound.id if outbound else None,
         reply=outbound.content if outbound else None,
-        handoff_required=conversation.status == "pending",
-        agent_paused=outbound is None and conversation.status == "pending",
+        handoff_required=conversation.owner_type == OWNER_HUMAN,
+        agent_paused=outbound is None and conversation.owner_type == OWNER_HUMAN,
         model=(outbound.metadata_json or {}).get("model") if outbound else None,
     )
     return ProcessedInbound(event=event, agent_response=response, dispatch=dispatch)
@@ -487,7 +475,7 @@ def process_inbound_event(
         db.rollback()
         return already_processed
 
-    stale_before = datetime.now(timezone.utc) - timedelta(minutes=5)
+    stale_before = datetime.now(UTC) - timedelta(minutes=5)
     if event.status == "processing" and event.updated_at > stale_before:
         db.rollback()
         raise ChannelConflictError("Inbound event is already being processed.")
@@ -562,58 +550,213 @@ def process_inbound_event(
         raise
 
 
+def _dispatch_has_retry_budget(dispatch: MessageDispatch) -> bool:
+    return dispatch.attempts < settings.channel_dispatch_max_attempts
+
+
+def _mark_dispatch_failed(
+    dispatch: MessageDispatch,
+    message: Message | None,
+    *,
+    error: str,
+) -> None:
+    dispatch.status = "failed"
+    dispatch.last_error = error[:2000]
+    dispatch.next_attempt_at = None
+    dispatch.locked_at = None
+    if message is not None:
+        message.delivery_status = "failed"
+
+
+def _fail_exhausted_dispatches(
+    db: Session,
+    *,
+    connection: ChannelConnection,
+    now: datetime,
+    stale_before: datetime,
+) -> None:
+    exhausted = list(
+        db.scalars(
+            select(MessageDispatch)
+            .where(
+                MessageDispatch.workspace_id == connection.workspace_id,
+                MessageDispatch.channel_connection_id == connection.id,
+                MessageDispatch.attempts >= settings.channel_dispatch_max_attempts,
+                or_(
+                    MessageDispatch.status == "queued",
+                    and_(
+                        MessageDispatch.status == "processing",
+                        MessageDispatch.locked_at.is_not(None),
+                        MessageDispatch.locked_at <= stale_before,
+                    ),
+                ),
+            )
+            .with_for_update(skip_locked=True)
+        )
+    )
+
+    for dispatch in exhausted:
+        message = db.get(Message, dispatch.message_id)
+        _mark_dispatch_failed(
+            dispatch,
+            message,
+            error=(
+                dispatch.last_error
+                or f"Provider dispatch retry budget exhausted after {dispatch.attempts} attempts."
+            ),
+        )
+        if message is not None:
+            reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+            reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
+
+
+def _dispatch_is_claimable(
+    dispatch: MessageDispatch,
+    *,
+    now: datetime,
+    stale_before: datetime,
+) -> bool:
+    if dispatch.attempts >= settings.channel_dispatch_max_attempts:
+        return False
+    if dispatch.status == "queued":
+        return dispatch.next_attempt_at is None or dispatch.next_attempt_at <= now
+    return (
+        dispatch.status == "processing"
+        and dispatch.locked_at is not None
+        and dispatch.locked_at <= stale_before
+    )
+
+
 def claim_dispatches(
     db: Session,
     *,
     connection: ChannelConnection,
     limit: int,
 ) -> list[DispatchClaimItem]:
-    now = datetime.now(timezone.utc)
-    stale_before = now - timedelta(minutes=10)
+    now = datetime.now(UTC)
+    stale_before = now - DISPATCH_SEND_LEASE
 
-    stmt = (
-        select(MessageDispatch)
-        .where(
-            MessageDispatch.workspace_id == connection.workspace_id,
-            MessageDispatch.channel_connection_id == connection.id,
-            or_(
-                and_(
-                    MessageDispatch.status == "queued",
-                    or_(
-                        MessageDispatch.next_attempt_at.is_(None),
-                        MessageDispatch.next_attempt_at <= now,
+    _fail_exhausted_dispatches(
+        db,
+        connection=connection,
+        now=now,
+        stale_before=stale_before,
+    )
+
+    # Read candidate ids first, then lock in canonical conversation -> dispatch
+    # order. This matches staff takeover/claim and avoids a dispatch->conversation
+    # deadlock while still allowing multiple outbox workers to skip busy rows.
+    candidate_rows = list(
+        db.execute(
+            select(MessageDispatch.id, Message.conversation_id)
+            .join(Message, Message.id == MessageDispatch.message_id)
+            .where(
+                MessageDispatch.workspace_id == connection.workspace_id,
+                MessageDispatch.channel_connection_id == connection.id,
+                MessageDispatch.attempts < settings.channel_dispatch_max_attempts,
+                or_(
+                    and_(
+                        MessageDispatch.status == "queued",
+                        or_(
+                            MessageDispatch.next_attempt_at.is_(None),
+                            MessageDispatch.next_attempt_at <= now,
+                        ),
+                    ),
+                    and_(
+                        MessageDispatch.status == "processing",
+                        MessageDispatch.locked_at.is_not(None),
+                        MessageDispatch.locked_at <= stale_before,
                     ),
                 ),
-                and_(
-                    MessageDispatch.status == "processing",
-                    MessageDispatch.locked_at.is_not(None),
-                    MessageDispatch.locked_at <= stale_before,
-                ),
-            ),
+            )
+            .order_by(MessageDispatch.created_at)
+            .limit(min(max(limit * 4, limit), 200))
         )
-        .order_by(MessageDispatch.created_at)
-        .with_for_update(skip_locked=True)
-        .limit(limit)
     )
-    dispatches = list(db.scalars(stmt))
-    claimed: list[DispatchClaimItem] = []
 
-    for dispatch in dispatches:
+    claimed: list[DispatchClaimItem] = []
+    for dispatch_id, conversation_id in candidate_rows:
+        if len(claimed) >= limit:
+            break
+
+        conversation = db.scalar(
+            select(Conversation)
+            .where(
+                Conversation.workspace_id == connection.workspace_id,
+                Conversation.id == conversation_id,
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        if conversation is None:
+            continue
+
+        dispatch = db.scalar(
+            select(MessageDispatch)
+            .where(
+                MessageDispatch.id == dispatch_id,
+                MessageDispatch.workspace_id == connection.workspace_id,
+                MessageDispatch.channel_connection_id == connection.id,
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        if dispatch is None or not _dispatch_is_claimable(
+            dispatch,
+            now=now,
+            stale_before=stale_before,
+        ):
+            continue
+
         message = db.get(Message, dispatch.message_id)
         if message is None:
             dispatch.status = "failed"
             dispatch.last_error = "Outbound message no longer exists."
             continue
 
-        conversation = db.scalar(
-            select(Conversation).where(
-                Conversation.workspace_id == connection.workspace_id,
-                Conversation.id == message.conversation_id,
+        # Only one provider send may be in flight per conversation. A later
+        # dispatch waits for the earlier result instead of racing WhatsApp order.
+        other_processing = db.scalar(
+            select(MessageDispatch.id)
+            .join(Message, Message.id == MessageDispatch.message_id)
+            .where(
+                Message.workspace_id == connection.workspace_id,
+                Message.conversation_id == conversation.id,
+                MessageDispatch.id != dispatch.id,
+                MessageDispatch.status == "processing",
+                MessageDispatch.locked_at.is_not(None),
+                MessageDispatch.locked_at > stale_before,
             )
+            .limit(1)
         )
-        if conversation is None:
-            dispatch.status = "failed"
-            dispatch.last_error = "Conversation no longer exists."
+        if other_processing is not None:
+            continue
+
+        active_handoff = None
+        if message.sender_type == "ai":
+            active_handoff = db.scalar(
+                select(HandoffRequest).where(
+                    HandoffRequest.workspace_id == connection.workspace_id,
+                    HandoffRequest.conversation_id == conversation.id,
+                    HandoffRequest.status.in_(("pending", "claimed")),
+                )
+            )
+            if not ai_dispatch_is_sendable(
+                conversation=conversation,
+                message=message,
+                active_handoff=active_handoff,
+            ):
+                cancel_dispatch_for_ownership(
+                    dispatch,
+                    message,
+                    reason="Cancelled because AI no longer owns this conversation.",
+                )
+                reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+                continue
+
+        if not guard_campaign_dispatch_before_claim(
+            db, dispatch=dispatch, message=message, conversation=conversation
+        ):
             continue
 
         identity = db.scalar(
@@ -626,6 +769,9 @@ def claim_dispatches(
         if identity is None:
             dispatch.status = "failed"
             dispatch.last_error = "No channel identity found for conversation patient."
+            message.delivery_status = "failed"
+            reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+            reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
             continue
 
         dispatch.status = "processing"
@@ -654,7 +800,6 @@ def claim_dispatches(
 
     db.commit()
     return claimed
-
 
 
 def _reconcile_pending_delivery_events(
@@ -694,7 +839,7 @@ def _reconcile_pending_delivery_events(
             error=payload.get("error") if isinstance(payload, dict) else None,
             metadata=payload.get("metadata", {}) if isinstance(payload, dict) else {},
         )
-        event.processed_at = datetime.now(timezone.utc)
+        event.processed_at = datetime.now(UTC)
 
 
 def record_provider_status(
@@ -790,7 +935,9 @@ def record_provider_status(
             error=error,
             metadata=metadata,
         )
-        event.processed_at = datetime.now(timezone.utc)
+        reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+        reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
+        event.processed_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(event)
@@ -828,15 +975,13 @@ def record_dispatch_result(
         raise ChannelError("Dispatch not found for this channel connection.")
 
     if dispatch.status in {"cancelled", "read"}:
-        raise ChannelConflictError(
-            f"Dispatch is already terminal with status '{dispatch.status}'."
-        )
+        raise ChannelConflictError(f"Dispatch is already terminal with status '{dispatch.status}'.")
 
     message = db.get(Message, dispatch.message_id)
     if message is None:
         raise ChannelError("Dispatch references a missing outbound message.")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if provider_message_id:
         if (
             dispatch.provider_message_id is not None
@@ -861,15 +1006,20 @@ def record_dispatch_result(
             metadata=metadata,
         )
     elif result_status == "failed":
-        dispatch.last_error = (error or "Provider dispatch failed.")[:2000]
-        if retry_after_seconds:
+        failure = (error or "Provider dispatch failed.")[:2000]
+        dispatch.last_error = failure
+        if retry_after_seconds and _dispatch_has_retry_budget(dispatch):
             dispatch.status = "queued"
             dispatch.next_attempt_at = now + timedelta(seconds=retry_after_seconds)
             message.delivery_status = "queued"
         else:
-            dispatch.status = "failed"
-            dispatch.next_attempt_at = None
-            message.delivery_status = "failed"
+            if retry_after_seconds and not _dispatch_has_retry_budget(dispatch):
+                dispatch.metadata_json = {
+                    **(dispatch.metadata_json or {}),
+                    "retry_exhausted": True,
+                    "max_attempts": settings.channel_dispatch_max_attempts,
+                }
+            _mark_dispatch_failed(dispatch, message, error=failure)
     else:
         raise ChannelError("Unsupported dispatch result status.")
 
@@ -879,6 +1029,8 @@ def record_dispatch_result(
         dispatch=dispatch,
         message=message,
     )
+    reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+    reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
 
     try:
         db.commit()

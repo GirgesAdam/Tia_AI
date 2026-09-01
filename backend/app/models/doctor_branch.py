@@ -11,7 +11,9 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class DoctorBranch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "doctor_branches"
     __table_args__ = (
-        UniqueConstraint("workspace_id", "doctor_id", "branch_id", name="uq_doctor_branches_assignment"),
+        UniqueConstraint(
+            "workspace_id", "doctor_id", "branch_id", name="uq_doctor_branches_assignment"
+        ),
         ForeignKeyConstraint(
             ["workspace_id", "doctor_id"],
             ["doctors.workspace_id", "doctors.id"],
@@ -29,5 +31,9 @@ class DoctorBranch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     doctor_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     branch_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )

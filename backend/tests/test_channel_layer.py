@@ -3,15 +3,15 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.channel import (
-    ChannelConnectionCreate,
-    DispatchResultRequest,
-    NormalizedInboundMessage,
-)
 from app.core.channel_adapter import (
     channel_to_patient_source,
     generate_adapter_token,
     hash_adapter_token,
+)
+from app.schemas.channel import (
+    ChannelConnectionCreate,
+    DispatchResultRequest,
+    NormalizedInboundMessage,
 )
 
 
@@ -33,7 +33,6 @@ def test_connection_config_rejects_secrets() -> None:
         )
 
 
-
 def test_connection_config_rejects_nested_secrets() -> None:
     with pytest.raises(ValidationError):
         ChannelConnectionCreate(
@@ -42,6 +41,7 @@ def test_connection_config_rejects_nested_secrets() -> None:
             display_name="Tia WhatsApp",
             config={"provider": {"api_key": "nope"}},
         )
+
 
 def test_connection_config_allows_non_secret_provider_metadata() -> None:
     payload = ChannelConnectionCreate(

@@ -3,7 +3,6 @@ from pathlib import Path
 from app.agents.structured_output import sanitize_gemini_json_schema
 from app.schemas.onboarding_ai import OnboardingTurnDecision
 
-
 LOCAL_ONLY = {
     "default",
     "examples",
@@ -41,18 +40,14 @@ def test_onboarding_schema_contains_rich_local_pydantic_keywords() -> None:
 
 
 def test_provider_schema_removes_local_only_keywords_recursively() -> None:
-    clean = sanitize_gemini_json_schema(
-        OnboardingTurnDecision.model_json_schema()
-    )
+    clean = sanitize_gemini_json_schema(OnboardingTurnDecision.model_json_schema())
     clean_keys = set(_keys(clean))
 
     assert not (LOCAL_ONLY & clean_keys)
 
 
 def test_provider_schema_uses_canonical_gemini_subset() -> None:
-    clean = sanitize_gemini_json_schema(
-        OnboardingTurnDecision.model_json_schema()
-    )
+    clean = sanitize_gemini_json_schema(OnboardingTurnDecision.model_json_schema())
     keys = set(_keys(clean))
 
     assert "properties" in keys
@@ -69,17 +64,31 @@ def test_provider_schema_uses_canonical_gemini_subset() -> None:
 
 
 def test_nullable_fields_are_type_arrays_after_canonicalization() -> None:
-    clean = sanitize_gemini_json_schema(
-        OnboardingTurnDecision.model_json_schema()
-    )
+    clean = sanitize_gemini_json_schema(OnboardingTurnDecision.model_json_schema())
     plan = clean["properties"]["plan"]
     branch = plan["properties"]["branches"]["items"]
 
     assert branch["properties"]["city"]["type"] == ["string", "null"]
 
 
+def test_provider_schema_preserves_string_literal_as_single_value_enum() -> None:
+    from app.schemas.analytics_composable import AnalyticsComposePlan
+
+    clean = sanitize_gemini_json_schema(AnalyticsComposePlan.model_json_schema())
+    business = clean["properties"]["business_plan"]
+    audience = clean["properties"]["audience_plan"]
+
+    # Nullable nested plans are inlined by the canonicalizer. Their Pydantic
+    # Literal discriminators must remain visible to Gemini even though Gemini
+    # does not support JSON Schema `const`.
+    assert business["properties"]["kind"]["enum"] == ["business_analytics"]
+    assert audience["properties"]["kind"]["enum"] == ["patient_audience"]
+    assert "const" not in set(_keys(clean))
+
+
 def test_local_pydantic_validation_stays_strict_after_provider_sanitization() -> None:
     from pydantic import ValidationError
+
     from app.schemas.onboarding_ai import OnboardingServicePlan
 
     try:
@@ -97,9 +106,7 @@ def test_local_pydantic_validation_stays_strict_after_provider_sanitization() ->
 
 def test_runtime_catches_langchain_google_wrapper() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/agents/llm_runtime.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/agents/llm_runtime.py").read_text(encoding="utf-8")
 
     assert "ChatGoogleGenerativeAIError" in source
     assert "_status_from_exception" in source

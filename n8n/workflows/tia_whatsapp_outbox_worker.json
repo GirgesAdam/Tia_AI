@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/claim",
+        "url": "http://host.docker.internal:8000/api/v1/channels/adapter/outbox/claim",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -98,20 +98,48 @@
         "operation": "sendTemplate",
         "phoneNumberId": "={{ $json.external_account_id }}",
         "recipientPhoneNumber": "={{ $json.external_user_id }}",
-        "template": "={{ $json.metadata.whatsapp_template.name + '|' + $json.metadata.whatsapp_template.language_code }}"
+        "template": "={{ $json.metadata.whatsapp_template.name + '|' + $json.metadata.whatsapp_template.language_code }}",
+        "components": {
+          "component": [
+            {
+              "type": "body",
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[0] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[1] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[2] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[3] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[4] ?? '-') }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
       },
       "type": "n8n-nodes-base.whatsApp",
       "typeVersion": 1,
       "position": [
-        80,
-        -120
+        360,
+        -40
       ],
       "id": "22534ca7-b516-49aa-856a-c52f4c819a11",
-      "name": "WhatsApp Send Template",
-      "onError": "continueRegularOutput",
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 2000
+      "name": "WhatsApp Send Template 5 Params",
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -125,25 +153,22 @@
       "type": "n8n-nodes-base.whatsApp",
       "typeVersion": 1,
       "position": [
-        80,
-        120
+        360,
+        180
       ],
       "id": "13ccb756-1154-4286-9ec7-82b53462ff33",
       "name": "WhatsApp Send Text",
-      "onError": "continueRegularOutput",
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 2000
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "url": "={{ 'http://host.docker.internal:8000/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({status: (($json.messages?.[0]?.id || $json.id) ? 'sent' : 'failed'), provider_message_id: ($json.messages?.[0]?.id || $json.id || null), error: (($json.messages?.[0]?.id || $json.id) ? null : ($json.error?.message || $json.message || 'WhatsApp send failed in n8n')), retry_after_seconds: (($json.messages?.[0]?.id || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud'}}) }}",
+        "jsonBody": "={{ JSON.stringify({status: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? 'sent' : 'failed'), provider_message_id: (($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id || null), error: (((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id)) ? null : (($json.error && ($json.error.message || $json.error.description || $json.error.toString())) || $json.message || $json.errorDescription || 'WhatsApp send failed in n8n')), retry_after_seconds: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud', attempt:$('Expand Dispatches').item.json.attempt}}) }}",
         "options": {
           "timeout": 30000
         }
@@ -151,7 +176,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        360,
+        760,
         -120
       ],
       "id": "c9d3674f-f2a2-4303-9b29-47b8a26d74b7",
@@ -163,12 +188,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "url": "={{ 'http://host.docker.internal:8000/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({status: (($json.messages?.[0]?.id || $json.id) ? 'sent' : 'failed'), provider_message_id: ($json.messages?.[0]?.id || $json.id || null), error: (($json.messages?.[0]?.id || $json.id) ? null : ($json.error?.message || $json.message || 'WhatsApp send failed in n8n')), retry_after_seconds: (($json.messages?.[0]?.id || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud'}}) }}",
+        "jsonBody": "={{ JSON.stringify({status: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? 'sent' : 'failed'), provider_message_id: (($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id || null), error: (((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id)) ? null : (($json.error && ($json.error.message || $json.error.description || $json.error.toString())) || $json.message || $json.errorDescription || 'WhatsApp send failed in n8n')), retry_after_seconds: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud', attempt:$('Expand Dispatches').item.json.attempt}}) }}",
         "options": {
           "timeout": 30000
         }
@@ -176,14 +201,166 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        360,
-        120
+        620,
+        180
       ],
       "id": "f527e392-4b31-4a59-8fc2-c495ce4263c7",
       "name": "Tia Record Text Result",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "55361921-80df-496d-9e8c-78e35eec25b8",
+              "leftValue": "={{ String($json.metadata.whatsapp_template.body_parameters?.length ?? 0) }}",
+              "rightValue": "3",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        60,
+        -180
+      ],
+      "id": "8d3bd52f-0ac8-4157-9df5-dc87f87f519f",
+      "name": "3 Template Params?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4a35d6f4-d6ce-448a-a468-8d77ff0aaa5c",
+              "leftValue": "={{ String($json.metadata.whatsapp_template.body_parameters?.length ?? 0) }}",
+              "rightValue": "4",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        -120
+      ],
+      "id": "1ea5b715-a365-46af-af43-e5f88b3767ab",
+      "name": "4 Template Params?"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendTemplate",
+        "phoneNumberId": "={{ $json.external_account_id }}",
+        "recipientPhoneNumber": "={{ $json.external_user_id }}",
+        "template": "={{ $json.metadata.whatsapp_template.name + '|' + $json.metadata.whatsapp_template.language_code }}",
+        "components": {
+          "component": [
+            {
+              "type": "body",
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[0] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[1] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[2] ?? '-') }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        360,
+        -240
+      ],
+      "id": "97374f5f-ee99-4f9e-bcd0-e00e907c80a4",
+      "name": "WhatsApp Send Template 3 Params",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendTemplate",
+        "phoneNumberId": "={{ $json.external_account_id }}",
+        "recipientPhoneNumber": "={{ $json.external_user_id }}",
+        "template": "={{ $json.metadata.whatsapp_template.name + '|' + $json.metadata.whatsapp_template.language_code }}",
+        "components": {
+          "component": [
+            {
+              "type": "body",
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[0] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[1] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[2] ?? '-') }}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{ String($json.metadata.whatsapp_template.body_parameters?.[3] ?? '-') }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        520,
+        -140
+      ],
+      "id": "6fc575b7-39b7-4555-8dcf-d71cba45af6a",
+      "name": "WhatsApp Send Template 4 Params",
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -224,7 +401,7 @@
       "main": [
         [
           {
-            "node": "WhatsApp Send Template",
+            "node": "3 Template Params?",
             "type": "main",
             "index": 0
           }
@@ -238,7 +415,54 @@
         ]
       ]
     },
-    "WhatsApp Send Template": {
+    "WhatsApp Send Text": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Text Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3 Template Params?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Template 3 Params",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4 Template Params?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4 Template Params?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Template 4 Params",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "WhatsApp Send Template 5 Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send Template 3 Params": {
       "main": [
         [
           {
@@ -249,11 +473,22 @@
         ]
       ]
     },
-    "WhatsApp Send Text": {
+    "WhatsApp Send Template 4 Params": {
       "main": [
         [
           {
-            "node": "Tia Record Text Result",
+            "node": "Tia Record Template Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send Template 5 Params": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Template Result",
             "type": "main",
             "index": 0
           }

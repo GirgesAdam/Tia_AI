@@ -1,0 +1,140 @@
+{
+  "mode": "external_api",
+  "adapter_key": "prototype_external",
+  "status": "active",
+  "external_clinic_id": "SHEET-CLINIC-77",
+  "secret_ref": null,
+  "config": {
+    "prototype_dataset": {
+      "Clinic Timezone": "Africa/Cairo",
+      "Source Revision": "sheet-export-2026-08-22T18:00:00+03:00",
+      "Status Map": {
+        "OK": "confirmed",
+        "WAIT": "pending"
+      },
+      "Treatments Sheet": [
+        {
+          "Treatment Code": "TR-LSR-U",
+          "Treatment": "ليزر إزالة الشعر - إبط",
+          "Category": "Laser",
+          "Description": "صف من شيت خارجي تجريبي",
+          "Minutes": "30",
+          "Price": "550",
+          "Currency": "EGP",
+          "Medical Review Required": false
+        },
+        {
+          "Treatment Code": "TR-LSR-F",
+          "Treatment": "ليزر إزالة الشعر",
+          "Category": "Laser",
+          "Minutes": "45",
+          "Price": "1500.00",
+          "Currency": "EGP",
+          "Medical Review Required": false
+        }
+      ],
+      "Locations Sheet": [
+        {
+          "Branch Ref": "LOC-NASR",
+          "Branch Code": "NASR",
+          "Clinic Location": "فرع مدينة نصر",
+          "City": "Cairo",
+          "Address": "شارع تجريبي 10"
+        },
+        {
+          "Branch Ref": "LOC-ZAYED",
+          "Clinic Location": "فرع الشيخ زايد",
+          "City": "Giza"
+        }
+      ],
+      "Doctors Sheet": [
+        {
+          "Doctor Key": "EMP-AHM-17",
+          "Doctor Display": "د. أحمد محمود",
+          "Specialty": "Dermatology",
+          "Treatments": "TR-LSR-U|TR-LSR-F",
+          "Locations": "LOC-NASR"
+        },
+        {
+          "Doctor Key": "EMP-OMR-2",
+          "Doctor Display": "د. عمر علي",
+          "Specialty": "Aesthetics",
+          "Treatments": [
+            "TR-LSR-F"
+          ],
+          "Locations": [
+            "LOC-ZAYED"
+          ]
+        }
+      ],
+      "Free Slots Feed": [
+        {
+          "Branch Ref": "LOC-NASR",
+          "Treatment Code": "TR-LSR-U",
+          "Doctor Key": "EMP-AHM-17",
+          "Start ISO": "2026-08-25T18:15:00+03:00"
+        },
+        {
+          "Branch Ref": "LOC-NASR",
+          "Treatment Code": "TR-LSR-U",
+          "Doctor Key": "EMP-AHM-17",
+          "Start ISO": "2026-08-25T20:15:00+03:00"
+        },
+        {
+          "Branch Ref": "LOC-ZAYED",
+          "Treatment Code": "TR-LSR-F",
+          "Doctor Key": "EMP-OMR-2",
+          "Start ISO": "2026-08-25T19:00:00+03:00"
+        }
+      ],
+      "Bookings Sheet": [
+        {
+          "Booking Ref": "BOOK-EXT-443",
+          "Client Ref": "CLIENT-009",
+          "Treatment Code": "TR-LSR-U",
+          "Branch Ref": "LOC-NASR",
+          "Doctor Key": "EMP-AHM-17",
+          "Start ISO": "2026-08-25T20:15:00+03:00",
+          "Status": "OK"
+        }
+      ],
+      "Patients Sheet": [
+        {
+          "Client Ref": "CLIENT-009",
+          "Given Name": "سارة",
+          "Family Name": "علي",
+          "Mobile": "+201000000009",
+          "Email Address": "sara@example.test",
+          "State": "ENABLED",
+          "Language": "ar",
+          "Acquisition": "whatsapp",
+          "Updated ISO": "2026-08-25T19:00:00+03:00"
+        }
+      ],
+      "Payments Sheet": [
+        {
+          "Payment Ref": "PAY-EXT-100",
+          "Client Ref": "CLIENT-009",
+          "Booking Ref": "BOOK-EXT-443",
+          "Transaction Kind": "CHARGE",
+          "Amount": "500.00",
+          "Currency": "EGP",
+          "Method": "Credit Card",
+          "Created ISO": "2026-08-25T19:05:00+03:00",
+          "Provider Ref": "POS-9001"
+        },
+        {
+          "Payment Ref": "REF-EXT-101",
+          "Client Ref": "CLIENT-009",
+          "Booking Ref": "BOOK-EXT-443",
+          "Transaction Kind": "REVERSAL",
+          "Amount": "100.00",
+          "Currency": "EGP",
+          "Method": "Credit Card",
+          "Created ISO": "2026-08-25T20:05:00+03:00",
+          "Original Payment Ref": "PAY-EXT-100"
+        }
+      ]
+    }
+  }
+}

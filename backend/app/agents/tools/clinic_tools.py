@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -12,9 +14,22 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.integrations.clinic.base import (
+    AppointmentReadRequest,
+    AppointmentReadResult,
+    AppointmentRecord,
+    AvailabilityRequest,
+    AvailabilityResult,
+    CancelAppointmentRequest,
+    ClinicActionRequiresHuman,
+    ClinicCapability,
+    ConfirmAppointmentRequest,
+    CreateAppointmentRequest,
+    RescheduleAppointmentRequest,
+)
+from app.integrations.clinic.registry import get_clinic_adapter
+
 from app.models.agent_action import AgentAction
-from app.models.appointment import Appointment
-from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.branch import Branch
 from app.models.conversation import Conversation
 from app.models.doctor import Doctor
@@ -25,16 +40,12 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
-from app.services.outbound_communications import (
-    OutboundCommunicationError,
-    queue_patient_email,
-)
-from app.services.booking import (
-    BookingRuleError,
-    calculate_availability,
-    find_exact_slot,
-    get_effective_booking_settings,
-)
+from app.services.booking import BookingRuleError
+from app.services.campaign_attribution import record_direct_campaign_booking_conversion
+from app.services.crm_tasks import CRMTaskError, create_crm_task
+from app.services.handoffs import create_handoff
+from app.services.patient_history import build_patient_history_context
+from app.services.patient_packages import list_patient_packages
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,7 @@ class AgentToolContext:
     patient: Patient
     conversation: Conversation
     run_id: UUID
+    handoff_context: dict | None = None
 
 
 def _json(payload: dict | list) -> str:
@@ -68,44 +80,329 @@ def _money(price_minor: int, currency: str) -> str:
     return f"{amount} {currency.upper()}"
 
 
+def _normalize_lookup_text(value: str | None) -> str:
+    """Normalize customer-facing lookup text without collapsing distinct place names.
+
+    The result is intentionally token-preserving. For example, "Cairo" stays
+    distinct from "New Cairo" instead of applying fuzzy substitutions that could
+    make one branch accidentally match the other.
+    """
+    if not value:
+        return ""
+
+    normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+    normalized = normalized.replace("ـ", "")
+
+    # Remove Arabic/Unicode combining marks (harakat, accents, etc.).
+    normalized = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+
+    # A few Arabic letter variants are commonly interchangeable in user input.
+    normalized = normalized.translate(
+        str.maketrans(
+            {
+                "أ": "ا",
+                "إ": "ا",
+                "آ": "ا",
+                "ى": "ي",
+                "ؤ": "و",
+                "ئ": "ي",
+            }
+        )
+    )
+
+    normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def _service_search_text(service: object) -> str:
+    values = [
+        getattr(service, "name", None),
+        getattr(service, "category", None),
+        getattr(service, "description", None),
+    ]
+    return " | ".join(
+        normalized
+        for value in values
+        if (normalized := _normalize_lookup_text(value))
+    )
+
+
+def _resolve_services_by_search(
+    services: list[Service],
+    search: str,
+) -> list[Service]:
+    """Resolve an AI-extracted service name with exact-name priority.
+
+    A customer selecting an option such as ``ليزر إزالة الشعر`` should resolve
+    that exact normalized service even when another service has a longer name
+    such as ``ليزر إزالة الشعر — Demo``. Broad phrase matching is only used
+    when there is no exact active service name match.
+    """
+    query = _normalize_lookup_text(search)
+    if not query:
+        return services
+
+    exact = [
+        service
+        for service in services
+        if _normalize_lookup_text(getattr(service, "name", None)) == query
+    ]
+    if exact:
+        return exact
+
+    return [
+        service
+        for service in services
+        if query in _service_search_text(service)
+    ]
+
+
+def _branch_display_address(branch: object) -> str | None:
+    """Build a stable human-readable branch address from persisted address fields."""
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    for field_name in ("address_line1", "address_line2", "city", "state"):
+        raw_value = getattr(branch, field_name, None)
+        if raw_value is None:
+            continue
+
+        value = str(raw_value).strip()
+        if not value:
+            continue
+
+        key = _normalize_lookup_text(value)
+        if key and key not in seen:
+            seen.add(key)
+            parts.append(value)
+
+    return "، ".join(parts) or None
+
+
+def _branch_search_text(branch: object) -> str:
+    """Return normalized searchable text for one branch.
+
+    Keeping the branch name as one normalized phrase means a query such as
+    "Regression Cairo Branch" does not become a false positive for
+    "Regression New Cairo Branch".
+    """
+    values = [
+        getattr(branch, "name", None),
+        getattr(branch, "code", None),
+        getattr(branch, "address_line1", None),
+        getattr(branch, "address_line2", None),
+        getattr(branch, "city", None),
+        getattr(branch, "state", None),
+    ]
+    return " | ".join(
+        normalized
+        for value in values
+        if (normalized := _normalize_lookup_text(value))
+    )
+
+
+def _resolve_branch_by_search(
+    branches: list[Branch],
+    search: str,
+) -> list[Branch]:
+    """Resolve a customer-entered branch name/address conservatively.
+
+    Exact normalized name/code/city matches are preferred. Otherwise, a
+    normalized phrase match is used. Ambiguous matches are returned to the
+    caller instead of guessing.
+    """
+    query = _normalize_lookup_text(search)
+    if not query:
+        return branches
+
+    exact: list[Branch] = []
+    phrase_matches: list[Branch] = []
+
+    for branch in branches:
+        exact_values = {
+            _normalize_lookup_text(getattr(branch, "name", None)),
+            _normalize_lookup_text(getattr(branch, "code", None)),
+            _normalize_lookup_text(getattr(branch, "city", None)),
+        }
+        exact_values.discard("")
+
+        if query in exact_values:
+            exact.append(branch)
+            continue
+
+        if query in _branch_search_text(branch):
+            phrase_matches.append(branch)
+
+    return exact or phrase_matches
+
+
+def _doctor_display_name(staff: object) -> str:
+    first_name = str(getattr(staff, "first_name", "") or "").strip()
+    last_name = str(getattr(staff, "last_name", "") or "").strip()
+    return f"{first_name} {last_name}".strip()
+
+
+def _doctor_search_text(doctor: object, staff: object) -> str:
+    values = [
+        _doctor_display_name(staff),
+        getattr(staff, "first_name", None),
+        getattr(staff, "last_name", None),
+        getattr(doctor, "specialization", None),
+    ]
+    return " | ".join(
+        normalized
+        for value in values
+        if (normalized := _normalize_lookup_text(value))
+    )
+
+
+def _resolve_doctor_rows_by_search(
+    rows: list[tuple[Doctor, Staff]],
+    search: str,
+) -> list[tuple[Doctor, Staff]]:
+    """Resolve an AI-extracted doctor entity without keyword intent routing.
+
+    Exact normalized full-name/first-name/last-name matches are preferred.
+    Otherwise a conservative normalized phrase match is used. Ambiguous
+    matches are returned to the caller so the customer can choose.
+    """
+    query = _normalize_lookup_text(search)
+    if not query:
+        return rows
+
+    exact: list[tuple[Doctor, Staff]] = []
+    phrase_matches: list[tuple[Doctor, Staff]] = []
+
+    for doctor, staff in rows:
+        exact_values = {
+            _normalize_lookup_text(_doctor_display_name(staff)),
+            _normalize_lookup_text(getattr(staff, "first_name", None)),
+            _normalize_lookup_text(getattr(staff, "last_name", None)),
+        }
+        exact_values.discard("")
+
+        if query in exact_values:
+            exact.append((doctor, staff))
+            continue
+
+        if query in _doctor_search_text(doctor, staff):
+            phrase_matches.append((doctor, staff))
+
+    return exact or phrase_matches
+
+
+def _active_booking_doctor_rows(
+    ctx: AgentToolContext,
+    *,
+    branch_id: UUID,
+    service_id: UUID,
+) -> list[tuple[Doctor, Staff]]:
+    rows = ctx.db.execute(
+        select(Doctor, Staff)
+        .join(
+            Staff,
+            (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id),
+        )
+        .join(
+            DoctorBranch,
+            (DoctorBranch.workspace_id == Doctor.workspace_id)
+            & (DoctorBranch.doctor_id == Doctor.id),
+        )
+        .join(
+            DoctorService,
+            (DoctorService.workspace_id == Doctor.workspace_id)
+            & (DoctorService.doctor_id == Doctor.id),
+        )
+        .where(
+            Doctor.workspace_id == ctx.workspace.id,
+            Doctor.is_active.is_(True),
+            Doctor.booking_enabled.is_(True),
+            Staff.is_active.is_(True),
+            DoctorBranch.branch_id == branch_id,
+            DoctorBranch.is_active.is_(True),
+            DoctorService.service_id == service_id,
+            DoctorService.is_active.is_(True),
+        )
+        .order_by(Staff.first_name, Staff.last_name)
+    ).all()
+
+    unique: list[tuple[Doctor, Staff]] = []
+    seen: set[UUID] = set()
+    for doctor, staff in rows:
+        if doctor.id in seen:
+            continue
+        seen.add(doctor.id)
+        unique.append((doctor, staff))
+    return unique
+
+
+def _availability_doctor_names(
+    ctx: AgentToolContext,
+    *,
+    doctor_ids: set[UUID],
+) -> dict[UUID, str]:
+    """Load only doctor display names needed by already-computed slots.
+
+    Branch and service rows are already present in _availability_payload, so the
+    previous helper's extra branch/service reads were redundant remote round trips.
+    """
+    doctor_names: dict[UUID, str] = {}
+    if not doctor_ids:
+        return doctor_names
+
+    rows = ctx.db.execute(
+        select(Doctor.id, Staff.first_name, Staff.last_name)
+        .join(
+            Staff,
+            (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id),
+        )
+        .where(
+            Doctor.workspace_id == ctx.workspace.id,
+            Doctor.id.in_(doctor_ids),
+        )
+    ).all()
+    for doctor_id_value, first_name, last_name in rows:
+        full_name = f"{first_name or ''} {last_name or ''}".strip()
+        doctor_names[doctor_id_value] = full_name or "الدكتور المتاح"
+    return doctor_names
+
+
 def _availability_display_context(
     ctx: AgentToolContext,
     *,
     branch_id: UUID,
     service_id: UUID,
     doctor_ids: set[UUID],
+    preloaded_branch: Branch | None = None,
+    preloaded_service: Service | None = None,
 ) -> tuple[str | None, str | None, dict[UUID, str]]:
-    branch = ctx.db.scalar(
-        select(Branch).where(
-            Branch.workspace_id == ctx.workspace.id,
-            Branch.id == branch_id,
-        )
-    )
-    service = ctx.db.scalar(
-        select(Service).where(
-            Service.workspace_id == ctx.workspace.id,
-            Service.id == service_id,
-        )
-    )
+    """Return display labels for availability without forcing redundant reads.
 
-    doctor_names: dict[UUID, str] = {}
-    if doctor_ids:
-        rows = ctx.db.execute(
-            select(Doctor.id, Staff.first_name, Staff.last_name)
-            .join(
-                Staff,
-                (Staff.workspace_id == Doctor.workspace_id)
-                & (Staff.id == Doctor.staff_id),
+    The optional preloaded rows preserve the v0.19.3.2 latency optimization in
+    `_availability_payload`, while keeping this helper available for legacy tool
+    paths and regression tests that monkeypatch it.
+    """
+    branch = preloaded_branch
+    if branch is None:
+        branch = ctx.db.scalar(
+            select(Branch).where(
+                Branch.workspace_id == ctx.workspace.id,
+                Branch.id == branch_id,
             )
-            .where(
-                Doctor.workspace_id == ctx.workspace.id,
-                Doctor.id.in_(doctor_ids),
-            )
-        ).all()
-        for doctor_id, first_name, last_name in rows:
-            full_name = f"{first_name or ''} {last_name or ''}".strip()
-            doctor_names[doctor_id] = full_name or "الدكتور المتاح"
+        )
 
+    service = preloaded_service
+    if service is None:
+        service = ctx.db.scalar(
+            select(Service).where(
+                Service.workspace_id == ctx.workspace.id,
+                Service.id == service_id,
+            )
+        )
+
+    doctor_names = _availability_doctor_names(ctx, doctor_ids=doctor_ids)
     return (
         branch.name if branch else None,
         service.name if service else None,
@@ -146,89 +443,188 @@ def _service_matches(
     ctx: AgentToolContext,
     search: str,
 ) -> list[Service]:
-    stmt = select(Service).where(
-        Service.workspace_id == ctx.workspace.id,
-        Service.is_active.is_(True),
-    )
-    search = search.strip()
-    if search:
-        pattern = f"%{search}%"
-        stmt = stmt.where(
-            or_(
-                Service.name.ilike(pattern),
-                Service.category.ilike(pattern),
-                Service.description.ilike(pattern),
+    services = list(
+        ctx.db.scalars(
+            select(Service)
+            .where(
+                Service.workspace_id == ctx.workspace.id,
+                Service.is_active.is_(True),
             )
+            .order_by(Service.name)
+            .limit(100)
         )
-    return list(ctx.db.scalars(stmt.order_by(Service.name).limit(20)))
+    )
+    return _resolve_services_by_search(services, search)
 
 
 def _active_branches(ctx: AgentToolContext) -> list[Branch]:
-    return list(
-        ctx.db.scalars(
-            select(Branch)
-            .where(
-                Branch.workspace_id == ctx.workspace.id,
-                Branch.is_active.is_(True),
-            )
-            .order_by(Branch.name)
+    stmt = select(Branch).where(
+        Branch.workspace_id == ctx.workspace.id,
+        Branch.is_active.is_(True),
+    )
+    if ctx.workspace.primary_branch_id is not None:
+        stmt = stmt.where(Branch.id == ctx.workspace.primary_branch_id)
+    return list(ctx.db.scalars(stmt.order_by(Branch.name)))
+
+
+def _adapter_availability(
+    ctx: AgentToolContext,
+    *,
+    branch_id: str,
+    service_id: str,
+    booking_date: date,
+    doctor_id: str | None = None,
+    exclude_appointment_id: str | None = None,
+) -> AvailabilityResult:
+    """Read verified availability through the workspace clinic adapter."""
+    adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+    adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
+    return adapter.get_availability(
+        AvailabilityRequest(
+            branch_id=branch_id,
+            service_id=service_id,
+            booking_date=booking_date,
+            doctor_id=doctor_id,
+            exclude_appointment_id=exclude_appointment_id,
         )
     )
+
+
+def _adapter_patient_appointments(
+    ctx: AgentToolContext,
+    *,
+    include_past: bool = False,
+) -> AppointmentReadResult:
+    """Read the current patient's appointments through the clinic adapter."""
+    adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+    adapter.require_capability(ClinicCapability.APPOINTMENTS_READ)
+    return adapter.get_patient_appointments(
+        AppointmentReadRequest(
+            patient_id=str(ctx.patient.id),
+            include_past=include_past,
+        )
+    )
+
+
+def _canonical_appointment_summary(appointment: AppointmentRecord) -> dict:
+    try:
+        tz = ZoneInfo(appointment.timezone)
+    except Exception:
+        tz = UTC
+
+    return {
+        "appointment_id": appointment.appointment_id,
+        "status": appointment.status,
+        "service": appointment.service_name,
+        "branch": appointment.branch_name,
+        "doctor": appointment.doctor_name,
+        "start_local": appointment.start_at.astimezone(tz).isoformat(),
+        "end_local": appointment.end_at.astimezone(tz).isoformat(),
+        "timezone": getattr(tz, "key", "UTC"),
+        "price": _money(appointment.price_minor, appointment.currency),
+        "payment_status": appointment.payment_status,
+        "amount_paid": (
+            _money(appointment.amount_paid_minor, "EGP")
+            if appointment.amount_paid_minor is not None
+            else None
+        ),
+        "payment_method": appointment.payment_method,
+        "billing_context": getattr(appointment, "billing_context", "standard"),
+        "package_external_id": getattr(appointment, "package_external_id", None),
+    }
 
 
 def _availability_payload(
     ctx: AgentToolContext,
     *,
-    branch: Branch,
-    service: Service,
+    branch_id: str | None = None,
+    service_id: str | None = None,
+    branch: Branch | None = None,
+    service: Service | None = None,
     booking_date: date,
-    doctor_id: UUID | None,
+    doctor_id: str | UUID | None,
+    requested_start: time | None,
     lower_bound: time | None,
     upper_bound: time | None,
-    exclude_appointment_id: UUID | None = None,
+    exclude_appointment_id: str | UUID | None = None,
 ) -> dict:
-    timezone_name, slots = calculate_availability(
-        db=ctx.db,
-        workspace=ctx.workspace,
-        branch_id=branch.id,
-        service_id=service.id,
+    # Backward-compatible helper boundary: Phase 2.2 callers/tests used ORM
+    # objects while Phase 2.4 runtime callers pass canonical IDs. Normalize
+    # both forms here, then keep the adapter contract string-ID only.
+    resolved_branch_id = branch_id or (str(branch.id) if branch is not None else None)
+    resolved_service_id = service_id or (str(service.id) if service is not None else None)
+    if resolved_branch_id is None:
+        raise TypeError("_availability_payload() requires branch_id or branch")
+    if resolved_service_id is None:
+        raise TypeError("_availability_payload() requires service_id or service")
+
+    availability = _adapter_availability(
+        ctx,
+        branch_id=str(resolved_branch_id),
+        service_id=str(resolved_service_id),
         booking_date=booking_date,
-        doctor_id=doctor_id,
-        exclude_appointment_id=exclude_appointment_id,
+        doctor_id=str(doctor_id) if doctor_id is not None else None,
+        exclude_appointment_id=(
+            str(exclude_appointment_id) if exclude_appointment_id is not None else None
+        ),
     )
+    timezone_name = availability.timezone
+    slots = list(availability.slots)
     tz = ZoneInfo(timezone_name)
-    filtered_slots = _filter_slots_by_local_window(
+    window_slots = _filter_slots_by_local_window(
         slots,
         tz=tz,
         lower_bound=lower_bound,
         upper_bound=upper_bound,
     )
 
-    branch_name, service_name, doctor_names = _availability_display_context(
-        ctx,
-        branch_id=branch.id,
-        service_id=service.id,
-        doctor_ids={slot.doctor_id for slot, _ in filtered_slots},
-    )
+    requested_time_unavailable = False
+    matching_slot_count = len(window_slots)
+    presented_slots = window_slots
+
+    if requested_start is not None:
+        exact_slots = [
+            (slot, local_start)
+            for slot, local_start in window_slots
+            if local_start.timetz().replace(tzinfo=None) == requested_start
+        ]
+        matching_slot_count = len(exact_slots)
+        if exact_slots:
+            presented_slots = exact_slots
+        else:
+            requested_time_unavailable = True
+            target_minutes = requested_start.hour * 60 + requested_start.minute
+
+            def distance_from_requested(item) -> tuple[int, object]:
+                _, local_start = item
+                local_minutes = local_start.hour * 60 + local_start.minute
+                return abs(local_minutes - target_minutes), local_start
+
+            # Respect any explicit hard window while recovering from an unavailable
+            # exact start. If there is no broad window, search the verified same-day
+            # availability. This never invents a slot.
+            if lower_bound is not None or upper_bound is not None:
+                nearby_pool = window_slots
+            else:
+                nearby_pool = [(slot, slot.start_at.astimezone(tz)) for slot in slots]
+            presented_slots = sorted(nearby_pool, key=distance_from_requested)[:12]
 
     result_slots = []
-    for slot, local_start in filtered_slots[:12]:
+    for slot, local_start in presented_slots[:12]:
         local_end = slot.end_at.astimezone(tz)
         result_slots.append(
             {
-                "branch_id": str(slot.branch_id),
-                "branch_name": branch_name,
-                "doctor_id": str(slot.doctor_id),
-                "doctor_name": doctor_names.get(
-                    slot.doctor_id,
-                    "الدكتور المتاح",
-                ),
-                "service_id": str(slot.service_id),
-                "service_name": service_name,
+                "branch_id": slot.branch_id,
+                "branch_name": slot.branch_name,
+                "doctor_id": slot.doctor_id,
+                "doctor_name": slot.doctor_name or "الدكتور المتاح",
+                "service_id": slot.service_id,
+                "service_name": slot.service_name,
                 "start_local": local_start.isoformat(),
                 "end_local": local_end.isoformat(),
                 "start_time_24h": local_start.strftime("%H:%M"),
                 "end_time_24h": local_end.strftime("%H:%M"),
+                "duration_minutes": slot.duration_minutes,
                 "timezone": timezone_name,
                 "price": _money(slot.price_minor, slot.currency),
             }
@@ -238,18 +634,29 @@ def _availability_payload(
         "date": booking_date.isoformat(),
         "timezone": timezone_name,
         "branch": {
-            "branch_id": str(branch.id),
-            "branch_name": branch.name,
+            "branch_id": availability.branch_id,
+            "branch_name": availability.branch_name,
         },
         "service": {
-            "service_id": str(service.id),
-            "service_name": service.name,
-            "duration_minutes": service.duration_minutes,
-            "price": _money(service.price_minor, service.currency),
+            "service_id": availability.service_id,
+            "service_name": availability.service_name,
+            "duration_minutes": availability.service_duration_minutes,
+            "price": (
+                _money(availability.service_price_minor, availability.service_currency)
+                if availability.service_price_minor is not None
+                and availability.service_currency
+                else None
+            ),
         },
+        "requested_start_time": requested_start.strftime("%H:%M") if requested_start else None,
         "slots": result_slots,
-        "matching_slot_count": len(filtered_slots),
-        "more_slots_available": len(filtered_slots) > len(result_slots),
+        "matching_slot_count": matching_slot_count,
+        "requested_time_unavailable": requested_time_unavailable,
+        "more_slots_available": (
+            len(presented_slots) > len(result_slots)
+            if requested_start is not None
+            else len(window_slots) > len(result_slots)
+        ),
     }
 
 
@@ -282,81 +689,43 @@ def _record_action(
     ctx.db.commit()
 
 
-def _history(
-    ctx: AgentToolContext,
-    appointment: Appointment,
-    *,
-    from_status: str | None,
-    to_status: str,
-    reason: str,
-    metadata: dict | None = None,
-) -> None:
-    ctx.db.add(
-        AppointmentStatusHistory(
-            workspace_id=ctx.workspace.id,
-            appointment_id=appointment.id,
-            changed_by_user_id=None,
-            from_status=from_status,
-            to_status=to_status,
-            reason=reason,
-            metadata_json=metadata or {},
-        )
-    )
+def _native_action_appointment_id(appointment_id: str | None) -> UUID | None:
+    """Attach native appointment FKs to AgentAction when the source uses UUID IDs.
 
-
-def _appointment_summary(ctx: AgentToolContext, appointment: Appointment) -> dict:
-    service = ctx.db.scalar(
-        select(Service).where(
-            Service.workspace_id == ctx.workspace.id,
-            Service.id == appointment.service_id,
-        )
-    )
-    branch = ctx.db.scalar(
-        select(Branch).where(
-            Branch.workspace_id == ctx.workspace.id,
-            Branch.id == appointment.branch_id,
-        )
-    )
-    doctor_row = ctx.db.execute(
-        select(Doctor, Staff)
-        .join(
-            Staff,
-            (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id),
-        )
-        .where(
-            Doctor.workspace_id == ctx.workspace.id,
-            Doctor.id == appointment.doctor_id,
-        )
-    ).first()
-    doctor_name = None
-    if doctor_row is not None:
-        _, staff = doctor_row
-        doctor_name = f"{staff.first_name} {staff.last_name}".strip()
-
-    timezone_name = ctx.workspace.timezone
-    if branch is not None:
-        timezone_name = branch.timezone or ctx.workspace.timezone
+    External clinic systems may use identifiers such as ``BK-991``; those remain
+    in the action payload while the nullable native FK stays empty.
+    """
+    if not appointment_id:
+        return None
     try:
-        tz = ZoneInfo(timezone_name)
-    except Exception:
-        tz = timezone.utc
-
-    return {
-        "appointment_id": str(appointment.id),
-        "status": appointment.status,
-        "service": service.name if service else None,
-        "branch": branch.name if branch else None,
-        "doctor": doctor_name,
-        "start_local": appointment.start_at.astimezone(tz).isoformat(),
-        "end_local": appointment.end_at.astimezone(tz).isoformat(),
-        "timezone": getattr(tz, "key", "UTC"),
-        "price": _money(appointment.price_minor, appointment.currency),
-    }
+        return UUID(str(appointment_id))
+    except (TypeError, ValueError):
+        return None
 
 
-def _set_handoff(ctx: AgentToolContext) -> None:
-    ctx.conversation.status = "pending"
-    ctx.db.commit()
+
+def _set_handoff(
+    ctx: AgentToolContext,
+    *,
+    reason: str,
+    category: str = "booking_exception",
+    priority: str = "normal",
+):
+    context = dict(ctx.handoff_context or {})
+    context["trigger"] = "system"
+    context["semantic_reason"] = reason
+    return create_handoff(
+        ctx.db,
+        workspace_id=ctx.workspace.id,
+        conversation=ctx.conversation,
+        patient=ctx.patient,
+        reason=reason,
+        category=category,
+        priority=priority,
+        source="system",
+        handoff_context=context,
+        commit=False,
+    )
 
 
 def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
@@ -370,9 +739,10 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 "first_name": ctx.patient.first_name,
                 "last_name": ctx.patient.last_name,
                 "phone": ctx.patient.phone,
-                "email": ctx.patient.email,
                 "preferred_branch_id": (
-                    str(ctx.patient.preferred_branch_id) if ctx.patient.preferred_branch_id else None
+                    str(ctx.patient.preferred_branch_id)
+                    if ctx.patient.preferred_branch_id
+                    else None
                 ),
                 "preferred_language": ctx.patient.preferred_language,
             },
@@ -385,6 +755,54 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
             input_payload={},
             output_payload=payload,
         )
+        return _json(payload)
+
+    @tool
+    def get_customer_history(recent_limit: int = 20) -> str:
+        """Get the current customer's own historical clinic facts: past visits, services and payments. Never use this to access another patient."""
+        history = build_patient_history_context(
+            ctx.db,
+            workspace_id=ctx.workspace.id,
+            patient=ctx.patient,
+            recent_limit=recent_limit,
+        )
+        payload = {"ok": True, "history": history.model_dump(mode="json")}
+        _record_action(
+            ctx,
+            tool_name="get_customer_history",
+            action_type="crm_history_read",
+            status="success",
+            input_payload={"recent_limit": recent_limit},
+            output_payload=payload,
+        )
+        return _json(payload)
+
+    @tool
+    def update_marketing_consent(consent: bool) -> str:
+        """Update only the current customer's own promotional/marketing message consent after an explicit customer request."""
+        previous = bool(ctx.patient.marketing_consent)
+        ctx.patient.marketing_consent = bool(consent)
+        ctx.patient.marketing_consent_at = datetime.now(UTC) if consent else None
+        payload = {
+            "ok": True,
+            "marketing_consent": bool(consent),
+            "changed": previous != bool(consent),
+        }
+        ctx.db.add(
+            AgentAction(
+                workspace_id=ctx.workspace.id,
+                conversation_id=ctx.conversation.id,
+                patient_id=ctx.patient.id,
+                appointment_id=None,
+                run_id=ctx.run_id,
+                tool_name="update_marketing_consent",
+                action_type="marketing_consent_update",
+                status="success",
+                input_json={"consent": bool(consent)},
+                output_json=payload,
+            )
+        )
+        ctx.db.commit()
         return _json(payload)
 
     @tool
@@ -433,27 +851,13 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     @tool
     def list_branches() -> str:
         """List active clinic branches with their real location and contact details."""
-        rows = list(
-            ctx.db.scalars(
-                select(Branch)
-                .where(
-                    Branch.workspace_id == ctx.workspace.id,
-                    Branch.is_active.is_(True),
-                )
-                .order_by(Branch.name)
-            )
-        )
+        rows = _active_branches(ctx)
         branches = [
             {
                 "branch_id": str(row.id),
                 "name": row.name,
                 "phone": row.phone,
-                "address": ", ".join(
-                    part
-                    for part in [row.address_line1, row.address_line2, row.city, row.state]
-                    if part
-                )
-                or None,
+                "address": _branch_display_address(row),
                 "timezone": row.timezone or ctx.workspace.timezone,
             }
             for row in rows
@@ -547,49 +951,80 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
 
     @tool
     def get_booking_options(
-        service_search: str,
         booking_date: str,
-        not_before_time: str = "",
-        not_after_time: str = "",
+        service_id: str = "",
         branch_id: str = "",
         doctor_id: str = "",
+        requested_start_time: str = "",
+        not_before_time: str = "",
+        not_after_time: str = "",
+        service_search: str = "",
+        branch_search: str = "",
+        doctor_search: str = "",
     ) -> str:
         """High-level booking discovery tool.
 
         Prefer this tool for requests like:
-        - "عايزة أحجز ليزر بكرة بعد 6"
-        - "فيه مواعيد ليزر بكرة من 8 لحد 9؟"
+        - "عايزة أحجز ليزر بكرة الساعة 6" => requested_start_time="18:00"
+        - "عايزة أحجز ليزر بكرة بعد 6" => not_before_time="18:00"
+        - "فيه مواعيد ليزر بكرة من 8 لحد 9؟" => both time bounds
 
-        It resolves the service, branch, and real availability in one tool call
-        whenever the workspace data is unambiguous.
+        Exact requested starts are separate from broad time windows. Never encode
+        an exact start by setting not_before_time == not_after_time.
 
-        If more than one service or branch matches, it returns a small set of
-        choices instead of guessing.
+        In the grounded runtime, service_id / branch_id / doctor_id are canonical
+        PostgreSQL IDs selected by the LLM from the catalog snapshot. Exact IDs
+        bypass all text lookup logic. Legacy *_search fields remain only for the
+        rollback path and are not used by the grounded unified customer runtime.
         """
         inputs = {
+            "service_id": service_id,
             "service_search": service_search,
             "booking_date": booking_date,
+            "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
             "not_after_time": not_after_time,
             "branch_id": branch_id,
             "doctor_id": doctor_id,
+            "branch_search": branch_search,
+            "doctor_search": doctor_search,
         }
 
         try:
             requested_date = date.fromisoformat(booking_date)
+            requested_start = (
+                time.fromisoformat(requested_start_time)
+                if requested_start_time
+                else None
+            )
             lower_bound = time.fromisoformat(not_before_time) if not_before_time else None
             upper_bound = time.fromisoformat(not_after_time) if not_after_time else None
 
             if lower_bound and upper_bound and lower_bound > upper_bound:
                 raise ValueError("not_before_time cannot be later than not_after_time.")
 
-            services = _service_matches(ctx, service_search)
+            if service_id:
+                service_uuid = _uuid(service_id, "service_id")
+                service = ctx.db.scalar(
+                    select(Service).where(
+                        Service.workspace_id == ctx.workspace.id,
+                        Service.id == service_uuid,
+                        Service.is_active.is_(True),
+                    )
+                )
+                services = [service] if service is not None else []
+            elif service_search.strip():
+                services = _service_matches(ctx, service_search)
+            else:
+                services = []
+
             if not services:
                 payload = {
                     "ok": False,
                     "reason": "service_not_found",
-                    "message": "No active service matched the customer's request.",
-                    "service_search": service_search,
+                    "message": "No active service matched the grounded selection.",
+                    "service_id": service_id or None,
+                    "service_search": service_search or None,
                 }
                 _record_action(
                     ctx,
@@ -628,17 +1063,43 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
 
             service = services[0]
 
-            branches = _active_branches(ctx)
             if branch_id:
                 branch_uuid = _uuid(branch_id, "branch_id")
-                branches = [branch for branch in branches if branch.id == branch_uuid]
+                selected_branch = ctx.db.scalar(
+                    select(Branch).where(
+                        Branch.workspace_id == ctx.workspace.id,
+                        Branch.id == branch_uuid,
+                        Branch.is_active.is_(True),
+                        *([Branch.id == ctx.workspace.primary_branch_id] if ctx.workspace.primary_branch_id else []),
+                    )
+                )
+                branches = [selected_branch] if selected_branch is not None else []
                 if not branches:
                     raise BookingRuleError("Branch not found or inactive.")
-            elif ctx.patient.preferred_branch_id:
+            else:
+                branches = _active_branches(ctx)
+
+            if not branch_id and branch_search.strip():
+                branches = _resolve_branch_by_search(branches, branch_search)
+                if not branches:
+                    payload = {
+                        "ok": False,
+                        "reason": "branch_not_found",
+                        "message": "No active branch matched the customer's requested branch.",
+                        "branch_search": branch_search,
+                    }
+                    _record_action(
+                        ctx,
+                        tool_name="get_booking_options",
+                        action_type="booking_discovery",
+                        status="success",
+                        input_payload=inputs,
+                        output_payload=payload,
+                    )
+                    return _json(payload)
+            elif not branch_id and ctx.patient.preferred_branch_id:
                 preferred = [
-                    branch
-                    for branch in branches
-                    if branch.id == ctx.patient.preferred_branch_id
+                    branch for branch in branches if branch.id == ctx.patient.preferred_branch_id
                 ]
                 if preferred:
                     branches = preferred
@@ -672,7 +1133,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                             "branch_id": str(branch.id),
                             "branch_name": branch.name,
                             "city": branch.city,
-                            "address": branch.address,
+                            "address": _branch_display_address(branch),
                         }
                         for branch in branches[:8]
                     ],
@@ -689,13 +1150,84 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
 
             branch = branches[0]
             doctor_uuid = _uuid(doctor_id, "doctor_id") if doctor_id else None
+            selected_doctor: dict[str, str | None] | None = None
+
+            if doctor_uuid is None and doctor_search.strip():
+                doctor_rows = _active_booking_doctor_rows(
+                    ctx,
+                    branch_id=branch.id,
+                    service_id=service.id,
+                )
+                matches = _resolve_doctor_rows_by_search(doctor_rows, doctor_search)
+
+                if not matches:
+                    payload = {
+                        "ok": False,
+                        "reason": "doctor_not_found",
+                        "message": (
+                            "No active bookable doctor matched the customer's requested doctor "
+                            "for this branch and service."
+                        ),
+                        "doctor_search": doctor_search,
+                    }
+                    _record_action(
+                        ctx,
+                        tool_name="get_booking_options",
+                        action_type="booking_discovery",
+                        status="success",
+                        input_payload=inputs,
+                        output_payload=payload,
+                    )
+                    return _json(payload)
+
+                if len(matches) > 1:
+                    payload = {
+                        "ok": True,
+                        "needs_service_choice": False,
+                        "needs_branch_choice": False,
+                        "needs_doctor_choice": True,
+                        "service": {
+                            "service_id": str(service.id),
+                            "service_name": service.name,
+                        },
+                        "branch": {
+                            "branch_id": str(branch.id),
+                            "branch_name": branch.name,
+                        },
+                        "doctors": [
+                            {
+                                "doctor_id": str(doctor.id),
+                                "doctor_name": _doctor_display_name(staff),
+                                "specialization": doctor.specialization,
+                            }
+                            for doctor, staff in matches[:8]
+                        ],
+                    }
+                    _record_action(
+                        ctx,
+                        tool_name="get_booking_options",
+                        action_type="booking_discovery",
+                        status="success",
+                        input_payload=inputs,
+                        output_payload=payload,
+                    )
+                    return _json(payload)
+
+                doctor, staff = matches[0]
+                doctor_uuid = doctor.id
+                selected_doctor = {
+                    "doctor_id": str(doctor.id),
+                    "doctor_name": _doctor_display_name(staff),
+                    "specialization": doctor.specialization,
+                }
 
             availability = _availability_payload(
                 ctx,
-                branch=branch,
-                service=service,
+                branch_id=str(branch.id),
+                service_id=str(service.id),
                 booking_date=requested_date,
-                doctor_id=doctor_uuid,
+                doctor_id=str(doctor_uuid) if doctor_uuid is not None else None,
+                requested_start=requested_start,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
             )
@@ -704,6 +1236,8 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 "ok": True,
                 "needs_service_choice": False,
                 "needs_branch_choice": False,
+                "needs_doctor_choice": False,
+                "doctor": selected_doctor,
                 "requested_time_window": {
                     "not_before_time": not_before_time or None,
                     "not_after_time": not_after_time or None,
@@ -736,61 +1270,65 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     @tool
     def get_reschedule_options(
         booking_date: str,
+        service_id: str = "",
         service_search: str = "",
+        requested_start_time: str = "",
         not_before_time: str = "",
         not_after_time: str = "",
     ) -> str:
         """High-level rescheduling discovery tool.
 
         Prefer this tool when the customer wants to move an existing appointment.
-        It finds the customer's upcoming appointment and available replacement
-        slots in one tool call.
-
-        If multiple appointments match, it returns choices instead of guessing.
+        Appointment reads and replacement availability both cross the ClinicAdapter
+        boundary, so the tool never depends on the native Appointment table.
         """
         inputs = {
             "booking_date": booking_date,
+            "service_id": service_id,
             "service_search": service_search,
+            "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
             "not_after_time": not_after_time,
         }
 
         try:
             requested_date = date.fromisoformat(booking_date)
+            requested_start = (
+                time.fromisoformat(requested_start_time)
+                if requested_start_time
+                else None
+            )
             lower_bound = time.fromisoformat(not_before_time) if not_before_time else None
             upper_bound = time.fromisoformat(not_after_time) if not_after_time else None
 
             if lower_bound and upper_bound and lower_bound > upper_bound:
                 raise ValueError("not_before_time cannot be later than not_after_time.")
 
-            stmt = (
-                select(Appointment)
-                .join(
-                    Service,
-                    (Service.workspace_id == Appointment.workspace_id)
-                    & (Service.id == Appointment.service_id),
-                )
-                .where(
-                    Appointment.workspace_id == ctx.workspace.id,
-                    Appointment.patient_id == ctx.patient.id,
-                    Appointment.status.in_(("pending", "confirmed")),
-                    Appointment.start_at >= datetime.now(timezone.utc) - timedelta(hours=6),
-                )
-                .order_by(Appointment.start_at)
-            )
+            appointment_result = _adapter_patient_appointments(ctx, include_past=False)
+            appointments = [
+                appointment
+                for appointment in appointment_result.appointments
+                if appointment.status in {"pending", "confirmed"}
+            ]
 
-            if service_search.strip():
-                pattern = f"%{service_search.strip()}%"
-                stmt = stmt.where(
-                    or_(
-                        Service.name.ilike(pattern),
-                        Service.category.ilike(pattern),
-                        Service.description.ilike(pattern),
-                    )
-                )
+            if service_id:
+                appointments = [
+                    appointment
+                    for appointment in appointments
+                    if appointment.service_id == service_id
+                ]
+            elif service_search.strip():
+                # Legacy rollback path only. Grounded unified turns pass service_id.
+                matching_service_ids = {
+                    str(service.id) for service in _service_matches(ctx, service_search)
+                }
+                appointments = [
+                    appointment
+                    for appointment in appointments
+                    if appointment.service_id in matching_service_ids
+                ]
 
-            appointments = list(ctx.db.scalars(stmt.limit(10)))
-
+            appointments = appointments[:10]
             if not appointments:
                 payload = {
                     "ok": False,
@@ -812,7 +1350,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     "ok": True,
                     "needs_appointment_choice": True,
                     "appointments": [
-                        _appointment_summary(ctx, appointment)
+                        _canonical_appointment_summary(appointment)
                         for appointment in appointments[:8]
                     ],
                 }
@@ -827,40 +1365,22 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 return _json(payload)
 
             current = appointments[0]
-            branch = ctx.db.scalar(
-                select(Branch).where(
-                    Branch.workspace_id == ctx.workspace.id,
-                    Branch.id == current.branch_id,
-                    Branch.is_active.is_(True),
-                )
-            )
-            service = ctx.db.scalar(
-                select(Service).where(
-                    Service.workspace_id == ctx.workspace.id,
-                    Service.id == current.service_id,
-                    Service.is_active.is_(True),
-                )
-            )
-            if branch is None or service is None:
-                raise BookingRuleError(
-                    "The current appointment's branch or service is no longer active."
-                )
-
             availability = _availability_payload(
                 ctx,
-                branch=branch,
-                service=service,
+                branch_id=current.branch_id,
+                service_id=current.service_id,
                 booking_date=requested_date,
                 doctor_id=current.doctor_id,
+                requested_start=requested_start,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
-                exclude_appointment_id=current.id,
+                exclude_appointment_id=current.appointment_id,
             )
 
             payload = {
                 "ok": True,
                 "needs_appointment_choice": False,
-                "current_appointment": _appointment_summary(ctx, current),
+                "current_appointment": _canonical_appointment_summary(current),
                 "requested_time_window": {
                     "not_before_time": not_before_time or None,
                     "not_after_time": not_after_time or None,
@@ -874,7 +1394,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 status="success",
                 input_payload=inputs,
                 output_payload=payload,
-                appointment_id=current.id,
+                appointment_id=_native_action_appointment_id(current.appointment_id),
             )
             return _json(payload)
 
@@ -897,6 +1417,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         service_id: str,
         booking_date: str,
         doctor_id: str = "",
+        requested_start_time: str = "",
         not_before_time: str = "",
         not_after_time: str = "",
     ) -> str:
@@ -906,8 +1427,10 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         IDs must come from clinic tools.
 
         IMPORTANT time rule:
-        - If the customer says "بعد 6 مساءً" / "from 6 PM", pass not_before_time="18:00".
+        - Exact "at 6 PM" / "الساعة 6" => requested_start_time="18:00".
+        - "بعد 6 مساءً" / "from 6 PM" => not_before_time="18:00".
         - If the customer gives an upper time limit, pass not_after_time in local 24-hour HH:MM.
+        - Never encode an exact start as equal lower/upper bounds.
         - Do not fetch unfiltered slots and then guess whether a requested time window is available.
         """
         inputs = {
@@ -915,29 +1438,29 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
             "service_id": service_id,
             "booking_date": booking_date,
             "doctor_id": doctor_id,
+            "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
             "not_after_time": not_after_time,
         }
         try:
-            branch_uuid = _uuid(branch_id, "branch_id")
-            service_uuid = _uuid(service_id, "service_id")
-            doctor_uuid = _uuid(doctor_id, "doctor_id") if doctor_id else None
             requested_date = date.fromisoformat(booking_date)
 
+            requested_start = time.fromisoformat(requested_start_time) if requested_start_time else None
             lower_bound = time.fromisoformat(not_before_time) if not_before_time else None
             upper_bound = time.fromisoformat(not_after_time) if not_after_time else None
 
             if lower_bound and upper_bound and lower_bound > upper_bound:
                 raise ValueError("not_before_time cannot be later than not_after_time.")
 
-            timezone_name, slots = calculate_availability(
-                db=ctx.db,
-                workspace=ctx.workspace,
-                branch_id=branch_uuid,
-                service_id=service_uuid,
+            availability = _adapter_availability(
+                ctx,
+                branch_id=branch_id,
+                service_id=service_id,
                 booking_date=requested_date,
-                doctor_id=doctor_uuid,
+                doctor_id=doctor_id or None,
             )
+            timezone_name = availability.timezone
+            slots = list(availability.slots)
             tz = ZoneInfo(timezone_name)
 
             filtered_slots = _filter_slots_by_local_window(
@@ -946,28 +1469,24 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
             )
-
-            branch_name, service_name, doctor_names = _availability_display_context(
-                ctx,
-                branch_id=branch_uuid,
-                service_id=service_uuid,
-                doctor_ids={slot.doctor_id for slot, _ in filtered_slots},
-            )
+            if requested_start is not None:
+                filtered_slots = [
+                    (slot, local_start)
+                    for slot, local_start in filtered_slots
+                    if local_start.timetz().replace(tzinfo=None) == requested_start
+                ]
 
             result_slots = []
             for slot, local_start in filtered_slots[:12]:
                 local_end = slot.end_at.astimezone(tz)
                 result_slots.append(
                     {
-                        "branch_id": str(slot.branch_id),
-                        "branch_name": branch_name,
-                        "doctor_id": str(slot.doctor_id),
-                        "doctor_name": doctor_names.get(
-                            slot.doctor_id,
-                            "الدكتور المتاح",
-                        ),
-                        "service_id": str(slot.service_id),
-                        "service_name": service_name,
+                        "branch_id": slot.branch_id,
+                        "branch_name": slot.branch_name,
+                        "doctor_id": slot.doctor_id,
+                        "doctor_name": slot.doctor_name or "الدكتور المتاح",
+                        "service_id": slot.service_id,
+                        "service_name": slot.service_name,
                         "start_local": local_start.isoformat(),
                         "end_local": local_end.isoformat(),
                         "start_time_24h": local_start.strftime("%H:%M"),
@@ -981,6 +1500,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 "ok": True,
                 "date": booking_date,
                 "timezone": timezone_name,
+                "requested_start_time": requested_start_time or None,
                 "requested_time_window": {
                     "not_before_time": not_before_time or None,
                     "not_after_time": not_after_time or None,
@@ -1014,17 +1534,10 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     @tool
     def get_customer_appointments(include_past: bool = False) -> str:
         """Get the current customer's real appointments. Use before answering questions about their bookings."""
-        stmt = select(Appointment).where(
-            Appointment.workspace_id == ctx.workspace.id,
-            Appointment.patient_id == ctx.patient.id,
-        )
-        if not include_past:
-            stmt = stmt.where(
-                Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
-                Appointment.start_at >= datetime.now(timezone.utc) - timedelta(hours=6),
-            )
-        rows = list(ctx.db.scalars(stmt.order_by(Appointment.start_at).limit(30)))
-        appointments = [_appointment_summary(ctx, row) for row in rows]
+        result = _adapter_patient_appointments(ctx, include_past=include_past)
+        appointments = [
+            _canonical_appointment_summary(row) for row in result.appointments
+        ]
         payload = {"ok": True, "appointments": appointments}
         _record_action(
             ctx,
@@ -1037,112 +1550,103 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         return _json(payload)
 
     @tool
+    def get_customer_packages(service_id: str = "") -> str:
+        """List this customer's prepaid packages and remaining sessions. Use when the customer asks to use a package or bundle."""
+        parsed_service_id = _uuid(service_id, "service_id") if service_id.strip() else None
+        packages = list_patient_packages(
+            ctx.db,
+            workspace_id=ctx.workspace.id,
+            patient_id=ctx.patient.id,
+            service_id=parsed_service_id,
+            usable_only=False,
+        )
+        payload = {
+            "ok": True,
+            "packages": [item.model_dump(mode="json") for item in packages],
+        }
+        _record_action(
+            ctx,
+            tool_name="get_customer_packages",
+            action_type="package_read",
+            status="success",
+            input_payload={"service_id": service_id or None},
+            output_payload=payload,
+        )
+        return _json(payload)
+
+
+    @tool
     def book_appointment(
         branch_id: str,
         service_id: str,
         doctor_id: str,
         start_at: str,
         customer_note: str = "",
+        patient_package_id: str = "",
     ) -> str:
         """Create a real appointment after the customer has clearly chosen an exact offered slot.
 
-Use the INTERNAL OPERATIONAL CONTEXT from the previous availability call when the customer says
-things like "احجزلي الساعة 7 من المواعيد اللي عرضتها". Reuse the hidden branch_id/service_id/
-doctor_id/start_local values from that offered slot; never ask the customer for internal IDs.
-The slot is revalidated against PostgreSQL before the appointment is created."""
+        The selected canonical IDs and exact start are passed to the clinic adapter,
+        which must revalidate the slot against the clinic source of truth before writing.
+        """
         inputs = {
             "branch_id": branch_id,
             "service_id": service_id,
             "doctor_id": doctor_id,
             "start_at": start_at,
             "customer_note": customer_note,
+            "patient_package_id": patient_package_id or None,
         }
         try:
             if ctx.patient.status == "blocked":
                 raise BookingRuleError("This customer is blocked from new appointments.")
-            branch_uuid = _uuid(branch_id, "branch_id")
-            service_uuid = _uuid(service_id, "service_id")
-            doctor_uuid = _uuid(doctor_id, "doctor_id")
             requested_start = datetime.fromisoformat(start_at)
             if requested_start.tzinfo is None or requested_start.utcoffset() is None:
-                raise ValueError("start_at must include the timezone offset from availability results.")
-
-            slot = find_exact_slot(
-                db=ctx.db,
-                workspace=ctx.workspace,
-                branch_id=branch_uuid,
-                service_id=service_uuid,
-                doctor_id=doctor_uuid,
-                requested_start_at=requested_start,
-            )
-            settings = get_effective_booking_settings(ctx.db, ctx.workspace.id)
-            initial_status = "pending" if settings.require_confirmation else "confirmed"
-
-            lead = ctx.db.scalar(
-                select(Lead)
-                .where(
-                    Lead.workspace_id == ctx.workspace.id,
-                    Lead.patient_id == ctx.patient.id,
-                    Lead.status.notin_(("lost", "spam", "won")),
-                    or_(Lead.service_id == service_uuid, Lead.service_id.is_(None)),
+                raise ValueError(
+                    "start_at must include the timezone offset from availability results."
                 )
-                .order_by(Lead.created_at.desc())
-                .limit(1)
-            )
 
-            appointment = Appointment(
-                workspace_id=ctx.workspace.id,
-                patient_id=ctx.patient.id,
-                branch_id=branch_uuid,
-                doctor_id=doctor_uuid,
-                service_id=service_uuid,
-                lead_id=lead.id if lead else None,
-                created_by_user_id=None,
-                status=initial_status,
-                source="ai",
-                start_at=slot.start_at,
-                end_at=slot.end_at,
-                busy_start_at=slot.busy_start_at,
-                busy_end_at=slot.busy_end_at,
-                duration_minutes=slot.duration_minutes,
-                price_minor=slot.price_minor,
-                currency=slot.currency,
-                customer_note=customer_note.strip() or None,
-                idempotency_key=(
-                    f"agent:{ctx.run_id}:book:{ctx.patient.id}:{doctor_uuid}:{slot.start_at.isoformat()}"
-                )[:128],
-                confirmed_at=datetime.now(timezone.utc) if initial_status == "confirmed" else None,
+            adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+            adapter.require_capability(ClinicCapability.APPOINTMENTS_CREATE)
+            result = adapter.create_appointment(
+                CreateAppointmentRequest(
+                    patient_id=str(ctx.patient.id),
+                    branch_id=branch_id,
+                    service_id=service_id,
+                    doctor_id=doctor_id,
+                    start_at=requested_start,
+                    operation_id=str(ctx.run_id),
+                    customer_note=customer_note,
+                    patient_package_id=patient_package_id.strip() or None,
+                )
             )
-            ctx.db.add(appointment)
-            ctx.db.flush()
-            _history(
-                ctx,
-                appointment,
-                from_status=None,
-                to_status=initial_status,
-                reason="appointment_created_by_ai",
-            )
-            if lead is not None:
-                if lead.service_id is None:
-                    lead.service_id = service_uuid
-                lead.status = "booked"
-            ctx.db.add(
-                AgentAction(
+            try:
+                local_appointment_id = UUID(str(result.appointment.appointment_id))
+            except (TypeError, ValueError):
+                local_appointment_id = None
+            if local_appointment_id is not None:
+                record_direct_campaign_booking_conversion(
+                    ctx.db,
                     workspace_id=ctx.workspace.id,
-                    conversation_id=ctx.conversation.id,
                     patient_id=ctx.patient.id,
-                    appointment_id=appointment.id,
-                    run_id=ctx.run_id,
-                    tool_name="book_appointment",
-                    action_type="appointment_create",
-                    status="success",
-                    input_json=inputs,
-                    output_json={"appointment_id": str(appointment.id), "status": initial_status},
+                    conversation_id=ctx.conversation.id,
+                    appointment_id=local_appointment_id,
                 )
+            payload = {
+                "ok": True,
+                "appointment": _canonical_appointment_summary(result.appointment),
+            }
+            _record_action(
+                ctx,
+                tool_name="book_appointment",
+                action_type="appointment_create",
+                status="success",
+                input_payload=inputs,
+                output_payload=payload,
+                appointment_id=_native_action_appointment_id(
+                    result.appointment.appointment_id
+                ),
             )
-            ctx.db.commit()
-            ctx.db.refresh(appointment)
-            payload = {"ok": True, "appointment": _appointment_summary(ctx, appointment)}
             return _json(payload)
         except (ValueError, BookingRuleError, IntegrityError) as exc:
             ctx.db.rollback()
@@ -1163,59 +1667,31 @@ The slot is revalidated against PostgreSQL before the appointment is created."""
         """Confirm one of the current customer's pending appointments."""
         inputs = {"appointment_id": appointment_id}
         try:
-            appointment_uuid = _uuid(appointment_id, "appointment_id")
-            appointment = ctx.db.scalar(
-                select(Appointment).where(
-                    Appointment.workspace_id == ctx.workspace.id,
-                    Appointment.patient_id == ctx.patient.id,
-                    Appointment.id == appointment_uuid,
+            adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+            adapter.require_capability(ClinicCapability.APPOINTMENTS_CONFIRM)
+            result = adapter.confirm_appointment(
+                ConfirmAppointmentRequest(
+                    patient_id=str(ctx.patient.id),
+                    appointment_id=appointment_id,
+                    operation_id=str(ctx.run_id),
                 )
             )
-            if appointment is None:
-                raise ValueError("Appointment not found for this customer.")
-            if appointment.status == "confirmed":
-                payload = {"ok": True, "appointment": _appointment_summary(ctx, appointment)}
-                _record_action(
-                    ctx,
-                    tool_name="confirm_appointment",
-                    action_type="appointment_confirm",
-                    status="success",
-                    input_payload=inputs,
-                    output_payload=payload,
-                    appointment_id=appointment.id,
-                )
-                return _json(payload)
-            if appointment.status != "pending":
-                raise BookingRuleError(
-                    f"Cannot confirm an appointment with status '{appointment.status}'."
-                )
-            old_status = appointment.status
-            appointment.status = "confirmed"
-            appointment.confirmed_at = datetime.now(timezone.utc)
-            _history(
+            payload = {
+                "ok": True,
+                "appointment": _canonical_appointment_summary(result.appointment),
+            }
+            _record_action(
                 ctx,
-                appointment,
-                from_status=old_status,
-                to_status="confirmed",
-                reason="appointment_confirmed_by_ai",
+                tool_name="confirm_appointment",
+                action_type="appointment_confirm",
+                status="success",
+                input_payload=inputs,
+                output_payload=payload,
+                appointment_id=_native_action_appointment_id(
+                    result.appointment.appointment_id
+                ),
             )
-            ctx.db.add(
-                AgentAction(
-                    workspace_id=ctx.workspace.id,
-                    conversation_id=ctx.conversation.id,
-                    patient_id=ctx.patient.id,
-                    appointment_id=appointment.id,
-                    run_id=ctx.run_id,
-                    tool_name="confirm_appointment",
-                    action_type="appointment_confirm",
-                    status="success",
-                    input_json=inputs,
-                    output_json={"appointment_id": str(appointment.id), "status": "confirmed"},
-                )
-            )
-            ctx.db.commit()
-            ctx.db.refresh(appointment)
-            return _json({"ok": True, "appointment": _appointment_summary(ctx, appointment)})
+            return _json(payload)
         except (ValueError, BookingRuleError) as exc:
             ctx.db.rollback()
             payload = {"ok": False, "error": str(exc)}
@@ -1234,87 +1710,65 @@ The slot is revalidated against PostgreSQL before the appointment is created."""
     def cancel_appointment(appointment_id: str, reason: str = "") -> str:
         """Cancel the current customer's appointment when clinic policy allows it.
 
-Reason is optional. Do not make the customer provide a reason before cancellation.
-If they do not give one, use "customer_requested".
-Never override cancellation policy."""
+        Reason is optional. The clinic adapter owns cancellation policy; if staff
+        approval is required, the tool converts that decision into Tia handoff state.
+        """
         reason = reason.strip() or "customer_requested"
         inputs = {"appointment_id": appointment_id, "reason": reason}
         try:
-            appointment_uuid = _uuid(appointment_id, "appointment_id")
-            appointment = ctx.db.scalar(
-                select(Appointment).where(
-                    Appointment.workspace_id == ctx.workspace.id,
-                    Appointment.patient_id == ctx.patient.id,
-                    Appointment.id == appointment_uuid,
+            adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+            adapter.require_capability(ClinicCapability.APPOINTMENTS_CANCEL)
+            result = adapter.cancel_appointment(
+                CancelAppointmentRequest(
+                    patient_id=str(ctx.patient.id),
+                    appointment_id=appointment_id,
+                    operation_id=str(ctx.run_id),
+                    reason=reason,
                 )
             )
-            if appointment is None:
-                raise ValueError("Appointment not found for this customer.")
-            if appointment.status == "cancelled":
-                payload = {"ok": True, "appointment": _appointment_summary(ctx, appointment)}
-                _record_action(
-                    ctx,
-                    tool_name="cancel_appointment",
-                    action_type="appointment_cancel",
-                    status="success",
-                    input_payload=inputs,
-                    output_payload=payload,
-                    appointment_id=appointment.id,
-                )
-                return _json(payload)
-            if appointment.status in {"completed", "no_show", "rescheduled"}:
-                raise BookingRuleError(
-                    f"Cannot cancel an appointment with status '{appointment.status}'."
-                )
-            now = datetime.now(timezone.utc)
-            settings = get_effective_booking_settings(ctx.db, ctx.workspace.id)
-            if appointment.start_at - now < timedelta(minutes=settings.cancellation_notice_minutes):
-                _set_handoff(ctx)
-                payload = {
-                    "ok": False,
-                    "requires_human": True,
-                    "error": "Cancellation is inside the clinic notice window and needs staff approval.",
-                }
-                _record_action(
-                    ctx,
-                    tool_name="cancel_appointment",
-                    action_type="appointment_cancel",
-                    status="blocked",
-                    input_payload=inputs,
-                    output_payload=payload,
-                    appointment_id=appointment.id,
-                    error_message=payload["error"],
-                )
-                return _json(payload)
-
-            old_status = appointment.status
-            appointment.status = "cancelled"
-            appointment.cancelled_at = now
-            appointment.cancellation_reason = reason.strip() or "customer_requested_cancellation"
-            _history(
+            payload = {
+                "ok": True,
+                "appointment": _canonical_appointment_summary(result.appointment),
+            }
+            _record_action(
                 ctx,
-                appointment,
-                from_status=old_status,
-                to_status="cancelled",
-                reason=appointment.cancellation_reason,
+                tool_name="cancel_appointment",
+                action_type="appointment_cancel",
+                status="success",
+                input_payload=inputs,
+                output_payload=payload,
+                appointment_id=_native_action_appointment_id(
+                    result.appointment.appointment_id
+                ),
             )
-            ctx.db.add(
-                AgentAction(
-                    workspace_id=ctx.workspace.id,
-                    conversation_id=ctx.conversation.id,
-                    patient_id=ctx.patient.id,
-                    appointment_id=appointment.id,
-                    run_id=ctx.run_id,
-                    tool_name="cancel_appointment",
-                    action_type="appointment_cancel",
-                    status="success",
-                    input_json=inputs,
-                    output_json={"appointment_id": str(appointment.id), "status": "cancelled"},
-                )
+            return _json(payload)
+        except ClinicActionRequiresHuman as exc:
+            ctx.db.rollback()
+            handoff = _set_handoff(
+                ctx,
+                reason=str(exc) or "Clinic cancellation policy requires staff approval.",
+                category="booking_exception",
+                priority="normal",
             )
-            ctx.db.commit()
-            ctx.db.refresh(appointment)
-            return _json({"ok": True, "appointment": _appointment_summary(ctx, appointment)})
+            payload = {
+                "ok": False,
+                "requires_human": True,
+                "handoff_id": str(handoff.id),
+                "handoff_category": handoff.category,
+                "handoff_priority": handoff.priority,
+                "error": str(exc),
+            }
+            _record_action(
+                ctx,
+                tool_name="cancel_appointment",
+                action_type="appointment_cancel",
+                status="blocked",
+                input_payload=inputs,
+                output_payload=payload,
+                appointment_id=_native_action_appointment_id(exc.appointment_id),
+                error_message=str(exc),
+            )
+            return _json(payload)
         except (ValueError, BookingRuleError) as exc:
             ctx.db.rollback()
             payload = {"ok": False, "error": str(exc)}
@@ -1337,7 +1791,7 @@ Never override cancellation policy."""
         doctor_id: str = "",
         reason: str = "",
     ) -> str:
-        """Reschedule the current customer's pending/confirmed appointment to an exact available slot."""
+        """Reschedule the customer's pending/confirmed appointment to an exact slot."""
         inputs = {
             "appointment_id": appointment_id,
             "start_at": start_at,
@@ -1346,104 +1800,44 @@ Never override cancellation policy."""
             "reason": reason,
         }
         try:
-            appointment_uuid = _uuid(appointment_id, "appointment_id")
-            current = ctx.db.scalar(
-                select(Appointment).where(
-                    Appointment.workspace_id == ctx.workspace.id,
-                    Appointment.patient_id == ctx.patient.id,
-                    Appointment.id == appointment_uuid,
-                )
-            )
-            if current is None:
-                raise ValueError("Appointment not found for this customer.")
-            if current.status not in {"pending", "confirmed"}:
-                raise BookingRuleError(
-                    f"Only pending or confirmed appointments can be rescheduled; current status is '{current.status}'."
-                )
             requested_start = datetime.fromisoformat(start_at)
             if requested_start.tzinfo is None or requested_start.utcoffset() is None:
-                raise ValueError("start_at must include the timezone offset from availability results.")
-            new_branch_id = _uuid(branch_id, "branch_id") if branch_id else current.branch_id
-            new_doctor_id = _uuid(doctor_id, "doctor_id") if doctor_id else current.doctor_id
-            slot = find_exact_slot(
-                db=ctx.db,
-                workspace=ctx.workspace,
-                branch_id=new_branch_id,
-                service_id=current.service_id,
-                doctor_id=new_doctor_id,
-                requested_start_at=requested_start,
-                exclude_appointment_id=current.id,
-            )
-            old_status = current.status
-            old_start = current.start_at
-            replacement = Appointment(
-                workspace_id=ctx.workspace.id,
-                patient_id=current.patient_id,
-                branch_id=new_branch_id,
-                doctor_id=new_doctor_id,
-                service_id=current.service_id,
-                lead_id=current.lead_id,
-                created_by_user_id=None,
-                rescheduled_from_appointment_id=current.id,
-                status=old_status,
-                source="ai",
-                start_at=slot.start_at,
-                end_at=slot.end_at,
-                busy_start_at=slot.busy_start_at,
-                busy_end_at=slot.busy_end_at,
-                duration_minutes=slot.duration_minutes,
-                price_minor=slot.price_minor,
-                currency=slot.currency,
-                customer_note=current.customer_note,
-                idempotency_key=(
-                    f"agent:{ctx.run_id}:reschedule:{current.id}:{new_doctor_id}:{slot.start_at.isoformat()}"
-                )[:128],
-                confirmed_at=datetime.now(timezone.utc) if old_status == "confirmed" else None,
-            )
-            current.status = "rescheduled"
-            ctx.db.flush()
-            ctx.db.add(replacement)
-            ctx.db.flush()
-            _history(
-                ctx,
-                current,
-                from_status=old_status,
-                to_status="rescheduled",
-                reason=reason.strip() or "appointment_rescheduled_by_ai",
-                metadata={
-                    "replacement_appointment_id": str(replacement.id),
-                    "old_start_at": old_start.isoformat(),
-                    "new_start_at": replacement.start_at.isoformat(),
-                },
-            )
-            _history(
-                ctx,
-                replacement,
-                from_status=None,
-                to_status=old_status,
-                reason="rescheduled_from_previous_appointment_by_ai",
-                metadata={"previous_appointment_id": str(current.id)},
-            )
-            ctx.db.add(
-                AgentAction(
-                    workspace_id=ctx.workspace.id,
-                    conversation_id=ctx.conversation.id,
-                    patient_id=ctx.patient.id,
-                    appointment_id=replacement.id,
-                    run_id=ctx.run_id,
-                    tool_name="reschedule_appointment",
-                    action_type="appointment_reschedule",
-                    status="success",
-                    input_json=inputs,
-                    output_json={
-                        "previous_appointment_id": str(current.id),
-                        "replacement_appointment_id": str(replacement.id),
-                    },
+                raise ValueError(
+                    "start_at must include the timezone offset from availability results."
+                )
+
+            adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
+            adapter.require_capability(ClinicCapability.APPOINTMENTS_RESCHEDULE)
+            result = adapter.reschedule_appointment(
+                RescheduleAppointmentRequest(
+                    patient_id=str(ctx.patient.id),
+                    appointment_id=appointment_id,
+                    start_at=requested_start,
+                    operation_id=str(ctx.run_id),
+                    branch_id=branch_id or None,
+                    doctor_id=doctor_id or None,
+                    reason=reason,
                 )
             )
-            ctx.db.commit()
-            ctx.db.refresh(replacement)
-            return _json({"ok": True, "appointment": _appointment_summary(ctx, replacement)})
+            payload = {
+                "ok": True,
+                "appointment": _canonical_appointment_summary(result.appointment),
+            }
+            action_payload = dict(payload)
+            if result.previous_appointment_id:
+                action_payload["previous_appointment_id"] = result.previous_appointment_id
+            _record_action(
+                ctx,
+                tool_name="reschedule_appointment",
+                action_type="appointment_reschedule",
+                status="success",
+                input_payload=inputs,
+                output_payload=action_payload,
+                appointment_id=_native_action_appointment_id(
+                    result.appointment.appointment_id
+                ),
+            )
+            return _json(payload)
         except (ValueError, BookingRuleError, IntegrityError) as exc:
             ctx.db.rollback()
             payload = {"ok": False, "error": str(exc)}
@@ -1459,53 +1853,97 @@ Never override cancellation policy."""
             return _json(payload)
 
     @tool
-    def send_email_to_customer(subject: str, body: str) -> str:
-        """Queue a real transactional Gmail message to the current customer's saved email.
+    def create_follow_up_task(
+        due_at_local: str,
+        title: str = "متابعة مع العميل",
+        note: str = "",
+    ) -> str:
+        """Schedule one automatic Tia follow-up for the current patient.
 
-        Use only when the customer explicitly asks for information to be emailed to
-        themselves. The recipient is always resolved from this patient's CRM profile;
-        this tool cannot send to an arbitrary or third-party address. A successful
-        result means the message was durably queued for the configured n8n Gmail
-        worker, not that Gmail has already delivered it.
+        Use only when the customer clearly asks to be contacted/reminded later, or
+        when the current conversation explicitly agrees on a future follow-up.
+        due_at_local must be a specific future clinic-local datetime such as
+        2026-08-26T15:30. Natural-language interpretation belongs to the model;
+        Python validates the resolved time, patient, conversation, ownership, and
+        idempotency. At the due time Tia composes a fresh natural WhatsApp message
+        from the latest conversation context and sends it through the normal outbox.
         """
-        inputs = {
-            "subject": subject,
-            "body": body,
-        }
+        inputs = {"due_at_local": due_at_local, "title": title, "note": note}
         try:
-            queued = queue_patient_email(
+            raw_due = datetime.fromisoformat(due_at_local.strip())
+            timezone_name = ctx.workspace.timezone or "Africa/Cairo"
+            try:
+                clinic_tz = ZoneInfo(timezone_name)
+            except Exception:
+                clinic_tz = ZoneInfo("Africa/Cairo")
+            due = (
+                raw_due.replace(tzinfo=clinic_tz)
+                if raw_due.tzinfo is None or raw_due.utcoffset() is None
+                else raw_due.astimezone(clinic_tz)
+            )
+            now_local = datetime.now(clinic_tz)
+            if due <= now_local:
+                raise CRMTaskError("Follow-up time must be in the future.")
+            if due > now_local + timedelta(days=366):
+                raise CRMTaskError("Follow-up time cannot be more than 366 days ahead.")
+
+            lead = ctx.db.scalar(
+                select(Lead)
+                .where(
+                    Lead.workspace_id == ctx.workspace.id,
+                    Lead.patient_id == ctx.patient.id,
+                    Lead.status.in_(("new", "contacted", "qualified", "booked")),
+                )
+                .order_by(
+                    Lead.assigned_user_id.is_(None),
+                    Lead.updated_at.desc(),
+                )
+                .limit(1)
+            )
+            task = create_crm_task(
                 ctx.db,
                 workspace_id=ctx.workspace.id,
-                patient=ctx.patient,
-                subject=subject,
-                body=body,
-                sender_type="ai",
-                source="tia_customer_agent",
-                run_id=ctx.run_id,
+                patient_id=ctx.patient.id,
+                lead_id=lead.id if lead else None,
+                conversation_id=ctx.conversation.id,
+                assigned_user_id=None,
+                created_by_user_id=None,
+                task_type="follow_up",
+                priority="normal",
+                title=title,
+                description=note or None,
+                due_at=due,
+                source="ai",
+                execution_mode="ai",
+                dedupe_key=f"agent:{ctx.run_id}:follow_up",
+                commit=False,
             )
             payload = {
                 "ok": True,
-                "queued": True,
-                "recipient_email": ctx.patient.email,
-                "message_id": str(queued.message.id),
-                "dispatch_id": str(queued.dispatch.id),
-                "delivery_status": queued.dispatch.status,
+                "task_id": str(task.id),
+                "task_type": task.task_type,
+                "status": task.status,
+                "due_at": task.due_at.isoformat(),
+                "assigned_user_id": str(task.assigned_user_id) if task.assigned_user_id else None,
+                "execution_mode": task.execution_mode,
+                "title": task.title,
             }
             _record_action(
                 ctx,
-                tool_name="send_email_to_customer",
-                action_type="email_queue",
+                tool_name="create_follow_up_task",
+                action_type="crm_follow_up_create",
                 status="success",
                 input_payload=inputs,
                 output_payload=payload,
             )
             return _json(payload)
-        except OutboundCommunicationError as exc:
+        except (ValueError, CRMTaskError) as exc:
+            ctx.db.rollback()
             payload = {"ok": False, "error": str(exc)}
             _record_action(
                 ctx,
-                tool_name="send_email_to_customer",
-                action_type="email_queue",
+                tool_name="create_follow_up_task",
+                action_type="crm_follow_up_create",
                 status="error",
                 input_payload=inputs,
                 output_payload=payload,
@@ -1514,11 +1952,34 @@ Never override cancellation policy."""
             return _json(payload)
 
     @tool
-    def escalate_to_human(reason: str) -> str:
-        """Hand the conversation to clinic staff for medical, sensitive, complaint, policy, or explicitly requested human support."""
+    def escalate_to_human(
+        reason: str,
+        category: str = "other",
+        priority: str = "normal",
+    ) -> str:
+        """Transfer conversation ownership to clinic staff and create/reuse the human handoff queue item."""
         reason = reason.strip() or "human_handoff_requested"
-        ctx.conversation.status = "pending"
-        payload = {"ok": True, "handoff_required": True, "reason": reason}
+        handoff = create_handoff(
+            ctx.db,
+            workspace_id=ctx.workspace.id,
+            conversation=ctx.conversation,
+            patient=ctx.patient,
+            reason=reason,
+            category=category,
+            priority=priority,
+            source="ai",
+            handoff_context=ctx.handoff_context,
+            commit=False,
+        )
+        payload = {
+            "ok": True,
+            "handoff_required": True,
+            "handoff_id": str(handoff.id),
+            "reason": reason,
+            "category": handoff.category,
+            "priority": handoff.priority,
+            "owner_type": ctx.conversation.owner_type,
+        }
         ctx.db.add(
             AgentAction(
                 workspace_id=ctx.workspace.id,
@@ -1529,7 +1990,11 @@ Never override cancellation policy."""
                 tool_name="escalate_to_human",
                 action_type="human_handoff",
                 status="success",
-                input_json={"reason": reason},
+                input_json={
+                    "reason": reason,
+                    "category": handoff.category,
+                    "priority": handoff.priority,
+                },
                 output_json=payload,
             )
         )
@@ -1538,6 +2003,8 @@ Never override cancellation policy."""
 
     return [
         get_customer_profile,
+        get_customer_history,
+        update_marketing_consent,
         search_services,
         list_branches,
         list_doctors,
@@ -1545,10 +2012,11 @@ Never override cancellation policy."""
         get_reschedule_options,
         get_available_slots,
         get_customer_appointments,
+        get_customer_packages,
         book_appointment,
         confirm_appointment,
         cancel_appointment,
         reschedule_appointment,
-        send_email_to_customer,
+        create_follow_up_task,
         escalate_to_human,
     ]

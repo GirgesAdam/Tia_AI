@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, time
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.clinic import (
     BookingSettingsRead,

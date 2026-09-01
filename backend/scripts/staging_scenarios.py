@@ -3,6 +3,9 @@ from __future__ import annotations
 from uuid import UUID, uuid5
 
 SEED_NAMESPACE = UUID("f99fab0a-17c5-47f3-8916-6b9cb043a3d1")
+REGRESSION_WORKSPACE_ID = uuid5(SEED_NAMESPACE, "workspace:regression")
+REGRESSION_WORKSPACE_SLUG = "tia-regression"
+
 
 MOCK_CHANNEL_TOKEN = "tia_channel_staging_regression_v1"
 MOCK_PAUSED_CHANNEL_TOKEN = "tia_channel_staging_paused_v1"

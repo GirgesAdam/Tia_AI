@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -18,7 +18,7 @@ class FlowStateConflictError(RuntimeError):
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _add_event(
@@ -61,9 +61,7 @@ def get_active_flow(
     if patient_id is not None:
         stmt = stmt.where(ConversationFlowState.patient_id == patient_id)
 
-    flow = db.scalar(
-        stmt.order_by(ConversationFlowState.created_at.desc()).limit(1)
-    )
+    flow = db.scalar(stmt.order_by(ConversationFlowState.created_at.desc()).limit(1))
     if flow is None:
         return None
 
@@ -316,7 +314,6 @@ def record_write_authorized(
     )
 
 
-
 def record_write_completed(
     db: Session,
     flow: ConversationFlowState,
@@ -336,7 +333,6 @@ def record_write_completed(
             "result": result,
         },
     )
-
 
 
 def _action_for_run(
@@ -433,11 +429,8 @@ def sync_flow_from_agent_run(
             "needs_appointment_choice",
         )
     )
-    status = (
-        "awaiting_option_selection"
-        if has_slots and not needs_choice
-        else "collecting_requirements"
-    )
+    has_presented_options = has_slots or needs_choice
+    status = "awaiting_option_selection" if has_presented_options else "collecting_requirements"
 
     entity_state = dict(flow.entity_state or {})
     for key in ("service", "branch", "current_appointment", "date", "requested_time_window"):
@@ -448,9 +441,9 @@ def sync_flow_from_agent_run(
         db,
         flow,
         actor_type="agent",
-        event_type="options_presented" if has_slots else "updated",
+        event_type="options_presented" if has_presented_options else "updated",
         run_id=run_id,
         status=status,
-        option_snapshot=output if has_slots else {},
+        option_snapshot=output if has_presented_options else {},
         entity_state=entity_state,
     )

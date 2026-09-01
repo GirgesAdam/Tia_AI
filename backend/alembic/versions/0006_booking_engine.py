@@ -5,16 +5,17 @@ Revises: 0005_crm_core
 Create Date: 2026-08-12
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
+
 from alembic import op
-from sqlalchemy.dialects.postgresql import ExcludeConstraint, JSONB
 
 revision: str = "0006_booking_engine"
-down_revision: Union[str, Sequence[str], None] = "0005_crm_core"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0005_crm_core"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 BOOKING_TABLES = (
     "appointments",
@@ -81,7 +82,9 @@ def upgrade() -> None:
             "'phone', 'walk_in', 'facebook', 'email', 'other')",
             name=op.f("ck_appointments_appointment_source_valid"),
         ),
-        sa.CheckConstraint("end_at > start_at", name=op.f("ck_appointments_appointment_interval_valid")),
+        sa.CheckConstraint(
+            "end_at > start_at", name=op.f("ck_appointments_appointment_interval_valid")
+        ),
         sa.CheckConstraint(
             "busy_end_at > busy_start_at",
             name=op.f("ck_appointments_appointment_busy_interval_valid"),
@@ -151,9 +154,7 @@ def upgrade() -> None:
             ("workspace_id", "="),
             ("doctor_id", "="),
             (sa.text("tstzrange(busy_start_at, busy_end_at, '[)')"), "&&"),
-            where=sa.text(
-                "status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"
-            ),
+            where=sa.text("status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"),
             using="gist",
             name="excl_appointments_doctor_busy_time",
         ),
@@ -265,7 +266,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_appointment_status_history_created_at", table_name="appointment_status_history")
+    op.drop_index(
+        "ix_appointment_status_history_created_at", table_name="appointment_status_history"
+    )
     op.drop_index(
         "ix_appointment_status_history_changed_by_user_id",
         table_name="appointment_status_history",

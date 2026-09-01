@@ -82,7 +82,7 @@ def get_or_create_doctor(db: Session, workspace: Workspace) -> Doctor:
     if staff is None:
         staff = Staff(
             workspace_id=workspace.id,
-            first_name="دكتور",
+            first_name="طبيب",
             last_name="تجريبي",
             email="demo-doctor@tia.local",
             job_title="Demo Doctor",
@@ -273,7 +273,6 @@ def get_or_create_patient(db: Session, workspace: Workspace, branch: Branch) -> 
             last_name="تجريبي",
             phone=phone,
             phone_normalized=phone,
-            email="demo-customer@tia.local",
             preferred_language="ar",
             preferred_branch_id=branch.id,
             source="website",

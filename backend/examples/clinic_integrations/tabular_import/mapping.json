@@ -1,0 +1,59 @@
+{
+  "services": {
+    "sheet": "prices",
+    "external_id": "Treatment Code",
+    "name": "Item",
+    "duration_minutes": "Minutes",
+    "price": "Cost",
+    "currency": "Currency"
+  },
+  "branches": {
+    "sheet": "locations",
+    "external_id": "Branch Ref",
+    "name": "Clinic Location",
+    "city": "City",
+    "address": "Address",
+    "default_timezone": "Africa/Cairo"
+  },
+  "doctors": {
+    "sheet": "doctors",
+    "external_id": "Doctor Key",
+    "name": "Doctor Display",
+    "specialization": "Specialty",
+    "service_external_ids": "Treatments",
+    "branch_external_ids": "Locations",
+    "delimiter": "|"
+  },
+  "branch_hours": {
+    "sheet": "branch_hours",
+    "branch_external_id": "Branch Ref",
+    "weekday": "Day",
+    "start_time": "From",
+    "end_time": "To"
+  },
+  "doctor_hours": {
+    "sheet": "doctor_hours",
+    "doctor_external_id": "Doctor Key",
+    "branch_external_id": "Branch Ref",
+    "weekday": "Day",
+    "start_time": "From",
+    "end_time": "To"
+  },
+  "appointments": {
+    "sheet": "bookings",
+    "external_id": "Booking Ref",
+    "patient_external_id": "Client Ref",
+    "patient_name": "Client Name",
+    "patient_phone": "Phone",
+    "service_external_id": "Treatment Code",
+    "branch_external_id": "Branch Ref",
+    "doctor_external_id": "Doctor Key",
+    "start_at": "Start ISO",
+    "status": "Status",
+    "status_map": {
+      "OK": "confirmed",
+      "WAIT": "pending"
+    },
+    "default_timezone": "Africa/Cairo"
+  }
+}

@@ -5,16 +5,17 @@ Revises: 0012_conversation_workflows
 Create Date: 2026-08-14
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0013_ai_onboarding_sessions"
-down_revision: Union[str, Sequence[str], None] = "0012_conversation_workflows"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "0012_conversation_workflows"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -203,11 +204,7 @@ def upgrade() -> None:
 
     for table in ("onboarding_ai_sessions", "onboarding_ai_events"):
         op.execute(sa.text(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY'))
-        op.execute(
-            sa.text(
-                f'REVOKE ALL ON TABLE public."{table}" FROM anon, authenticated'
-            )
-        )
+        op.execute(sa.text(f'REVOKE ALL ON TABLE public."{table}" FROM anon, authenticated'))
 
 
 def downgrade() -> None:

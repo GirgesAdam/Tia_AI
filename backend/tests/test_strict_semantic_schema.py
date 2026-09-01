@@ -1,8 +1,8 @@
 from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_router import (
     SemanticCapabilityDecision,
-    SemanticEntityHints,
 )
+from app.agents.turn_interpreter import UnifiedTurnDecision
 
 
 def test_semantic_schema_is_strict_provider_compatible() -> None:
@@ -17,5 +17,11 @@ def test_semantic_schema_is_strict_provider_compatible() -> None:
 
 def test_flow_interpreter_schema_is_strict_provider_compatible() -> None:
     schema = FlowTurnDecision.model_json_schema()
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_unified_turn_schema_is_strict_provider_compatible() -> None:
+    schema = UnifiedTurnDecision.model_json_schema()
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])

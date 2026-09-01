@@ -4,7 +4,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 OnboardingProviderCapability = Literal[
     "branch_configuration",
     "service_configuration",

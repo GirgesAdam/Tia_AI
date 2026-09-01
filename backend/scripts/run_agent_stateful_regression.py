@@ -22,10 +22,10 @@ if str(BACKEND_DIR) not in sys.path:
 from app.core.config import settings
 from app.models.conversation_flow_event import ConversationFlowEvent
 from app.models.conversation_flow_state import ConversationFlowState
-from staging_scenarios import sid
+from staging_scenarios import REGRESSION_WORKSPACE_ID, sid
 
 DEFAULT_EMAIL = "adam1ezzat1@gmail.com"
-DEFAULT_WORKSPACE_ID = "cd044141-edf4-43fc-8783-a9e7e147010b"
+DEFAULT_WORKSPACE_ID = str(REGRESSION_WORKSPACE_ID)
 
 
 def main() -> int:

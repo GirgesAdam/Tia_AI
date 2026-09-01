@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,11 +54,19 @@ class AutomationRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default="false",
     )
     trigger_kind: Mapped[str] = mapped_column(String(40), nullable=False)
-    offset_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    channel: Mapped[str] = mapped_column(String(20), nullable=False, default="whatsapp", server_default="whatsapp")
+    offset_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    channel: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="whatsapp", server_default="whatsapp"
+    )
     template_name: Mapped[str] = mapped_column(String(160), nullable=False)
-    template_language: Mapped[str] = mapped_column(String(20), nullable=False, default="ar", server_default="ar")
-    max_lateness_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30, server_default="30")
+    template_language: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ar", server_default="ar"
+    )
+    max_lateness_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30"
+    )
     config_json: Mapped[dict] = mapped_column(
         "config",
         JSONB,

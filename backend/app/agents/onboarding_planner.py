@@ -6,7 +6,7 @@ from collections import defaultdict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agents.llm_runtime import LLMProviderError
+from app.agents.llm_runtime import LLMProviderError, is_cross_model_failover_eligible
 from app.agents.model_provider import (
     build_onboarding_fallback_model,
     build_onboarding_model,
@@ -23,7 +23,6 @@ from app.schemas.onboarding_ai import (
     OnboardingWorkingHour,
 )
 from app.schemas.onboarding_provider import OnboardingProviderDecision
-
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +101,7 @@ def _provider_to_domain(
     for row in decision.doctors:
         assignments = doctor_branch_rows.get(row.key, [])
         branch_keys = list(dict.fromkeys(item.branch_key for item in assignments))
-        primary_keys = [
-            item.branch_key
-            for item in assignments
-            if item.is_primary
-        ]
+        primary_keys = [item.branch_key for item in assignments if item.is_primary]
         primary_branch_key = primary_keys[0] if primary_keys else None
 
         schedule_groups = [
@@ -129,9 +124,7 @@ def _provider_to_domain(
                 email=row.email,
                 branch_keys=branch_keys,
                 primary_branch_key=primary_branch_key,
-                service_keys=list(
-                    dict.fromkeys(doctor_service_rows.get(row.key, []))
-                ),
+                service_keys=list(dict.fromkeys(doctor_service_rows.get(row.key, []))),
                 apply_working_hours=bool(schedule_groups),
                 working_hours=schedule_groups,
             )
@@ -183,7 +176,7 @@ def _invoke_onboarding_provider_decision(
             messages=messages,
         )
     except LLMProviderError as exc:
-        if exc.status_code is None or exc.status_code < 500:
+        if not is_cross_model_failover_eligible(exc):
             raise
 
         fallback = build_onboarding_fallback_model()

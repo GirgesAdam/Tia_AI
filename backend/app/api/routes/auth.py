@@ -23,6 +23,7 @@ from app.schemas.auth import (
     WorkspaceMemberRead,
     WorkspaceMemberRoleUpdate,
 )
+from app.services.activity import record_activity_event
 from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
 
 router = APIRouter()
@@ -170,6 +171,22 @@ def invite_workspace_member(
                 role=payload.role,
             )
             db.add(membership)
+            db.flush()
+            record_activity_event(
+                db,
+                workspace_id=access.workspace.id,
+                actor_type="staff",
+                actor_user_id=access.user.id,
+                action="workspace.member_added",
+                entity_type="workspace_member",
+                entity_id=membership.id,
+                summary="Workspace member added",
+                metadata={
+                    "target_user_id": existing_user.id,
+                    "role": membership.role,
+                    "invitation_sent": False,
+                },
+            )
             db.commit()
             db.refresh(membership)
             return WorkspaceInvitationRead(
@@ -205,6 +222,22 @@ def invite_workspace_member(
     )
     db.add(membership)
     try:
+        db.flush()
+        record_activity_event(
+            db,
+            workspace_id=access.workspace.id,
+            actor_type="staff",
+            actor_user_id=access.user.id,
+            action="workspace.member_added",
+            entity_type="workspace_member",
+            entity_id=membership.id,
+            summary="Workspace member invited",
+            metadata={
+                "target_user_id": existing_user.id,
+                "role": membership.role,
+                "invitation_sent": True,
+            },
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -240,7 +273,24 @@ def update_workspace_member_role(
     if membership.role == WORKSPACE_ROLE_ADMIN and payload.role != WORKSPACE_ROLE_ADMIN:
         ensure_not_last_admin(db, access.workspace.id, membership)
 
+    previous_role = membership.role
     membership.role = payload.role
+    if membership.role != previous_role:
+        record_activity_event(
+            db,
+            workspace_id=access.workspace.id,
+            actor_type="staff",
+            actor_user_id=access.user.id,
+            action="workspace.member_role_changed",
+            entity_type="workspace_member",
+            entity_id=membership.id,
+            summary="Workspace member role changed",
+            metadata={
+                "target_user_id": membership.user_id,
+                "from_role": previous_role,
+                "to_role": membership.role,
+            },
+        )
     db.commit()
     db.refresh(membership)
     return member_read(membership, membership.user)
@@ -263,6 +313,17 @@ def remove_workspace_member(
 
     ensure_not_last_admin(db, access.workspace.id, membership)
 
+    record_activity_event(
+        db,
+        workspace_id=access.workspace.id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="workspace.member_removed",
+        entity_type="workspace_member",
+        entity_id=membership.id,
+        summary="Workspace member removed",
+        metadata={"target_user_id": membership.user_id, "role": membership.role},
+    )
     db.delete(membership)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

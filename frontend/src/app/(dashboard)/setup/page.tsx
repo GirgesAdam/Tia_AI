@@ -1,31 +1,49 @@
-import { Check, Circle, Settings2 } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, Clock3, Database } from "lucide-react";
+
 import { PageHeader } from "@/components/page-header";
-import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { SetupHoursFields } from "@/components/setup-hours-form";
-import { AIOnboardingPanel } from "@/components/ai-onboarding-panel";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import type { ClinicSetupV2Snapshot } from "@/lib/clinic-setup-v2-types";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
-import type { ClinicSetupSnapshot } from "@/lib/setup-types";
-import { assignDoctorBranch,assignDoctorService,createBranch,createDoctor,createService,saveBookingSettings,saveBranchHours,saveDoctorHours } from "./actions";
+import { ClinicSetupImporter } from "./setup-importer";
 
-const labels:Record<string,string>={branch:"فرع",branch_hours:"مواعيد الفرع",service:"خدمة",doctor:"دكتور",doctor_branch:"ربط الدكتور بالفرع",doctor_service:"ربط الدكتور بالخدمة",doctor_hours:"مواعيد الدكتور",booking_settings:"إعدادات الحجز"};
-const field="mt-1 w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm";
-export default async function SetupPage(){
-  const [setup,ctx]=await Promise.all([tiaRequest<ClinicSetupSnapshot>("/onboarding/setup"),getAppContext()]);
-  const admin=ctx.workspace.role==="admin";
-  return <><PageHeader title="إعداد العيادة" description="كل البيانات اللي الـBooking Engine والـAgent بيعتمدوا عليها."/>
-    {admin&&<AIOnboardingPanel/>}
-    <Card className="mb-6"><CardContent className="p-5"><div className="flex flex-wrap items-center justify-between gap-4"><div><div className="flex items-center gap-2"><b className="text-lg">جاهزية Workspace</b><Badge tone={setup.readiness.ready?"green":"yellow"}>{setup.readiness.ready?"Ready":"Setup required"}</Badge></div><p className="mt-1 text-sm text-[var(--muted)]">{setup.readiness.completed_steps}/{setup.readiness.total_steps} خطوات مكتملة</p></div><div className="text-3xl font-black text-teal-700">{setup.readiness.progress_percent}%</div></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-teal-600" style={{width:`${setup.readiness.progress_percent}%`}}/></div><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{Object.entries(setup.readiness.checks).map(([k,ok])=><div key={k} className="flex items-center gap-2 text-xs font-semibold">{ok?<Check size={16} className="text-emerald-600"/>:<Circle size={16} className="text-amber-500"/>}{labels[k]||k}</div>)}</div></CardContent></Card>
-    {!admin&&<div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">أنت Member: تقدر تشوف الإعدادات، والتعديل متاح للـAdmin فقط.</div>}
-    <div className="grid gap-5 xl:grid-cols-2">
-      <Card><CardHeader><CardTitle>1. الفروع</CardTitle></CardHeader><CardContent><div className="mb-4 space-y-2">{setup.branches.map(x=><div key={x.id} className="rounded-xl bg-[var(--surface-2)] p-3"><b>{x.name}</b><div className="text-xs text-[var(--muted)]">{x.city||"—"} · {x.code}</div></div>)}{!setup.branches.length&&<p className="text-sm text-[var(--muted)]">مفيش فروع لسه.</p>}</div>{admin&&<form action={createBranch} className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold">الاسم<input name="name" required className={field}/></label><label className="text-xs font-bold">Code<input name="code" required className={field} placeholder="cairo"/></label><label className="text-xs font-bold">المدينة<input name="city" className={field}/></label><label className="text-xs font-bold">التليفون<input name="phone" className={field}/></label><label className="text-xs font-bold sm:col-span-2">العنوان<input name="address_line1" className={field}/></label><input type="hidden" name="timezone" value="Africa/Cairo"/><Button className="sm:col-span-2">إضافة فرع</Button></form>}</CardContent></Card>
-      <Card><CardHeader><CardTitle>2. الخدمات</CardTitle></CardHeader><CardContent><div className="mb-4 space-y-2">{setup.services.map(x=><div key={x.id} className="flex justify-between rounded-xl bg-[var(--surface-2)] p-3"><div><b>{x.name}</b><div className="text-xs text-[var(--muted)]">{x.duration_minutes} دقيقة</div></div><b>{(x.price_minor/100).toLocaleString("ar-EG")} {x.currency}</b></div>)}</div>{admin&&<form action={createService} className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold">الاسم<input name="name" required className={field}/></label><label className="text-xs font-bold">Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" className={field}/></label><label className="text-xs font-bold">التصنيف<input name="category" className={field}/></label><label className="text-xs font-bold">المدة بالدقيقة<input type="number" name="duration_minutes" defaultValue="60" min="1" className={field}/></label><label className="text-xs font-bold">السعر بالجنيه<input type="number" name="price_egp" defaultValue="0" min="0" step=".01" className={field}/></label><label className="flex items-center gap-2 pt-6 text-xs font-bold"><input type="checkbox" name="requires_medical_review"/>تحتاج مراجعة طبية</label><input type="hidden" name="buffer_before_minutes" value="0"/><input type="hidden" name="buffer_after_minutes" value="0"/><Button className="sm:col-span-2">إضافة خدمة</Button></form>}</CardContent></Card>
-      <Card><CardHeader><CardTitle>3. الدكاترة والربط</CardTitle></CardHeader><CardContent><div className="mb-4 space-y-2">{setup.doctors.map(x=><div key={x.id} className="rounded-xl bg-[var(--surface-2)] p-3"><b>{x.staff_name}</b><div className="text-xs text-[var(--muted)]">{x.specialization||"بدون تخصص محدد"}</div></div>)}</div>{admin&&<><form action={createDoctor} className="grid gap-3 sm:grid-cols-2"><input name="first_name" required placeholder="الاسم الأول" className={field}/><input name="last_name" required placeholder="اسم العائلة" className={field}/><input name="specialization" placeholder="التخصص" className={field}/><input name="license_number" placeholder="رقم الترخيص - اختياري" className={field}/><input name="phone" placeholder="التليفون" className={field}/><input name="email" placeholder="الإيميل" className={field}/><Button className="sm:col-span-2">إضافة دكتور</Button></form>{setup.doctors.length>0&&setup.branches.length>0&&<form action={assignDoctorBranch} className="mt-5 grid gap-2 sm:grid-cols-2"><select name="doctor_id" className={field}>{setup.doctors.map(d=><option key={d.id} value={d.id}>{d.staff_name}</option>)}</select><select name="branch_id" className={field}>{setup.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select><label className="flex items-center gap-2 text-xs"><input type="checkbox" name="is_primary"/>فرع أساسي</label><Button size="sm">ربط بالفرع</Button></form>}{setup.doctors.length>0&&setup.services.length>0&&<form action={assignDoctorService} className="mt-3 grid gap-2 sm:grid-cols-2"><select name="doctor_id" className={field}>{setup.doctors.map(d=><option key={d.id} value={d.id}>{d.staff_name}</option>)}</select><select name="service_id" className={field}>{setup.services.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><Button size="sm" className="sm:col-span-2">ربط بالخدمة</Button></form>}</>}</CardContent></Card>
-      <Card><CardHeader><CardTitle>4. إعدادات الحجز</CardTitle></CardHeader><CardContent>{admin?<form action={saveBookingSettings} className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold">Slot interval<input type="number" name="slot_interval_minutes" defaultValue={setup.booking_settings?.slot_interval_minutes||15} className={field}/></label><label className="text-xs font-bold">Minimum notice بالدقيقة<input type="number" name="minimum_notice_minutes" defaultValue={setup.booking_settings?.minimum_notice_minutes||60} className={field}/></label><label className="text-xs font-bold">Booking horizon بالأيام<input type="number" name="booking_horizon_days" defaultValue={setup.booking_settings?.booking_horizon_days||90} className={field}/></label><label className="text-xs font-bold">Cancellation notice بالدقيقة<input type="number" name="cancellation_notice_minutes" defaultValue={setup.booking_settings?.cancellation_notice_minutes||720} className={field}/></label><label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="allow_same_day_booking" defaultChecked={setup.booking_settings?.allow_same_day_booking??true}/>Same-day booking</label><label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="require_confirmation" defaultChecked={setup.booking_settings?.require_confirmation??true}/>Require confirmation</label><Button className="sm:col-span-2">حفظ إعدادات الحجز</Button></form>:<pre className="text-xs">{JSON.stringify(setup.booking_settings,null,2)}</pre>}</CardContent></Card>
-      {admin&&setup.branches.length>0&&<Card><CardHeader><CardTitle>5. مواعيد عمل الفرع</CardTitle></CardHeader><CardContent><form action={saveBranchHours} className="space-y-3"><select name="branch_id" className={field}>{setup.branches.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><SetupHoursFields/><Button className="w-full">حفظ مواعيد الفرع</Button></form></CardContent></Card>}
-      {admin&&setup.doctors.length>0&&setup.branches.length>0&&<Card><CardHeader><CardTitle>6. مواعيد عمل الدكتور</CardTitle></CardHeader><CardContent><form action={saveDoctorHours} className="space-y-3"><select name="doctor_id" className={field}>{setup.doctors.map(x=><option key={x.id} value={x.id}>{x.staff_name}</option>)}</select><select name="branch_id" className={field}>{setup.branches.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select><SetupHoursFields/><Button className="w-full">حفظ مواعيد الدكتور</Button></form></CardContent></Card>}
-    </div>
-  </>;
+export default async function SetupPage() {
+  const [setup, ctx] = await Promise.all([
+    tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
+    getAppContext(),
+  ]);
+  const admin = ctx.workspace.role === "admin";
+
+  return (
+    <>
+      <PageHeader
+        title="إعدادات العيادة"
+        description="ارفع Excel أو أدخل البيانات يدويًا، راجعها ثم احفظها قبل الانتقال للخطوة التالية."
+        action={<Link href="/knowledge" className={buttonVariants({ variant: "outline" })}><Database size={16} /> معلومات Tia</Link>}
+      />
+
+      <Card className="mb-5 border-teal-200 bg-teal-50/50">
+        <CardContent className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              {setup.readiness.ready ? <CheckCircle2 size={20} className="text-emerald-700" /> : <Clock3 size={20} className="text-amber-700" />}
+              <b className="text-lg">{setup.readiness.ready ? "Tia جاهزة للحجز" : `اكتمال الإعداد ${setup.readiness.progress_percent}%`}</b>
+              <Badge tone={setup.readiness.ready ? "green" : "yellow"}>{setup.readiness.ready ? "جاهزة" : "إعداد"}</Badge>
+            </div>
+            {!setup.readiness.ready && <p className="mt-2 text-sm text-[var(--muted)]">{setup.readiness.missing.join(" • ")}</p>}
+            <p className="mt-2 text-xs text-[var(--muted)]">الخانات تحت تبدأ فاضية. تقدر تحمل البيانات المحفوظة للتعديل أو ترفع Excel جديد.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {admin ? (
+        <ClinicSetupImporter initialSetup={setup} />
+      ) : (
+        <Card><CardContent className="p-5 text-sm text-[var(--muted)]">إعدادات العيادة متاحة للأدمن فقط.</CardContent></Card>
+      )}
+    </>
+  );
 }

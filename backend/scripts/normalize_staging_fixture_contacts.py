@@ -114,15 +114,9 @@ def normalize(workspace_id: UUID) -> dict[str, int]:
             if row is None:
                 continue
             phone = f"+20000012{index:04d}"
-            email = f"{key}@staging-regression.tia.example"
-            if (
-                row.phone != phone
-                or row.phone_normalized != phone
-                or row.email != email
-            ):
+            if row.phone != phone or row.phone_normalized != phone:
                 row.phone = phone
                 row.phone_normalized = phone
-                row.email = email
                 changed["patients"] += 1
 
         db.commit()

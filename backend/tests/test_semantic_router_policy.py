@@ -36,3 +36,9 @@ def test_medical_risk_collapses_tool_surface_to_handoff() -> None:
         )
     )
     assert policy.allowed_tools == {"escalate_to_human"}
+
+
+def test_followup_request_maps_to_one_backend_validated_write_tool() -> None:
+    policy = resolve_capability_policy(make(["follow_up_request"]))
+    assert policy.allowed_tools == {"create_follow_up_task", "escalate_to_human"}
+    assert policy.write_capabilities == {"follow_up_request"}

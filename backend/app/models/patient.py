@@ -67,7 +67,6 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     phone_normalized: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(32), nullable=True)
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_language: Mapped[str] = mapped_column(
@@ -99,6 +98,11 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     marketing_consent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    source_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
     )
     last_contact_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

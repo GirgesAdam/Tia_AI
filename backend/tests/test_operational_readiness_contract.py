@@ -7,7 +7,7 @@ from app.services.operational_readiness import (
 
 
 def test_release_gate_targets_current_schema_head() -> None:
-    assert EXPECTED_MIGRATION_HEAD == "0013_ai_onboarding_sessions"
+    assert EXPECTED_MIGRATION_HEAD == "0052_payment_reference_constraint_repair"
 
 
 def test_stale_lock_threshold_matches_existing_worker_reclaim_window_or_later() -> None:
@@ -18,9 +18,7 @@ def test_stale_lock_threshold_matches_existing_worker_reclaim_window_or_later() 
 
 def test_operations_endpoint_is_admin_only() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (
-        backend / "app/api/routes/operations.py"
-    ).read_text(encoding="utf-8")
+    source = (backend / "app/api/routes/operations.py").read_text(encoding="utf-8")
 
     assert "get_workspace_admin" in source
     assert 'router.get("/readiness"' in source
@@ -28,9 +26,7 @@ def test_operations_endpoint_is_admin_only() -> None:
 
 def test_readiness_gate_is_read_only() -> None:
     backend = Path(__file__).resolve().parent.parent
-    service = (
-        backend / "app/services/operational_readiness.py"
-    ).read_text(encoding="utf-8")
+    service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     forbidden = (
         "db.commit(",
@@ -46,10 +42,17 @@ def test_readiness_gate_is_read_only() -> None:
 
 def test_provider_readiness_does_not_expose_api_key() -> None:
     backend = Path(__file__).resolve().parent.parent
-    service = (
-        backend / "app/services/operational_readiness.py"
-    ).read_text(encoding="utf-8")
+    service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     assert '"gemini_api_key"' not in service
     assert '"onboarding_primary_model"' in service
     assert '"onboarding_fallback_model"' in service
+
+
+def test_readiness_checks_workspace_clinic_integration() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
+
+    assert 'key="clinic_integration"' in service
+    assert "registered_clinic_adapter_keys()" in service
+    assert 'clinic_integration.status == "active"' in service

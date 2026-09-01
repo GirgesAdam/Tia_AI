@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import (
@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     text,
@@ -28,6 +29,7 @@ CONVERSATION_CHANNELS = (
     "other",
 )
 CONVERSATION_STATUSES = ("open", "pending", "closed")
+CONVERSATION_OWNER_TYPES = ("ai", "human")
 
 
 class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -42,6 +44,14 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "status IN ('open', 'pending', 'closed')",
             name="conversation_status_valid",
+        ),
+        CheckConstraint(
+            "owner_type IN ('ai', 'human')",
+            name="conversation_owner_type_valid",
+        ),
+        CheckConstraint(
+            "unread_count >= 0",
+            name="conversation_unread_count_non_negative",
         ),
         ForeignKeyConstraint(
             ["workspace_id", "patient_id"],
@@ -65,6 +75,13 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ),
         ),
         Index("ix_conversations_workspace_status", "workspace_id", "status"),
+        Index(
+            "ix_conversations_workspace_owner_status",
+            "workspace_id",
+            "owner_type",
+            "status",
+            "last_message_at",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
@@ -85,6 +102,24 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,
         nullable=True,
+    )
+    owner_type: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="ai",
+        server_default="ai",
+    )
+    unread_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    ownership_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     subject: Mapped[str | None] = mapped_column(String(250), nullable=True)
     started_at: Mapped[datetime] = mapped_column(

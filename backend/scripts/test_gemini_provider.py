@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -21,7 +23,9 @@ def main() -> int:
             HumanMessage(
                 content="قولي سعر الليزر وعايز أحجز بكرة بعد الساعة 6"
             )
-        ]
+        ],
+        timezone_name="Africa/Cairo",
+        local_now=datetime.now(ZoneInfo("Africa/Cairo")),
     )
     print("Semantic capabilities:", route.capabilities)
     print("Risk flags:", route.risk_flags)
