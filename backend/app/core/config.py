@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     docs_enabled: bool = True
     log_level: str = "INFO"
 
+    # Recruiter/public demo sandbox. The agent and database writes remain real,
+    # while provider delivery is disabled unless explicitly allowed.
+    demo_mode: bool = False
+    demo_allow_external_dispatch: bool = False
+    demo_agent_hourly_turn_limit: int = Field(default=60, ge=1, le=500)
+
     database_url: str
     migration_database_url: str
 

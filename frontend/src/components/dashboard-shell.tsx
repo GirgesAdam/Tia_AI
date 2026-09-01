@@ -12,10 +12,12 @@ export function DashboardShell({
   children,
   me,
   workspace,
+  demoMode = false,
 }: {
   children: React.ReactNode;
   me: MeResponse;
   workspace: WorkspaceAccess;
+  demoMode?: boolean;
 }) {
   const otherWorkspaces = me.workspaces.filter((item) => item.workspace_id !== workspace.workspace_id);
 
@@ -100,6 +102,11 @@ export function DashboardShell({
           </div>
         </header>
 
+        {demoMode && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950">
+            Admin Demo · كل التعديلات والحجوزات هنا على بيانات تجريبية معزولة، والإرسال الخارجي متوقف.
+          </div>
+        )}
         <main className="mx-auto w-full max-w-[1440px] p-4 pb-24 md:p-6 md:pb-24 lg:p-8 lg:pb-20">{children}</main>
       </div>
     </div>

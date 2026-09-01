@@ -10,6 +10,7 @@ import {
   Inbox,
   ListTodo,
   MessageCircleMore,
+  BotMessageSquare,
   Settings2,
   Sparkles,
   UsersRound,
@@ -18,6 +19,8 @@ import {
 
 import { cn } from "@/lib/utils";
 
+const demoEnabled = process.env.NEXT_PUBLIC_TIA_DEMO_ENABLED === "true";
+
 const primaryItems = [
   { href: "/dashboard", label: "الرئيسية", icon: Sparkles },
   { href: "/inbox", label: "الرسائل", icon: Inbox },
@@ -25,6 +28,7 @@ const primaryItems = [
   { href: "/patients", label: "العملاء", icon: ContactRound },
   { href: "/tasks", label: "المتابعات", icon: ListTodo },
   { href: "/analytics", label: "التقارير", icon: BarChart3 },
+  ...(demoEnabled ? [{ href: "/agent-demo", label: "Test Tia", icon: BotMessageSquare }] : []),
 ] as const;
 
 const adminItems = [

@@ -25,7 +25,7 @@ from app.models.workspace_member import WorkspaceMember
 from app.schemas.operations import OperationalCheck, WorkspaceOperationalReadiness
 from app.integrations.clinic.registry import registered_clinic_adapter_keys
 
-EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"
+EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"
 STALE_LOCK_MINUTES = 15
 AUTOMATION_WORKER_HEARTBEAT_MINUTES = 5
 TEST_RULE_KEY_PREFIXES = ("staging_regression_", "final_gate_")
