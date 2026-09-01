@@ -2,10 +2,11 @@ import { Bot, CalendarCheck2, MessagesSquare, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { loginAction } from "./actions";
+import { demoLoginAction, loginAction } from "./actions";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
+  const demoEnabled = process.env.TIA_DEMO_ENABLED === "true";
   return (
     <main className="grid min-h-screen lg:grid-cols-[1.05fr_.95fr]">
       <section className="hidden bg-[#102a2a] p-12 text-white lg:flex lg:flex-col lg:justify-between">
@@ -38,7 +39,20 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <h2 className="text-3xl font-black">تسجيل الدخول</h2>
           <p className="mt-2 text-sm text-[var(--muted)]">استخدم حسابك المسجل ضمن فريق العيادة.</p>
           {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          <form action={loginAction} className="mt-7 space-y-4">
+          {demoEnabled && (
+            <form action={demoLoginAction} className="mt-7">
+              <Button type="submit" className="w-full" size="lg">
+                <Bot size={18} /> جرّب نسخة الـAdmin Demo
+              </Button>
+              <p className="mt-2 text-center text-xs leading-5 text-[var(--muted)]">
+                دخول فوري إلى عيادة تجريبية معزولة — بدون الحاجة لبيانات تسجيل.
+              </p>
+            </form>
+          )}
+
+          {demoEnabled && <div className="my-5 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" />أو حسابك<span className="h-px flex-1 bg-slate-200" /></div>}
+
+          <form action={loginAction} className={demoEnabled ? "space-y-4" : "mt-7 space-y-4"}>
             <label className="block space-y-2">
               <span className="text-sm font-semibold">البريد الإلكتروني</span>
               <Input name="email" type="email" autoComplete="email" required placeholder="name@clinic.com" dir="ltr" />

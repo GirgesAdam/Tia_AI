@@ -633,6 +633,8 @@ def claim_dispatches(
     connection: ChannelConnection,
     limit: int,
 ) -> list[DispatchClaimItem]:
+    if settings.demo_mode and not settings.demo_allow_external_dispatch:
+        return []
     now = datetime.now(UTC)
     stale_before = now - DISPATCH_SEND_LEASE
 
