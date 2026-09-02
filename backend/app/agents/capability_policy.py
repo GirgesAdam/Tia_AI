@@ -8,14 +8,13 @@ from app.agents.semantic_router import (
     Priority,
     SemanticCapabilityDecision,
 )
-
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),
     "pricing": frozenset({"search_services"}),
     "branch_discovery": frozenset({"list_branches"}),
     "doctor_discovery": frozenset({"list_doctors"}),
     "availability_discovery": frozenset({"get_booking_options"}),
-    "appointment_creation": frozenset({"book_appointment"}),
+    "appointment_creation": frozenset({"get_booking_options", "book_appointment"}),
     "appointment_list": frozenset({"get_customer_appointments"}),
     "appointment_confirmation": frozenset({"get_customer_appointments", "confirm_appointment"}),
     "appointment_cancellation": frozenset({"get_customer_appointments", "cancel_appointment"}),
@@ -28,11 +27,12 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     ),
     "customer_profile": frozenset({"get_customer_profile"}),
     "customer_history": frozenset({"get_customer_history"}),
+    "package_information": frozenset(),
+    "package_refund_quote": frozenset(),
     "follow_up_request": frozenset({"create_follow_up_task"}),
     "marketing_preferences": frozenset({"update_marketing_consent"}),
     "human_support": frozenset({"escalate_to_human"}),
 }
-
 WRITE_TOOL_CAPABILITY: dict[str, str] = {
     "book_appointment": "appointment_creation",
     "confirm_appointment": "appointment_confirmation",
@@ -44,7 +44,6 @@ WRITE_TOOL_CAPABILITY: dict[str, str] = {
 }
 
 WRITE_CAPABILITIES = frozenset(WRITE_TOOL_CAPABILITY.values())
-
 
 @dataclass(frozen=True)
 class CapabilityPolicyDecision:
@@ -60,7 +59,6 @@ class CapabilityPolicyDecision:
 class ToolAuthorizationError(PermissionError):
     pass
 
-
 def _risk_handoff(
     risks: set[str],
     decision: SemanticCapabilityDecision,
@@ -69,7 +67,7 @@ def _risk_handoff(
         return True, "medical", "high"
     if "complaint" in risks:
         return True, "complaint", decision.recommended_handoff_priority
-    if "payment" in risks:
+    if "payment" in risks and "package_refund_quote" not in decision.capabilities:
         return True, "payment", decision.recommended_handoff_priority
     if "urgent" in risks:
         return True, decision.recommended_handoff_category, "urgent"
@@ -83,7 +81,6 @@ def _risk_handoff(
         )
     return False, "other", "normal"
 
-
 def resolve_capability_policy(
     decision: SemanticCapabilityDecision,
     *,
@@ -91,7 +88,6 @@ def resolve_capability_policy(
 ) -> CapabilityPolicyDecision:
     """
     Deterministic policy boundary.
-
     The LLM describes semantic capabilities. Python maps them to tool exposure
     and write authority. Medical/customer-support risk can override simultaneous
     booking capabilities.
@@ -102,18 +98,16 @@ def resolve_capability_policy(
         if str(item) in CAPABILITY_TOOL_POLICY
     }
     risks = {str(item) for item in decision.risk_flags}
-
     requires_human, category, priority = _risk_handoff(risks, decision)
     if requires_human:
         capabilities.add("human_support")
         allowed_tools = {"escalate_to_human"}
     else:
-        allowed_tools: set[str] = {"escalate_to_human"}
+        allowed_tools: set[str] = set()
         for capability in capabilities:
             allowed_tools.update(CAPABILITY_TOOL_POLICY[capability])
 
     write_caps = capabilities.intersection(WRITE_CAPABILITIES)
-
     return CapabilityPolicyDecision(
         capabilities=frozenset(capabilities),
         allowed_tools=frozenset(allowed_tools),
@@ -123,7 +117,6 @@ def resolve_capability_policy(
         handoff_priority=priority,
         risk_flags=frozenset(risks),
     )
-
 
 def authorize_tool_execution(
     policy: CapabilityPolicyDecision,

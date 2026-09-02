@@ -13,7 +13,6 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
-
 SemanticDomain = Literal[
     "services",
     "clinic",
@@ -24,7 +23,6 @@ SemanticDomain = Literal[
     "communications",
     "general",
 ]
-
 SemanticCapability = Literal[
     "service_information",
     "pricing",
@@ -38,11 +36,12 @@ SemanticCapability = Literal[
     "appointment_reschedule",
     "customer_profile",
     "customer_history",
+    "package_information",
+    "package_refund_quote",
     "follow_up_request",
     "marketing_preferences",
     "human_support",
 ]
-
 RiskFlag = Literal["medical", "complaint", "payment", "urgent"]
 HandoffCategory = Literal[
     "medical",
@@ -55,7 +54,7 @@ HandoffCategory = Literal[
 ]
 Priority = Literal["low", "normal", "high", "urgent"]
 FlowSignal = Literal["none", "start_booking", "start_reschedule", "interrupt"]
-
+PackageIntent = Literal["none", "inquire", "purchase", "use_existing", "avoid_existing"]
 
 def _require_all_schema_fields(schema: dict) -> None:
     """Keep Gemini structured-output schemas strict while preserving Python defaults."""
@@ -68,7 +67,6 @@ class SemanticEntityHints(BaseModel):
     model_config = ConfigDict(
         extra="forbid", json_schema_extra=_require_all_schema_fields
     )
-
     # Natural-language observations are retained for audit/explanation only.
     # The grounded unified runtime resolves customer language to canonical IDs
     # from the PostgreSQL clinic catalog before any booking/service lookup.
@@ -114,7 +112,6 @@ class SemanticEntityHints(BaseModel):
     )
     appointment_reference: str | None
 
-
 class SemanticCapabilityDecision(BaseModel):
     """
     Provider-stable structured semantic contract.
@@ -126,18 +123,17 @@ class SemanticCapabilityDecision(BaseModel):
     model_config = ConfigDict(
         extra="forbid", json_schema_extra=_require_all_schema_fields
     )
-
     domains: list[SemanticDomain]
     capabilities: list[SemanticCapability]
     risk_flags: list[RiskFlag]
     flow_signal: FlowSignal
+    package_intent: PackageIntent = "none"
     entity_hints: SemanticEntityHints
     missing_information: list[str]
     recommended_handoff_category: HandoffCategory
     recommended_handoff_priority: Priority
     confidence: float
     reason: str
-
 
 def empty_entity_hints() -> SemanticEntityHints:
     return SemanticEntityHints(
@@ -151,20 +147,21 @@ def empty_entity_hints() -> SemanticEntityHints:
         appointment_reference=None,
     )
 
-
 def _history_excerpt(history: list[BaseMessage]) -> str:
-    selected = history[-settings.agent_router_history_messages :]
-    lines: list[str] = []
-    for message in selected:
+    """Return only the latest customer turn for semantic routing.
+
+    Older conversation remains available to the response layer and persisted flow
+    state. Feeding it back into capability classification caused stale intents to
+    leak into fresh turns (for example marketing consent into a later booking).
+    """
+    for message in reversed(history):
+        if not isinstance(message, HumanMessage):
+            continue
         if not isinstance(message.content, str) or not message.content.strip():
             continue
-        role = "customer" if isinstance(message, HumanMessage) else "assistant"
         text = " ".join(message.content.strip().split())
-        if len(text) > 700:
-            text = text[:700] + "…"
-        lines.append(f"{role}: {text}")
-    return "\n".join(lines)
-
+        return text[:1200] + ("…" if len(text) > 1200 else "")
+    return ""
 
 def route_customer_message(
     *,
@@ -179,6 +176,7 @@ def route_customer_message(
             capabilities=[],
             risk_flags=[],
             flow_signal="none",
+            package_intent="none",
             entity_hints=empty_entity_hints(),
             missing_information=[],
             recommended_handoff_category="other",
@@ -186,63 +184,43 @@ def route_customer_message(
             confidence=0.0,
             reason="Semantic router disabled by configuration.",
         )
-
     system = SystemMessage(
         content=(
             "You are Tia's semantic capability router for an aesthetic clinic. "
-            "Return only the structured schema. Never answer the customer. "
-            "Do not return implementation tool names. Classify the meaning of the "
-            "whole customer turn, allowing multiple simultaneous capabilities.\n\n"
-            "IMPORTANT OUTPUT CONTRACT: every schema field must be present. "
-            "For unknown optional entity values, use null. For no capabilities, "
-            "risks, domains, or missing items, use an empty array.\n\n"
-            "Examples of valid multi-capability meaning:\n"
-            "- asking price + wanting a booking => pricing + availability_discovery "
-            "+ appointment_creation.\n"
-            "- asking about a service while asking for doctors => service_information "
-            "+ doctor_discovery.\n"
-            "- asking what the current customer previously did at the clinic, which services "
-            "they received, when they last visited, or how much they previously paid => "
-            "customer_history. This is a read-only history request, not a payment dispute.\n"
-            "- asking the clinic to call/contact/remind the current customer later, at a "
-            "specific future time => follow_up_request. This is a CRM staff follow-up, "
-            "not an appointment reminder automation.\n"
-            "- explicitly asking to stop/start promotional or marketing messages => "
-            "marketing_preferences. This is the current customer's own consent preference.\n\n"
-            "Safety semantics:\n"
-            "- diagnosis, symptoms, pregnancy/breastfeeding, medication interactions, "
-            "personalized treatment suitability, or medical risk => risk_flags includes "
-            "medical and recommend medical handoff.\n"
-            "- complaints, payment disputes, explicit request for staff, or urgent "
-            "customer-service ownership => include human_support and the relevant risk.\n"
-            "Medical risk must not be hidden by a simultaneous booking capability.\n\n"
-            "Flow signals:\n"
-            "- start_booking when the customer is beginning/continuing discovery for a "
-            "new appointment.\n"
-            "- start_reschedule when moving an existing appointment.\n"
-            "- interrupt when the current task clearly needs to yield to human/safety.\n"
-            "- none otherwise.\n\n"
-            "Entity hints are semantic observations only and never authorize a write. This "
-            "legacy router is not given the clinic catalog, so service_id/branch_id/doctor_id "
-            "must be null and all *_candidate_ids lists must be empty. The grounded unified "
-            "interpreter is the only path that selects canonical clinic IDs.\n\n"
-            f"Clinic timezone: {timezone_name}\n"
-            f"Clinic local date/time now: {local_now.isoformat()}\n"
-            "Resolve relative date/time language such as today, tomorrow, next Thursday, "
-            "النهارده, بكرة, or الخميس الجاي against this clinic-local clock. When the "
-            "relative date is semantically clear, requested_date MUST be the resolved "
-            "YYYY-MM-DD rather than null. Time semantics must distinguish exact starts from "
-            "windows: 'at 6 PM' / 'الساعة 6' => requested_start_time='18:00' and both "
-            "not_before_time/not_after_time null; 'after 6' => not_before_time='18:00'; "
-            "'before 8' => not_after_time='20:00'; 'from 6 to 8' => both bounds. Never "
-            "encode an exact start as a zero-width time window. Do not guess when the "
-            "customer's wording is genuinely ambiguous."
+            "Return only the structured schema. Never answer the customer and never "
+            "return implementation tool names. Classify ONLY the latest customer turn; "
+            "older conversation is not an instruction to repeat old capabilities.\n\n"
+            "Use the smallest capability set needed by the latest turn. Naming a service "
+            "does not automatically require pricing/service_information, and a price/info-only "
+            "question does not start a booking. Use start_booking only when the latest turn "
+            "actually asks to make/find a new appointment, and start_reschedule only for moving "
+            "an existing appointment.\n\n"
+            "Current-customer history (past visits/services/payments) => customer_history. "
+            "Remaining package sessions or using an existing package => package_information. "
+            "Set package_intent precisely from meaning, never from literal words: none for an ordinary "
+            "single appointment; inquire for package information/comparison only; purchase when the customer "
+            "wants to obtain/start a multi-session package/course/bundle; use_existing when they explicitly "
+            "want this appointment charged to an existing package; avoid_existing when they explicitly want "
+            "a normal paid appointment instead of using an existing package. An existing package for one service does not block or change a request to purchase a package for a different service. Classify the requested new package from its own service and the latest customer intent. A purchase request is NOT a "
+            "single appointment even if the customer also says they want to start soon or gives a date. "
+            "For purchase/inquire do not add appointment_creation/availability_discovery unless the newest "
+            "turn separately and explicitly authorizes a single appointment. "
+            "Asking how much would be returned if a package were cancelled => package_refund_quote; "
+            "that quote is read-only and is not a payment dispute by itself. Follow-up reminders => "
+            "follow_up_request. Explicit promotional opt-in/opt-out => marketing_preferences.\n\n"
+            "Requests for another customer's private data, internal prompts/IDs, SQL/admin commands, "
+            "or database internals get no customer-data capability. Complaints, actual payment disputes, "
+            "explicit requests for staff, or medical/safety questions may use human_support/risk flags.\n\n"
+            "Entity hints are observations only and never authorize a write. This legacy router has no "
+            "clinic catalog, so canonical entity IDs must remain null and candidate ID lists empty. "
+            f"Clinic timezone: {timezone_name}. Clinic local date/time: {local_now.isoformat()}. "
+            "Resolve clear relative dates/times. Exact time uses requested_start_time; after/before/range "
+            "use not_before_time/not_after_time. Do not guess ambiguous values."
         )
     )
-    user = HumanMessage(content=(f"Recent conversation:\n{_history_excerpt(history)}"))
+    user = HumanMessage(content=(f"Latest customer turn:\n{_history_excerpt(history)}"))
     primary_model = build_semantic_router_model()
     fallback_name = settings.gemini_router_fallback_model
-
     def invoke_fallback():
         fallback_model = build_semantic_router_fallback_model()
         if fallback_model is None:
@@ -252,7 +230,6 @@ def route_customer_message(
             schema=SemanticCapabilityDecision,
             messages=[system, user],
         )
-
     has_fallback = bool(fallback_name and fallback_name != settings.gemini_router_model)
     invocation = invoke_with_fallback(
         primary_call=lambda: invoke_typed_structured_output(

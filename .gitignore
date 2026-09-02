@@ -52,3 +52,6 @@ DELETIONS*.txt
 CLEANUP_v*.ps1
 MANIFEST.txt
 AGENT_SETUP.md
+
+*.before_*
+backend/artifacts/*.json
