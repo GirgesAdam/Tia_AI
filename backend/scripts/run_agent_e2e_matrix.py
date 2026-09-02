@@ -128,6 +128,22 @@ def _has_capability(name: str) -> Callable[[Any, dict[str, Any]], tuple[bool, st
 
     return check
 
+def _lacks_capability(name: str) -> Callable[[Any, dict[str, Any]], tuple[bool, str]]:
+    def check(decision: Any, _: dict[str, Any]) -> tuple[bool, str]:
+        ok = name not in set(decision.capabilities or [])
+        return ok, f"capabilities={decision.capabilities}"
+
+    return check
+
+def _package_intent(expected_intent: str) -> Callable[[Any, dict[str, Any]], tuple[bool, str]]:
+    def check(decision: Any, _: dict[str, Any]) -> tuple[bool, str]:
+        actual = str(getattr(decision, "package_intent", "none"))
+        return actual == expected_intent, (
+            f"package_intent={actual} expected={expected_intent}"
+        )
+
+    return check
+
 
 def _canonical_entity(field: str, expected_key: str) -> Callable[[Any, dict[str, Any]], tuple[bool, str]]:
     def check(decision: Any, expected: dict[str, Any]) -> tuple[bool, str]:
@@ -271,6 +287,64 @@ def _semantic_cases() -> list[SemanticCase]:
             "information",
             "فروعكم فين؟",
             _has_capability("branch_discovery"),
+        ),
+        SemanticCase(
+            "package_purchase_explicit",
+            "package_semantics",
+            "عايز أشتري باكدج ليزر ابط 6 جلسات",
+            _all(
+                _package_intent("purchase"),
+                _has_capability("package_information"),
+                _lacks_capability("appointment_creation"),
+            ),
+        ),
+        SemanticCase(
+            "package_purchase_multisession_plan",
+            "package_semantics",
+            "محتاج أبدأ 3 جلسات ليزر ابط كخطة واحدة",
+            _all(
+                _package_intent("purchase"),
+                _has_capability("package_information"),
+                _lacks_capability("appointment_creation"),
+            ),
+        ),
+        SemanticCase(
+            "package_inquiry_compare",
+            "package_semantics",
+            "أنا أول مرة وعايز ليزر ابط، أحجز جلسة واحدة ولا أبدأ كورس جلسات كامل؟",
+            _all(
+                _package_intent("inquire"),
+                _has_capability("package_information"),
+                _lacks_capability("appointment_creation"),
+            ),
+        ),
+        SemanticCase(
+            "package_use_existing",
+            "package_semantics",
+            "عندي باكدج ليزر ابط وعايز أحجز الجلسة الجاية منه",
+            _all(
+                _package_intent("use_existing"),
+                _has_capability("package_information"),
+                _has_capability("appointment_creation"),
+            ),
+        ),
+        SemanticCase(
+            "package_avoid_existing",
+            "package_semantics",
+            "عندي باكدج ليزر ابط بس المرة دي عايز أحجز جلسة عادية منفصلة ومتحسبهاش من الباكدج",
+            _all(
+                _package_intent("avoid_existing"),
+                _has_capability("appointment_creation"),
+            ),
+        ),
+        SemanticCase(
+            "single_session_no_package_intent",
+            "package_semantics",
+            "عايز أحجز جلسة واحدة بس ليزر ابط",
+            _all(
+                _package_intent("none"),
+                _has_capability("appointment_creation"),
+            ),
         ),
         SemanticCase(
             "exact_time_semantics",
@@ -502,6 +576,8 @@ def run_semantic_matrix(
                     details={
                         "message": case.message,
                         "capabilities": list(decision.capabilities or []),
+                        "flow_signal": str(decision.flow_signal),
+                        "package_intent": str(getattr(decision, "package_intent", "none")),
                         "risk_flags": list(decision.risk_flags or []),
                         "entity_hints": decision.entity_hints.model_dump(mode="json"),
                         "confidence": decision.confidence,

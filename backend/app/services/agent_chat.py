@@ -653,7 +653,12 @@ def _with_implicit_primary_branch(
     return decision.model_copy(update={"entity_hints": hints})
 
 
-def _verified_package_intent_reply(*, intent: str, package_payload: dict[str, object] | None) -> str | None:
+def _verified_package_intent_reply(
+    *,
+    intent: str,
+    package_payload: dict[str, object] | None,
+    catalog_payload: dict[str, object] | None = None,
+) -> str | None:
     if intent not in {"purchase", "inquire"}:
         return None
     usable: list[dict[str, object]] = []
@@ -661,6 +666,21 @@ def _verified_package_intent_reply(*, intent: str, package_payload: dict[str, ob
         raw = package_payload.get("usable_packages")
         if isinstance(raw, list):
             usable = [item for item in raw if isinstance(item, dict)]
+    service_name: str | None = None
+    standalone_price: str | None = None
+    if isinstance(catalog_payload, dict):
+        services = catalog_payload.get("services")
+        if isinstance(services, list) and len(services) == 1 and isinstance(services[0], dict):
+            service = services[0]
+            raw_name = service.get("name")
+            raw_price = service.get("price")
+            if isinstance(raw_name, str) and raw_name.strip():
+                service_name = raw_name.strip()
+            if isinstance(raw_price, str) and raw_price.strip():
+                standalone_price = raw_price.strip()
+                if standalone_price.endswith(" EGP"):
+                    standalone_price = standalone_price[:-4] + " جنيه"
+
     if intent == "purchase":
         if usable:
             current = usable[0]
@@ -677,9 +697,15 @@ def _verified_package_intent_reply(*, intent: str, package_payload: dict[str, ob
         remaining = int(current.get("sessions_remaining") or 0)
         name = str(current.get("name") or "الباكدج الحالية")
         return f"عندك {name} شغالة حالياً وفاضلك {remaining} جلسات."
+    if service_name and standalone_price:
+        return (
+            f"لو بتقارن بين جلسة واحدة وباكدج: جلسة {service_name} العادية سعرها "
+            f"{standalone_price}. أما تفاصيل الباكدجات الجديدة من عدد الجلسات والسعر "
+            "فمش مسجلة عندي كعرض موثوق حالياً، فمش هافترض تفاصيل مش موجودة."
+        )
     return (
-        "أنت بتسأل عن باكدج، مش عن حجز جلسة واحدة. تفاصيل الباكدجات الجديدة من عدد الجلسات "
-        "والسعر مش مسجلة عندي كعرض موثوق حالياً، فمش هافترض سعر باكدج من سعر الجلسة العادية."
+        "لو بتقارن بين جلسة واحدة وباكدج، تفاصيل الباكدجات الجديدة من عدد الجلسات والسعر "
+        "مش مسجلة عندي كعرض موثوق حالياً، فمش هافترض تفاصيل مش موجودة."
     )
 
 
@@ -1172,7 +1198,11 @@ def _grounded_response_can_cover(
 
 
 
-def _verified_booking_slots_reply(payload: dict[str, object]) -> str | None:
+def _verified_booking_slots_reply(
+    payload: dict[str, object],
+    *,
+    booking_authorized: bool,
+) -> str | None:
     """Present verified booking slots directly from the adapter.
 
     Availability is operational data, so the response does not need a second LLM
@@ -1233,7 +1263,12 @@ def _verified_booking_slots_reply(payload: dict[str, object]) -> str | None:
         intro = f"المواعيد المتاحة يوم {date_value.strip()}:"
     else:
         intro = "المواعيد المتاحة:"
-    return intro + "\n" + "\n".join(presented) + "\nاختار رقم الميعاد المناسب ليك."
+    closing = (
+        "اختار رقم الميعاد المناسب ليك."
+        if booking_authorized
+        else "لو حابب تحجز واحد من المواعيد دي، قولي رقمه."
+    )
+    return intro + "\n" + "\n".join(presented) + "\n" + closing
 
 
 def _exact_booking_selection_index(
@@ -2228,7 +2263,10 @@ def _run_after_inbound(
                         run_id=run_id,
                     )
                 if prefetch_direct is None:
-                    verified_reply = _verified_booking_slots_reply(payload)
+                    verified_reply = _verified_booking_slots_reply(
+                        payload,
+                        booking_authorized="appointment_creation" in set(policy.capabilities),
+                    )
                     if verified_reply:
                         prefetch_direct = (
                             verified_reply,
@@ -2238,7 +2276,16 @@ def _run_after_inbound(
         if prefetch_direct is None and str(semantic_decision.package_intent) in {"purchase", "inquire"}:
             package_intent_reply = _verified_package_intent_reply(
                 intent=str(semantic_decision.package_intent),
-                package_payload=(prefetched_results.get("customer_packages") if isinstance(prefetched_results.get("customer_packages"), dict) else None),
+                package_payload=(
+                    prefetched_results.get("customer_packages")
+                    if isinstance(prefetched_results.get("customer_packages"), dict)
+                    else None
+                ),
+                catalog_payload=(
+                    prefetched_results.get("clinic_catalog")
+                    if isinstance(prefetched_results.get("clinic_catalog"), dict)
+                    else None
+                ),
             )
             if package_intent_reply:
                 prefetch_direct = (package_intent_reply, "deterministic:package-intent")
