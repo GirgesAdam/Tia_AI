@@ -168,7 +168,9 @@ def create_patient_package(
             return existing
 
     patient = db.scalar(
-        select(Patient).where(Patient.workspace_id == workspace_id, Patient.id == patient_id)
+        select(Patient)
+        .where(Patient.workspace_id == workspace_id, Patient.id == patient_id)
+        .with_for_update()
     )
     service = db.scalar(
         select(Service).where(Service.workspace_id == workspace_id, Service.id == service_id)
@@ -177,6 +179,15 @@ def create_patient_package(
         raise PackageNotFound("Patient not found.")
     if service is None or not service.is_active:
         raise PackageNotFound("Service not found or inactive.")
+
+    existing_usable = list_patient_packages(
+        db, workspace_id=workspace_id, patient_id=patient_id, service_id=service_id,
+        usable_only=True, on_date=purchased_at.date(),
+    )
+    if existing_usable:
+        raise PackageOperationError(
+            "Patient already has an active package for this service."
+        )
 
     transaction = None
     if effective_initial_payment > 0:

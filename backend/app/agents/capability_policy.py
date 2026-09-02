@@ -14,7 +14,7 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "branch_discovery": frozenset({"list_branches"}),
     "doctor_discovery": frozenset({"list_doctors"}),
     "availability_discovery": frozenset({"get_booking_options"}),
-    "appointment_creation": frozenset({"book_appointment"}),
+    "appointment_creation": frozenset({"get_booking_options", "book_appointment"}),
     "appointment_list": frozenset({"get_customer_appointments"}),
     "appointment_confirmation": frozenset({"get_customer_appointments", "confirm_appointment"}),
     "appointment_cancellation": frozenset({"get_customer_appointments", "cancel_appointment"}),
@@ -67,7 +67,7 @@ def _risk_handoff(
         return True, "medical", "high"
     if "complaint" in risks:
         return True, "complaint", decision.recommended_handoff_priority
-    if "payment" in risks:
+    if "payment" in risks and "package_refund_quote" not in decision.capabilities:
         return True, "payment", decision.recommended_handoff_priority
     if "urgent" in risks:
         return True, decision.recommended_handoff_category, "urgent"

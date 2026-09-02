@@ -7,7 +7,6 @@ It uses the real Gemini runtime and the real PostgreSQL clinic data, but by defa
 runs inside an external database transaction and rolls the whole suite back at the
 end. Internal ``Session.commit()`` calls are isolated as savepoints through
 ``join_transaction_mode='create_savepoint'``.
-
 Examples:
     python scripts/run_agent_e2e_matrix.py --workspace-slug tia --profile smoke
     python scripts/run_agent_e2e_matrix.py --workspace-slug tia --profile full
@@ -16,7 +15,6 @@ Examples:
 The live profiles make Gemini API calls and therefore have normal model usage cost.
 No WhatsApp messages are sent.
 """
-
 import argparse
 import json
 import sys
@@ -35,12 +33,13 @@ from sqlalchemy.orm import Session
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.turn_interpreter import interpret_customer_turn
 from app.core.config import settings
+from app.integrations.clinic.base import AvailabilityRequest, ClinicCapability
+from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
 from app.services.agent_chat import AgentChatError, run_agent_chat
-from app.services.booking import BookingRuleError, calculate_availability
 
 FIXTURE_VERSION = "realistic-aesthetic-clinic-v1"
 
@@ -89,13 +88,11 @@ def _catalog_row(catalog, collection, name):
     Customer-language understanding is never done here. The matrix sends the
     original natural-language message through the real agent runtime. This helper
     only finds the deterministic fixture row used to build expected assertions.
-
     Exact catalog display names win. A unique whole-name suffix is accepted so
     presentation prefixes such as a doctor title or branch label do not make the
     test harness depend on cosmetic fixture formatting.
     """
     rows = [row for row in catalog.get(collection, []) if isinstance(row, dict)]
-
     exact = [row for row in rows if str(row.get("name") or "").strip() == str(name).strip()]
     if len(exact) == 1:
         return exact[0]
@@ -103,7 +100,6 @@ def _catalog_row(catalog, collection, name):
         raise RuntimeError(
             f"Fixture catalog lookup is ambiguous: {collection} / {name!r}"
         )
-
     expected = str(name).strip()
     suffix = [
         row
@@ -117,7 +113,6 @@ def _catalog_row(catalog, collection, name):
         raise RuntimeError(
             f"Fixture catalog suffix lookup is ambiguous: {collection} / {name!r}"
         )
-
     available = [str(row.get("name") or "") for row in rows]
     raise RuntimeError(
         f"Required fixture catalog row not found: {collection} / {name}. "
@@ -342,7 +337,6 @@ def _agent_payload(*, patient_id: UUID, message: str, conversation_id: UUID | No
         payload["conversation_id"] = conversation_id
     if "channel" in fields:
         payload["channel"] = "whatsapp"
-
     missing_required: list[str] = []
     for name, model_field in fields.items():
         if name in payload:
@@ -423,22 +417,25 @@ def _find_future_slot(
     doctor_id: UUID,
     days: int = 35,
 ):
+    # Pick the fixture slot from the same source of truth used by the customer
+    # agent. Using native Tia availability directly here can disagree with a
+    # configured clinic adapter and create a false conversational booking fail.
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
     today = datetime.now(UTC).date()
     for offset in range(1, days + 1):
         booking_date = today + timedelta(days=offset)
-        try:
-            timezone_name, slots = calculate_availability(
-                db=db,
-                workspace=workspace,
-                branch_id=branch_id,
-                service_id=service_id,
-                doctor_id=doctor_id,
+        availability = adapter.get_availability(
+            AvailabilityRequest(
+                branch_id=str(branch_id),
+                service_id=str(service_id),
                 booking_date=booking_date,
+                doctor_id=str(doctor_id),
             )
-        except BookingRuleError:
-            continue
+        )
+        slots = list(availability.slots)
         if slots:
-            return booking_date, timezone_name, slots[0]
+            return booking_date, availability.timezone, slots[0]
     raise RuntimeError("Could not find an available fixture slot in the next 35 days.")
 
 
@@ -480,12 +477,10 @@ def run_semantic_matrix(
         "nasr_branch_id": str(nasr["id"]),
         "allowed_ids": allowed_ids,
     }
-
     timezone_name = (workspace.timezone or "Africa/Cairo").strip()
     from zoneinfo import ZoneInfo
 
     local_now = datetime.now(ZoneInfo(timezone_name))
-
     for case in _semantic_cases():
         started = perf_counter()
         try:
@@ -587,7 +582,7 @@ def run_e2e_matrix(
     ahmed = _catalog_row(catalog, "doctors", "أحمد محمود")
     nasr = _catalog_row(catalog, "branches", "فرع مدينة نصر")
 
-    # Grounded happy-path booking using an actually available DB slot.
+    # Grounded happy-path booking using an actually available adapter slot.
     started = perf_counter()
     try:
         booking_date, timezone_name, slot = _find_future_slot(
@@ -629,7 +624,6 @@ def run_e2e_matrix(
             response2 = response3
             after_rows = _appointments_for(db, workspace, active)
             created = [row for row in after_rows if row.id not in before_ids]
-
         newest = created[-1] if created else None
         ok = bool(newest) and newest.service_id == UUID(str(underarm["id"])) and newest.duration_minutes == 15
         _record(
@@ -839,7 +833,6 @@ def main() -> int:
         expire_on_commit=False,
         join_transaction_mode="create_savepoint",
     )
-
     report: SuiteReport | None = None
     exit_code = 1
     try:
@@ -857,7 +850,6 @@ def main() -> int:
             profile=args.profile,
             rollback=not args.keep_data,
         )
-
         catalog_started = perf_counter()
         catalog = build_clinic_catalog(db, workspace)
         _record(
@@ -874,7 +866,6 @@ def main() -> int:
                 },
             ),
         )
-
         run_semantic_matrix(db=db, workspace=workspace, catalog=catalog, report=report)
 
         if args.profile in {"smoke", "full"}:
@@ -887,7 +878,6 @@ def main() -> int:
                 report=report,
                 smoke=args.profile == "smoke",
             )
-
         counts = report.counts()
         exit_code = 1 if counts.get("FAIL", 0) else 0
     except Exception as exc:  # noqa: BLE001
@@ -931,7 +921,6 @@ def main() -> int:
         if not args.keep_data:
             print("Database writes rolled back: yes")
         print("WhatsApp/n8n used: no")
-
     return exit_code
 
 
