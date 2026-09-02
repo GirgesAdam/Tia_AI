@@ -6,12 +6,10 @@ from app.agents.capability_policy import resolve_capability_policy
 from app.agents.clinic_grounding import grounded_catalog_facts, validate_grounded_entity_ids
 from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
 from app.services import agent_chat
-
 SERVICE_UNDERARM = "11111111-1111-4111-8111-111111111111"
 SERVICE_FULL = "22222222-2222-4222-8222-222222222222"
 BRANCH_NASR = "33333333-3333-4333-8333-333333333333"
 DOCTOR_AHMED = "44444444-4444-4444-8444-444444444444"
-
 CATALOG = {
     "services": [
         {
@@ -69,7 +67,6 @@ def test_catalog_validation_rejects_hallucinated_ids_without_text_matching() -> 
         not_after_time=None,
         appointment_reference=None,
     )
-
     validated = validate_grounded_entity_ids(hints, CATALOG)
 
     assert validated.service_id is None
@@ -91,7 +88,6 @@ def test_grounded_catalog_facts_preserve_all_llm_selected_service_candidates() -
         not_after_time=None,
         appointment_reference=None,
     )
-
     payload = grounded_catalog_facts(
         catalog=CATALOG,
         entity_hints=hints,
@@ -138,7 +134,6 @@ def test_grounded_booking_prefetch_uses_only_canonical_ids(monkeypatch) -> None:
         grounded_mode=True,
         use_flow_state=False,
     )
-
     assert prefetched_names == {"get_booking_options"}
     assert calls == [
         (
@@ -190,10 +185,91 @@ def test_grounded_service_information_does_not_call_lexical_search_tool(monkeypa
         grounded_mode=True,
         use_flow_state=False,
     )
-
     assert calls == []
     assert names == set()
     assert results == {}
+
+
+def test_grounded_response_requires_matching_availability_evidence() -> None:
+    hints = SemanticEntityHints(
+        service_query="ليزر ابط",
+        branch_query=None,
+        doctor_query=None,
+        service_id=SERVICE_UNDERARM,
+        requested_date="2026-08-25",
+        requested_start_time=None,
+        not_before_time=None,
+        not_after_time=None,
+        appointment_reference=None,
+    )
+
+    decision = _decision(
+        capabilities=[
+            "availability_discovery",
+            "appointment_creation",
+        ],
+        hints=hints,
+    )
+
+    policy = resolve_capability_policy(decision)
+
+    assert agent_chat._grounded_response_can_cover(
+        policy,
+        {
+            "clinic_catalog": {
+                "ok": True,
+                "services": [
+                    {"id": SERVICE_UNDERARM},
+                ],
+            }
+        },
+    ) is False
+
+    assert agent_chat._grounded_response_can_cover(
+        policy,
+        {
+            "get_booking_options": {
+                "ok": True,
+                "slots": [],
+            }
+        },
+    ) is True
+
+
+def test_grounded_response_rejects_wrong_customer_read_evidence() -> None:
+    decision = _decision(
+        capabilities=["customer_history"],
+        hints=SemanticEntityHints(
+            service_query=None,
+            branch_query=None,
+            doctor_query=None,
+            requested_date=None,
+            requested_start_time=None,
+            not_before_time=None,
+            not_after_time=None,
+            appointment_reference=None,
+        ),
+    )
+
+    policy = resolve_capability_policy(decision)
+
+    assert agent_chat._grounded_response_can_cover(
+        policy,
+        {
+            "get_customer_profile": {
+                "ok": True,
+            }
+        },
+    ) is False
+
+    assert agent_chat._grounded_response_can_cover(
+        policy,
+        {
+            "get_customer_history": {
+                "ok": True,
+            }
+        },
+    ) is True
 
 
 def test_grounded_runtime_source_has_no_lexical_entity_resolution() -> None:
@@ -201,7 +277,6 @@ def test_grounded_runtime_source_has_no_lexical_entity_resolution() -> None:
     grounding = (backend / "app/agents/clinic_grounding.py").read_text(encoding="utf-8").lower()
     turn = (backend / "app/agents/turn_interpreter.py").read_text(encoding="utf-8").lower()
     agent_chat_source = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")
-
     assert "re.compile" not in grounding
     assert "re.search" not in grounding
     assert "re.match" not in grounding
@@ -219,4 +294,5 @@ def test_grounded_interpreter_preserves_existing_conversation_flow_contract() ->
     assert "context_scope" not in turn
     assert "turn_only" not in turn
     assert "context_scope" not in agent_chat_source
-    assert "use_flow_state=True" in agent_chat_source
+    assert "_turn_is_local_side_read" in agent_chat_source
+    assert "use_flow_state=not turn_local_side_read" in agent_chat_source

@@ -1,6 +1,8 @@
+from types import SimpleNamespace
+
 from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_router import SemanticEntityHints
-from app.services.agent_chat import _merge_flow_entity_state
+from app.services.agent_chat import _merge_flow_entity_state, _turn_is_local_side_read
 
 
 def _hints(**overrides):
@@ -24,10 +26,10 @@ def _hints(**overrides):
     return SemanticEntityHints(**values)
 
 
-def _turn(*, hints, clear_entity_fields=None):
+def _turn(*, hints, clear_entity_fields=None, capabilities=None, action="continue"):
     return FlowTurnDecision(
-        action="continue",
-        capabilities=[],
+        action=action,
+        capabilities=capabilities or [],
         risk_flags=[],
         entity_hints=hints,
         clear_entity_fields=clear_entity_fields or [],
@@ -56,7 +58,6 @@ def test_empty_candidate_defaults_do_not_mutate_existing_flow_state():
 
 def test_selected_catalog_id_removes_stale_candidates():
     existing = {"service_candidate_ids": ["service-a", "service-b"]}
-
     merged = _merge_flow_entity_state(
         existing,
         _turn(hints=_hints(service_id="service-a")),
@@ -73,6 +74,67 @@ def test_nonempty_candidates_remove_stale_selected_id():
         existing,
         _turn(hints=_hints(service_candidate_ids=["service-a", "service-b"])),
     )
-
     assert merged["service_candidate_ids"] == ["service-a", "service-b"]
     assert "service_id" not in merged
+
+
+def test_read_only_side_question_is_turn_local_during_booking() -> None:
+    flow = SimpleNamespace(
+        flow_type="booking",
+        entity_state={
+            "service_id": "underarm",
+            "requested_date": "2026-09-03",
+        },
+    )
+
+    turn = _turn(
+        hints=_hints(
+            service_id="prp",
+            service_query="PRP للبشرة",
+        ),
+        capabilities=[
+            "pricing",
+            "service_information",
+        ],
+    )
+
+    assert _turn_is_local_side_read(flow, turn) is True
+
+
+def test_explicit_booking_change_is_not_treated_as_side_read() -> None:
+    flow = SimpleNamespace(
+        flow_type="booking",
+    )
+
+    turn = _turn(
+        hints=_hints(
+            service_id="full-body",
+            service_query="full body",
+        ),
+        capabilities=[
+            "availability_discovery",
+            "appointment_creation",
+        ],
+        action="modify",
+    )
+
+    assert _turn_is_local_side_read(flow, turn) is False
+
+
+def test_operational_booking_turn_inside_reschedule_is_not_side_read() -> None:
+    flow = SimpleNamespace(
+        flow_type="appointment_reschedule",
+    )
+
+    turn = _turn(
+        hints=_hints(
+            requested_date="2026-09-03",
+        ),
+        capabilities=[
+            "availability_discovery",
+            "appointment_creation",
+        ],
+        action="continue",
+    )
+
+    assert _turn_is_local_side_read(flow, turn) is False

@@ -105,3 +105,33 @@ def test_tia_database_adapter_owns_native_catalog_mapping() -> None:
     assert '"services"' in source
     assert '"branches"' in source
     assert '"doctors"' in source
+
+
+class _CatalogRevisionResult:
+    def __init__(self, row):
+        self._row = row
+
+    def one(self):
+        return self._row
+
+
+class _CatalogRevisionDb:
+    def __init__(self, row):
+        self._row = row
+
+    def execute(self, _statement):
+        return _CatalogRevisionResult(self._row)
+
+
+def test_tia_database_catalog_revision_uses_adapter_workspace_primary_branch() -> None:
+    primary_branch_id = uuid4()
+    workspace = SimpleNamespace(id=uuid4(), primary_branch_id=primary_branch_id)
+    row = tuple(value for index in range(8) for value in (index + 1, None))
+    adapter = TiaDatabaseClinicAdapter(
+        db=_CatalogRevisionDb(row),
+        workspace=workspace,
+    )
+
+    revision = adapter.catalog_revision()
+
+    assert revision == (primary_branch_id, *row)

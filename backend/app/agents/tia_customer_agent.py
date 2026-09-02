@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import tools_condition
-
 from app.agents.llm_runtime import LLMProviderError, invoke_model, invoke_with_fallback
 from app.agents.model_provider import build_chat_fallback_model, build_chat_model, model_label
 from app.agents.prompts.customer_service import build_customer_service_system_prompt
@@ -18,7 +17,6 @@ from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
 
 _READ_ONLY_TOOL_NAMES = frozenset(
     {
@@ -35,7 +33,6 @@ _READ_ONLY_TOOL_NAMES = frozenset(
 )
 _COMPOSITE_DISCOVERY_TOOLS = frozenset({"get_booking_options", "get_reschedule_options"})
 
-
 def _tool_payload(message: ToolMessage) -> dict | None:
     content = message.content
     if isinstance(content, dict):
@@ -47,7 +44,6 @@ def _tool_payload(message: ToolMessage) -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
 
 def _verified_tool_fallback(messages: list[BaseMessage]) -> str | None:
     for message in reversed(messages):
@@ -61,10 +57,8 @@ def _verified_tool_fallback(messages: list[BaseMessage]) -> str | None:
             return reply
     return None
 
-
 def _finalizer_tool_context(messages: list[BaseMessage]) -> str | None:
     """Serialize current-turn tool results without replaying function-call history.
-
     Gemini 3 validates function-call/function-response turns strictly. The finalizer
     only needs verified tool outputs, not the intermediate AI function-call message,
     so we convert ToolMessages into hidden operational context and start a clean text
@@ -90,11 +84,9 @@ def _finalizer_tool_context(messages: list[BaseMessage]) -> str | None:
         separators=(",", ":"),
     )
 
-
 def _extract_text(message: AIMessage) -> str:
     if isinstance(message.content, str):
         return message.content.strip()
-
     parts: list[str] = []
     if isinstance(message.content, list):
         for block in message.content:
@@ -109,7 +101,6 @@ def _extract_text(message: AIMessage) -> str:
 
     return "\n".join(part.strip() for part in parts if part.strip()).strip()
 
-
 def _tool_call_names(message: AIMessage | None) -> list[str]:
     if message is None:
         return []
@@ -119,7 +110,6 @@ def _tool_call_names(message: AIMessage | None) -> list[str]:
         if isinstance(name, str) and name:
             names.append(name)
     return names
-
 
 def run_tia_customer_agent(
     *,
@@ -135,13 +125,11 @@ def run_tia_customer_agent(
     except ZoneInfoNotFoundError:
         timezone_name = "Africa/Cairo"
         tz = ZoneInfo(timezone_name)
-
     system_prompt = build_customer_service_system_prompt(
         clinic_name=tool_context.workspace.name,
         timezone_name=timezone_name,
         local_now=datetime.now(tz),
     )
-
     internal_messages: list[SystemMessage] = []
     if operational_context:
         internal_messages.append(
@@ -157,19 +145,16 @@ def run_tia_customer_agent(
                 )
             )
         )
-
     all_tools = build_clinic_tools(tool_context)
     if allowed_tool_names is None:
         tools = all_tools
     else:
         tools = [tool for tool in all_tools if tool.name in allowed_tool_names]
-
-    # Safety net: the handoff tool should always be available.
-    if not any(tool.name == "escalate_to_human" for tool in tools):
-        tools.extend(tool for tool in all_tools if tool.name == "escalate_to_human")
-
     primary_base_model = build_chat_model()
-    primary_model = primary_base_model.bind_tools(tools)
+    # Do not bind an empty function declaration set. Some provider/model versions
+    # can still emit remembered/hallucinated function calls after bind_tools([]).
+    # An unbound model makes a no-tool turn genuinely text-only.
+    primary_model = primary_base_model.bind_tools(tools) if tools else primary_base_model
     fallback_name = settings.gemini_agent_fallback_model
     fallback_base_model = None
     fallback_model = None
@@ -180,19 +165,20 @@ def run_tia_customer_agent(
         if fallback_base_model is None:
             fallback_base_model = build_chat_fallback_model()
         return fallback_base_model
-
     def get_fallback_bound_model():
         nonlocal fallback_model
         if fallback_model is None:
             base = get_fallback_base_model()
-            fallback_model = base.bind_tools(tools) if base is not None else None
+            fallback_model = (
+                base.bind_tools(tools) if base is not None and tools else base
+            )
         return fallback_model
     model_call_index = 0
     finalizer_calls = 0
     tool_rounds = 0
     executed_read_tools: set[str] = set()
     last_tool_round_names: list[str] = []
-
+    last_tool_round_had_unavailable = False
     def _invoke_bound_model(
         request_messages: list[BaseMessage],
         *,
@@ -205,7 +191,6 @@ def run_tia_customer_agent(
             if model is None:
                 raise RuntimeError("Customer-agent fallback model is not configured.")
             return invoke_model(lambda: model.invoke(request_messages))
-
         has_fallback = bool(fallback_name and fallback_name != settings.gemini_agent_model)
         invocation = invoke_with_fallback(
             primary_call=lambda: invoke_model(lambda: primary_model.invoke(request_messages)),
@@ -217,7 +202,6 @@ def run_tia_customer_agent(
         )
         last_model_name = invocation.model_name
         return invocation.value
-
     def _invoke_unbound_finalizer(request_messages: list[BaseMessage]) -> AIMessage:
         nonlocal last_model_name
 
@@ -226,7 +210,6 @@ def run_tia_customer_agent(
             if model is None:
                 raise RuntimeError("Customer-agent fallback model is not configured.")
             return invoke_model(lambda: model.invoke(request_messages))
-
         has_fallback = bool(fallback_name and fallback_name != settings.gemini_agent_model)
         invocation = invoke_with_fallback(
             primary_call=lambda: invoke_model(lambda: primary_base_model.invoke(request_messages)),
@@ -238,7 +221,6 @@ def run_tia_customer_agent(
         )
         last_model_name = invocation.model_name
         return invocation.value
-
     def call_model(state: MessagesState) -> dict[str, list[AIMessage]]:
         nonlocal model_call_index
         model_call_index += 1
@@ -258,20 +240,18 @@ def run_tia_customer_agent(
             _tool_call_names(response),
         )
         return {"messages": [response]}
-
     tool_by_name = {tool.name: tool for tool in tools}
-
     def call_tools(state: MessagesState) -> dict[str, list[ToolMessage]]:
-        nonlocal tool_rounds, last_tool_round_names
+        nonlocal tool_rounds, last_tool_round_names, last_tool_round_had_unavailable
         tool_rounds += 1
         latest = state["messages"][-1] if state["messages"] else None
         latest_ai = latest if isinstance(latest, AIMessage) else None
         calls = list(latest_ai.tool_calls or []) if latest_ai is not None else []
         names = _tool_call_names(latest_ai)
         last_tool_round_names = names
+        last_tool_round_had_unavailable = False
         stage_started = perf_counter()
         outputs: list[ToolMessage] = []
-
         for index, call in enumerate(calls):
             name = call.get("name") if isinstance(call, dict) else None
             args = call.get("args") if isinstance(call, dict) else {}
@@ -281,8 +261,8 @@ def run_tia_customer_agent(
             if not isinstance(args, dict):
                 args = {}
             call_id = str(call_id or f"{name}-{tool_rounds}-{index}")
-
             if name not in tool_by_name:
+                last_tool_round_had_unavailable = True
                 # Never leave a Gemini function call unmatched. A model can still
                 # emit a tool name that was deliberately removed from this turn
                 # (for example because get_booking_options was already prefetched).
@@ -310,7 +290,6 @@ def run_tia_customer_agent(
                     name,
                 )
                 continue
-
             if name in _READ_ONLY_TOOL_NAMES and name in executed_read_tools:
                 payload = {
                     "ok": False,
@@ -331,7 +310,6 @@ def run_tia_customer_agent(
                     name,
                 )
                 continue
-
             tool = tool_by_name[name]
             try:
                 raw = tool.invoke(args)
@@ -343,7 +321,6 @@ def run_tia_customer_agent(
 
             if name in _READ_ONLY_TOOL_NAMES:
                 executed_read_tools.add(name)
-
             if isinstance(raw, str):
                 content = raw
             else:
@@ -355,7 +332,6 @@ def run_tia_customer_agent(
                     name=name,
                 )
             )
-
         logger.info(
             "Tia agent run_id=%s stage=tools round=%s names=%s duration_ms=%s",
             tool_context.run_id,
@@ -364,8 +340,12 @@ def run_tia_customer_agent(
             int((perf_counter() - stage_started) * 1000),
         )
         return {"messages": outputs}
-
     def route_after_tools(_: MessagesState) -> str:
+        # One unavailable tool is enough evidence that the model tried to leave the
+        # policy surface. Do not give it another chance to invent a second legacy
+        # tool name; finalize from verified context or ask for missing information.
+        if last_tool_round_had_unavailable:
+            return "finalize"
         if _COMPOSITE_DISCOVERY_TOOLS.intersection(last_tool_round_names):
             return "finalize"
         if tool_rounds >= settings.agent_max_tool_rounds:
@@ -375,7 +355,6 @@ def run_tia_customer_agent(
     def finalize(state: MessagesState) -> dict[str, list[AIMessage]]:
         nonlocal finalizer_calls
         finalizer_calls += 1
-
         # Do not replay this turn's AI function-call transcript into an unbound
         # finalizer request. Gemini 3 requires exact function-call/response matching
         # and thought-signature circulation. We only need the verified outputs here,
@@ -395,7 +374,6 @@ def run_tia_customer_agent(
                     )
                 )
             )
-
         request_messages: list[BaseMessage] = [
             SystemMessage(content=system_prompt),
             *finalizer_internal_messages,
@@ -424,7 +402,6 @@ def run_tia_customer_agent(
                 tool_rounds,
             )
             response = AIMessage(content=safe_reply)
-
         if not _extract_text(response):
             safe_reply = _verified_tool_fallback(state["messages"])
             if safe_reply:
@@ -434,14 +411,12 @@ def run_tia_customer_agent(
                     tool_rounds,
                 )
                 response = AIMessage(content=safe_reply)
-
         logger.info(
             "Tia agent run_id=%s stage=finalizer tool_rounds=%s",
             tool_context.run_id,
             tool_rounds,
         )
         return {"messages": [response]}
-
     builder = StateGraph(MessagesState)
     builder.add_node("agent", call_model)
     builder.add_node("tools", call_tools)
@@ -455,7 +430,6 @@ def run_tia_customer_agent(
     )
     builder.add_edge("finalize", END)
     graph = builder.compile()
-
     result = graph.invoke(
         {"messages": history},
         config={"recursion_limit": settings.agent_recursion_limit},
@@ -469,8 +443,40 @@ def run_tia_customer_agent(
     if not reply:
         reply = _verified_tool_fallback(result["messages"]) or ""
     if not reply:
-        raise RuntimeError("Agent returned an empty response.")
-
+        # Gemini can rarely return an empty bound-tool message without a tool call.
+        # Recover once with a clean unbound text request instead of failing the whole
+        # customer turn. Verified operational context is preserved in internal_messages.
+        recovery_messages: list[BaseMessage] = [
+            SystemMessage(content=system_prompt),
+            *internal_messages,
+            SystemMessage(
+                content=(
+                    "The previous generation returned no customer-visible text. "
+                    "Answer the latest customer message now. Do not request a tool. "
+                    "Use verified operational context when present; otherwise ask only "
+                    "for genuinely missing information and do not invent clinic facts."
+                )
+            ),
+            *history,
+        ]
+        try:
+            recovery = _invoke_unbound_finalizer(recovery_messages)
+            reply = _extract_text(recovery)
+        except (LLMProviderError, RuntimeError):
+            reply = ""
+        if reply:
+            logger.warning(
+                "Tia agent run_id=%s stage=empty-response-recovered",
+                tool_context.run_id,
+            )
+    if not reply:
+        # Keep the channel reliable even during a provider edge case. This message
+        # intentionally makes no clinic-data claim and authorizes no action.
+        reply = "معلش، حصلت مشكلة مؤقتة وأنا بجهز الرد. ممكن تبعت طلبك تاني؟"
+        logger.error(
+            "Tia agent run_id=%s stage=empty-response-safe-fallback",
+            tool_context.run_id,
+        )
     logger.info(
         "Tia agent run_id=%s completed model_calls=%s tool_rounds=%s duration_ms=%s model=%s",
         tool_context.run_id,

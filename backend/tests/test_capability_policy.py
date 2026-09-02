@@ -58,6 +58,25 @@ def test_medical_risk_overrides_simultaneous_booking_write() -> None:
     assert policy.allowed_tools == {"escalate_to_human"}
 
 
+def test_normal_policy_does_not_expose_handoff_tool() -> None:
+    policy = resolve_capability_policy(decision(capabilities=["pricing"]))
+
+    assert policy.requires_human is False
+    assert "escalate_to_human" not in policy.allowed_tools
+
+
+def test_explicit_human_support_exposes_handoff() -> None:
+    policy = resolve_capability_policy(
+        decision(
+            capabilities=["human_support"],
+            category="customer_request",
+        )
+    )
+
+    assert policy.requires_human is True
+    assert policy.allowed_tools == {"escalate_to_human"}
+
+
 def test_write_tool_requires_semantic_capability() -> None:
     policy = resolve_capability_policy(decision(capabilities=["availability_discovery"]))
     with pytest.raises(ToolAuthorizationError):
