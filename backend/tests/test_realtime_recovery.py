@@ -62,7 +62,8 @@ def test_semantic_router_receives_clinic_local_clock(monkeypatch) -> None:
     assert decision.entity_hints.requested_date == "2026-08-20"
     assert "Africa/Cairo" in captured["system"]
     assert "2026-08-19T18:30:00+03:00" in captured["system"]
-    assert "requested_date MUST be the resolved YYYY-MM-DD" in captured["system"]
+    assert "Resolve clear relative dates/times" in captured["system"]
+    assert "requested_start_time" in captured["system"]
 
 
 def test_flow_interpreter_receives_clinic_local_clock(monkeypatch) -> None:
@@ -391,32 +392,34 @@ def test_unavailable_model_tool_call_gets_matching_response_and_clean_finalizer(
         def invoke(self, args):
             raise AssertionError("Unavailable tool call must not execute another tool")
 
-    class FakeBoundModel:
-        def invoke(self, messages):
-            return AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "get_booking_options",
-                        "args": {
-                            "service_search": "ليزر",
-                            "booking_date": "2026-08-20",
-                        },
-                        "id": "unavailable-booking-call",
-                        "type": "tool_call",
-                    }
-                ],
-            )
-
     class FakeBaseModel:
         def __init__(self) -> None:
-            self.bound = FakeBoundModel()
+            self.calls = 0
             self.finalizer_messages = None
 
         def bind_tools(self, tools):
-            return self.bound
+            raise AssertionError("A turn with no allowed tools must stay unbound")
 
         def invoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                # Even an unbound provider response can theoretically contain a stale or
+                # hallucinated function call. The runtime must reject it deterministically.
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "get_booking_options",
+                            "args": {
+                                "service_search": "ليزر",
+                                "booking_date": "2026-08-20",
+                            },
+                            "id": "unavailable-booking-call",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+
             self.finalizer_messages = list(messages)
             # The finalizer must be a clean text request: no function-call AIMessage
             # and no ToolMessage are replayed to Gemini.
@@ -450,6 +453,7 @@ def test_unavailable_model_tool_call_gets_matching_response_and_clean_finalizer(
     )
 
     assert "استخدمت البيانات" in reply
+    assert base.calls == 2
     assert base.finalizer_messages is not None
 
 
