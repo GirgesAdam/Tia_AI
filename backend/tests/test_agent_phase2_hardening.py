@@ -193,7 +193,7 @@ def test_refund_quote_reprices_consumed_sessions_at_standalone_price(monkeypatch
     assert result["quote"]["consumed_value_minor"] == 250_000
     assert result["quote"]["refundable_minor"] == 550_000
 
-def test_single_verified_slot_with_booking_intent_promotes_to_structured_selection() -> None:
+def test_single_verified_slot_selection_defaults_to_first_option() -> None:
     flow = SimpleNamespace(
         flow_type="booking",
         option_snapshot={
@@ -208,7 +208,7 @@ def test_single_verified_slot_with_booking_intent_promotes_to_structured_selecti
         },
     )
     turn = FlowTurnDecision(
-        action="continue",
+        action="select_option",
         capabilities=["appointment_creation"],
         risk_flags=[],
         entity_hints=_hints(),
@@ -222,13 +222,13 @@ def test_single_verified_slot_with_booking_intent_promotes_to_structured_selecti
         reason="customer confirmed booking",
     )
 
-    normalized = agent_chat._normalize_single_verified_booking_confirmation(flow, turn)
+    normalized = agent_chat._normalize_single_verified_booking_selection(flow, turn)
 
     assert normalized.action == "select_option"
     assert normalized.selection_index == 1
 
 
-def test_single_verified_slot_does_not_autobook_non_booking_turn() -> None:
+def test_single_verified_slot_does_not_autobook_non_selection_turn() -> None:
     flow = SimpleNamespace(
         flow_type="booking",
         option_snapshot={"slots": [{"start_local": "2026-09-03T16:00:00+03:00"}]},
@@ -248,7 +248,7 @@ def test_single_verified_slot_does_not_autobook_non_booking_turn() -> None:
         reason="price question",
     )
 
-    normalized = agent_chat._normalize_single_verified_booking_confirmation(flow, turn)
+    normalized = agent_chat._normalize_single_verified_booking_selection(flow, turn)
 
     assert normalized.action == "continue"
     assert normalized.selection_index is None

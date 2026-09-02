@@ -54,6 +54,7 @@ HandoffCategory = Literal[
 ]
 Priority = Literal["low", "normal", "high", "urgent"]
 FlowSignal = Literal["none", "start_booking", "start_reschedule", "interrupt"]
+PackageIntent = Literal["none", "inquire", "purchase", "use_existing", "avoid_existing"]
 
 def _require_all_schema_fields(schema: dict) -> None:
     """Keep Gemini structured-output schemas strict while preserving Python defaults."""
@@ -126,6 +127,7 @@ class SemanticCapabilityDecision(BaseModel):
     capabilities: list[SemanticCapability]
     risk_flags: list[RiskFlag]
     flow_signal: FlowSignal
+    package_intent: PackageIntent = "none"
     entity_hints: SemanticEntityHints
     missing_information: list[str]
     recommended_handoff_category: HandoffCategory
@@ -174,6 +176,7 @@ def route_customer_message(
             capabilities=[],
             risk_flags=[],
             flow_signal="none",
+            package_intent="none",
             entity_hints=empty_entity_hints(),
             missing_information=[],
             recommended_handoff_category="other",
@@ -194,6 +197,14 @@ def route_customer_message(
             "an existing appointment.\n\n"
             "Current-customer history (past visits/services/payments) => customer_history. "
             "Remaining package sessions or using an existing package => package_information. "
+            "Set package_intent precisely from meaning, never from literal words: none for an ordinary "
+            "single appointment; inquire for package information/comparison only; purchase when the customer "
+            "wants to obtain/start a multi-session package/course/bundle; use_existing when they explicitly "
+            "want this appointment charged to an existing package; avoid_existing when they explicitly want "
+            "a normal paid appointment instead of using an existing package. An existing package for one service does not block or change a request to purchase a package for a different service. Classify the requested new package from its own service and the latest customer intent. A purchase request is NOT a "
+            "single appointment even if the customer also says they want to start soon or gives a date. "
+            "For purchase/inquire do not add appointment_creation/availability_discovery unless the newest "
+            "turn separately and explicitly authorizes a single appointment. "
             "Asking how much would be returned if a package were cancelled => package_refund_quote; "
             "that quote is read-only and is not a payment dispute by itself. Follow-up reminders => "
             "follow_up_request. Explicit promotional opt-in/opt-out => marketing_preferences.\n\n"

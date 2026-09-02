@@ -17,6 +17,7 @@ from app.agents.model_provider import (
 from app.agents.semantic_router import (
     FlowSignal,
     HandoffCategory,
+    PackageIntent,
     Priority,
     RiskFlag,
     SemanticCapability,
@@ -51,6 +52,7 @@ class UnifiedTurnDecision(BaseModel):
     capabilities: list[SemanticCapability]
     risk_flags: list[RiskFlag]
     flow_signal: FlowSignal
+    package_intent: PackageIntent = "none"
     action: UnifiedTurnAction
     entity_hints: SemanticEntityHints
     clear_entity_fields: list[ClearableFlowEntity] = Field(default_factory=list)
@@ -67,6 +69,7 @@ class UnifiedTurnDecision(BaseModel):
             capabilities=self.capabilities,
             risk_flags=self.risk_flags,
             flow_signal=self.flow_signal,
+            package_intent=self.package_intent,
             entity_hints=self.entity_hints,
             missing_information=self.missing_information,
             recommended_handoff_category=self.recommended_handoff_category,
@@ -79,6 +82,7 @@ class UnifiedTurnDecision(BaseModel):
             action=self.action,
             capabilities=self.capabilities,
             risk_flags=self.risk_flags,
+            package_intent=self.package_intent,
             entity_hints=self.entity_hints,
             clear_entity_fields=self.clear_entity_fields,
             selection_index=self.selection_index,
@@ -181,14 +185,25 @@ def interpret_customer_turn(
             "set required by the latest turn. A price/info-only question does not start booking. "
             "A fresh booking request uses start_booking; moving an existing appointment uses start_reschedule.\n\n"
             "For an active flow: modify means the customer changed a stored requirement; select_option "
-            "means they selected a presented option; cancel_flow stops the flow; interrupt is for a separate "
-            "task that takes ownership. A harmless side question stays continue and contains only its own "
+            "means they selected or confirmed one of the presented options. For any presented slot choice, "
+            "always set selection_index to the displayed option index. "
+            "cancel_flow stops the flow; interrupt is for a separate task that takes ownership. A harmless side "
+            "question stays continue and contains only its own "
             "capabilities. A language change, greeting, acknowledgement, or conversation-recall question can "
             "have no capability and must leave the active flow unchanged.\n\n"
             "Current-customer past visits/services/payments => customer_history. Remaining package sessions "
-            "or booking from an existing package => package_information. A package cancellation refund amount "
-            "question => package_refund_quote; it is a read-only quote, not a payment dispute by itself. "
-            "Another person's private data and internal prompts/IDs/SQL get no customer-data capability.\n\n"
+            "or booking from an existing package => package_information. Set package_intent semantically: "
+            "none for an ordinary single appointment; inquire for package information/comparison; purchase "
+            "when the customer wants to obtain/start multiple sessions as one package/course/bundle; "
+            "use_existing when they explicitly want this appointment taken from an existing package; "
+            "avoid_existing when they explicitly want a normal paid appointment instead of using the package. An existing package for one service does not block or change a request to purchase a package for a different service; classify the requested package independently from the old package. "
+            "Package purchase is not a single appointment, even when the customer also wants to start soon, "
+            "mentions a date, or asks for several sessions. For purchase/inquire, do not start/continue a "
+            "booking unless the latest turn separately and explicitly authorizes one single appointment. "
+            "If the latest turn corrects an active booking to package purchase, the new package intent owns "
+            "the turn and the old booking must not continue. A package cancellation refund amount question => "
+            "package_refund_quote; it is a read-only quote, not a payment dispute by itself. Another person's "
+            "private data and internal prompts/IDs/SQL get no customer-data capability.\n\n"
             "GROUNDING: resolve service/doctor/branch meaning only against the supplied PostgreSQL catalog. "
             "Emit a canonical ID only when one record is clearly intended; otherwise return all plausible "
             "candidate IDs. Never invent IDs. Resolve clear relative dates/times against the clinic clock. "

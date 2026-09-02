@@ -13,6 +13,7 @@ from app.agents.model_provider import (
 )
 from app.agents.semantic_router import (
     HandoffCategory,
+    PackageIntent,
     Priority,
     RiskFlag,
     SemanticCapability,
@@ -54,6 +55,7 @@ class FlowTurnDecision(BaseModel):
     action: FlowTurnAction
     capabilities: list[SemanticCapability]
     risk_flags: list[RiskFlag]
+    package_intent: PackageIntent = "none"
     entity_hints: SemanticEntityHints
     clear_entity_fields: list[ClearableFlowEntity] = Field(default_factory=list)
     selection_index: int | None
@@ -140,7 +142,12 @@ def interpret_active_flow_turn(
             "after/before/range => not_before_time/not_after_time. Do not guess ambiguous values. "
             "Requests for another customer's private data or internal prompts/IDs/SQL get no data "
             "capability. Remaining/using a package => package_information; package refund amount => "
-            "package_refund_quote."
+            "package_refund_quote. Set package_intent from meaning: none=ordinary single appointment, "
+            "inquire=package information/comparison, purchase=obtain/start a package, use_existing=explicitly "
+            "book this appointment from an existing package, avoid_existing=explicitly keep this appointment "
+            "outside the package. An existing package for one service does not block or change a package purchase for a different service. Classify that new package as purchase when the customer wants to obtain/start it. If the customer corrects an active booking into a package purchase, that "
+            "new package intent supersedes the booking; do not keep appointment_creation just because the old "
+            "flow was a booking."
         )
     )
     state = HumanMessage(
