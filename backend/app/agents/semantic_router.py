@@ -214,8 +214,9 @@ def route_customer_message(
             "Entity hints are observations only and never authorize a write. This legacy router has no "
             "clinic catalog, so canonical entity IDs must remain null and candidate ID lists empty. "
             f"Clinic timezone: {timezone_name}. Clinic local date/time: {local_now.isoformat()}. "
-            "Resolve clear relative dates/times. Exact time uses requested_start_time; after/before/range "
-            "use not_before_time/not_after_time. Do not guess ambiguous values."
+            "Resolve clear relative dates/times. requested_date MUST be the resolved YYYY-MM-DD "
+            "when the date is clear. Exact time uses requested_start_time; after/before/range use "
+            "not_before_time/not_after_time. Do not guess ambiguous values."
         )
     )
     user = HumanMessage(content=(f"Latest customer turn:\n{_history_excerpt(history)}"))
