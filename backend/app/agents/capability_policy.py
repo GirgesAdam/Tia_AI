@@ -8,7 +8,6 @@ from app.agents.semantic_router import (
     Priority,
     SemanticCapabilityDecision,
 )
-
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),
     "pricing": frozenset({"search_services"}),
@@ -28,11 +27,12 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     ),
     "customer_profile": frozenset({"get_customer_profile"}),
     "customer_history": frozenset({"get_customer_history"}),
+    "package_information": frozenset(),
+    "package_refund_quote": frozenset(),
     "follow_up_request": frozenset({"create_follow_up_task"}),
     "marketing_preferences": frozenset({"update_marketing_consent"}),
     "human_support": frozenset({"escalate_to_human"}),
 }
-
 WRITE_TOOL_CAPABILITY: dict[str, str] = {
     "book_appointment": "appointment_creation",
     "confirm_appointment": "appointment_confirmation",
@@ -44,7 +44,6 @@ WRITE_TOOL_CAPABILITY: dict[str, str] = {
 }
 
 WRITE_CAPABILITIES = frozenset(WRITE_TOOL_CAPABILITY.values())
-
 
 @dataclass(frozen=True)
 class CapabilityPolicyDecision:
@@ -59,7 +58,6 @@ class CapabilityPolicyDecision:
 
 class ToolAuthorizationError(PermissionError):
     pass
-
 
 def _risk_handoff(
     risks: set[str],
@@ -83,7 +81,6 @@ def _risk_handoff(
         )
     return False, "other", "normal"
 
-
 def resolve_capability_policy(
     decision: SemanticCapabilityDecision,
     *,
@@ -91,7 +88,6 @@ def resolve_capability_policy(
 ) -> CapabilityPolicyDecision:
     """
     Deterministic policy boundary.
-
     The LLM describes semantic capabilities. Python maps them to tool exposure
     and write authority. Medical/customer-support risk can override simultaneous
     booking capabilities.
@@ -102,18 +98,16 @@ def resolve_capability_policy(
         if str(item) in CAPABILITY_TOOL_POLICY
     }
     risks = {str(item) for item in decision.risk_flags}
-
     requires_human, category, priority = _risk_handoff(risks, decision)
     if requires_human:
         capabilities.add("human_support")
         allowed_tools = {"escalate_to_human"}
     else:
-        allowed_tools: set[str] = {"escalate_to_human"}
+        allowed_tools: set[str] = set()
         for capability in capabilities:
             allowed_tools.update(CAPABILITY_TOOL_POLICY[capability])
 
     write_caps = capabilities.intersection(WRITE_CAPABILITIES)
-
     return CapabilityPolicyDecision(
         capabilities=frozenset(capabilities),
         allowed_tools=frozenset(allowed_tools),
@@ -123,7 +117,6 @@ def resolve_capability_policy(
         handoff_priority=priority,
         risk_flags=frozenset(risks),
     )
-
 
 def authorize_tool_execution(
     policy: CapabilityPolicyDecision,

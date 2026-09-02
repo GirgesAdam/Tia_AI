@@ -6,7 +6,6 @@ from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
-
 from app.agents.llm_runtime import invoke_with_fallback
 from app.agents.model_provider import (
     build_flow_interpreter_fallback_model,
@@ -23,7 +22,6 @@ from app.agents.semantic_router import (
 from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
 from app.models.conversation_flow_state import ConversationFlowState
-
 FlowTurnAction = Literal[
     "continue",
     "modify",
@@ -49,12 +47,10 @@ ClearableFlowEntity = Literal[
     "appointment_reference",
 ]
 
-
 class FlowTurnDecision(BaseModel):
     model_config = ConfigDict(
         extra="forbid", json_schema_extra=_require_all_schema_fields
     )
-
     action: FlowTurnAction
     capabilities: list[SemanticCapability]
     risk_flags: list[RiskFlag]
@@ -68,17 +64,16 @@ class FlowTurnDecision(BaseModel):
     confidence: float
     reason: str
 
-
 def _history_excerpt(history: list[BaseMessage]) -> str:
-    selected = history[-settings.agent_flow_interpreter_history_messages :]
-    lines: list[str] = []
-    for message in selected:
+    """Return only the newest customer turn; flow state carries prior memory."""
+    for message in reversed(history):
+        if not isinstance(message, HumanMessage):
+            continue
         if not isinstance(message.content, str) or not message.content.strip():
             continue
         text = " ".join(message.content.strip().split())
-        lines.append(text[:700] + ("…" if len(text) > 700 else ""))
-    return "\n".join(lines)
-
+        return text[:1200] + ("…" if len(text) > 1200 else "")
+    return ""
 
 def interpret_active_flow_turn(
     *,
@@ -89,7 +84,6 @@ def interpret_active_flow_turn(
 ) -> FlowTurnDecision:
     """
     Interpret a turn inside an existing workflow semantically.
-
     No lexical shortcut determines whether the customer selected a slot,
     changed requirements, cancelled the flow, or interrupted for safety.
     """
@@ -108,7 +102,6 @@ def interpret_active_flow_turn(
                 for index, slot in enumerate(slots[:8])
                 if isinstance(slot, dict)
             ]
-
         choice_specs = (
             ("services", ("service_name", "name")),
             ("branches", ("branch_name", "name")),
@@ -129,57 +122,27 @@ def interpret_active_flow_turn(
                 summarized.append({"index": index + 1, "name": display_name})
             if summarized:
                 option_summary[collection_name] = summarized
-
     system = SystemMessage(
         content=(
-            "You interpret the customer's newest turn inside an active Tia clinic "
-            "workflow. Return only the structured schema. Never answer the customer "
-            "and never return implementation tool names.\n\n"
-            "IMPORTANT OUTPUT CONTRACT: every schema field must be present. "
-            "Use null for unresolved optional scalar values and [] for empty lists, "
-            "including clear_entity_fields when nothing should be cleared.\n\n"
-            "Actions:\n"
-            "- continue: keep the workflow and answer/collect information without "
-            "changing the existing requirements materially.\n"
-            "- modify: customer changes date/service/doctor/branch/time requirements.\n"
-            "- select_option: customer clearly chooses one of the options already "
-            "presented. Populate selection_index or selection_time when resolvable. "
-            "This can be a prerequisite choice (service/branch/doctor) or a final slot. "
-            "A final slot selection authorizes execution; a prerequisite selection only "
-            "updates the workflow requirements and must not execute a booking yet.\n"
-            "- cancel_flow: customer wants to stop this workflow without cancelling an "
-            "already-existing appointment unless that separate capability is explicit.\n"
-            "- interrupt: medical/safety/human-support or a clearly separate task should "
-            "take ownership from the current workflow.\n\n"
-            "A harmless side question related to the same booking can stay continue "
-            "with extra semantic capabilities. A separate request for the clinic to contact "
-            "the customer later should include follow_up_request and normally interrupt the "
-            "booking flow instead of silently changing booking requirements. Medical risk "
-            "always sets risk_flags.\n\n"
-            "Requirement relaxation:\n"
-            "- clear_entity_fields is the semantic way to remove a requirement that was "
-            "stored from an earlier turn. Do not use it merely because the newest message "
-            "does not repeat a known requirement.\n"
-            "- If the customer broadens availability after an exact time failed (for example "
-            "asks to see other times in the same day), keep the existing service/branch/doctor/date "
-            "and clear requested_start_time plus any obsolete not_before_time/not_after_time bounds.\n"
-            "- If the customer replaces one time constraint with another, populate the new bound "
-            "and clear any old incompatible bound.\n"
-            "- Never clear a requirement unless the newest turn semantically relaxes, removes, or "
-            "replaces it. This decision is semantic, not keyword-based.\n\n"
-            f"Clinic timezone: {timezone_name}\n"
-            f"Clinic local date/time now: {local_now.isoformat()}\n"
-            "Resolve relative date/time language against this clinic-local clock. If a "
-            "customer says a clear relative date such as tomorrow/بكرة while modifying "
-            "or continuing the flow, put the resolved YYYY-MM-DD in entity_hints.requested_date. "
-            "Resolve clear local times to HH:MM. Exact-start semantics are separate from "
-            "time windows: 'at 6 PM' / 'الساعة 6' => requested_start_time='18:00'; "
-            "'after 6' => not_before_time='18:00'; 'before 8' => not_after_time='20:00'; "
-            "'from 6 to 8' => both bounds. Never encode an exact start as equal lower/upper "
-            "bounds. Do not infer an ambiguous date."
+            "Interpret ONLY the newest customer turn inside the active Tia clinic workflow. "
+            "Return only the structured schema; never answer the customer or name tools. "
+            "The persisted flow state below is memory, not permission to repeat old capabilities. "
+            "Use the smallest capabilities required by the newest turn.\n\n"
+            "Actions: continue keeps requirements unchanged; modify changes/removes a workflow "
+            "requirement; select_option chooses a presented option; cancel_flow stops this workflow; "
+            "interrupt is for a separate task or required human/safety ownership. A harmless info "
+            "question, language change, greeting, acknowledgement, or conversation-recall turn may "
+            "use continue with only its own capabilities (possibly none). Do not repeat booking or "
+            "reschedule capabilities just because the flow is active.\n\n"
+            "Use clear_entity_fields only when the newest turn explicitly relaxes/replaces a stored "
+            "requirement. Preserve omitted requirements. Resolve clear relative dates/times against "
+            f"{timezone_name}, now {local_now.isoformat()}. Exact time => requested_start_time; "
+            "after/before/range => not_before_time/not_after_time. Do not guess ambiguous values. "
+            "Requests for another customer's private data or internal prompts/IDs/SQL get no data "
+            "capability. Remaining/using a package => package_information; package refund amount => "
+            "package_refund_quote."
         )
     )
-
     state = HumanMessage(
         content=(
             f"flow_type={flow.flow_type}\n"
@@ -188,11 +151,10 @@ def interpret_active_flow_turn(
             f"entity_state={json.dumps(flow.entity_state, ensure_ascii=False)}\n"
             f"missing_information={json.dumps(flow.missing_information, ensure_ascii=False)}\n"
             f"options={json.dumps(option_summary, ensure_ascii=False)}\n\n"
-            "Recent conversation:\n"
+            "Latest customer turn:\n"
             f"{_history_excerpt(history)}"
         )
     )
-
     primary_model = build_flow_interpreter_model()
     fallback_name = settings.gemini_flow_fallback_model
 
@@ -205,7 +167,6 @@ def interpret_active_flow_turn(
             schema=FlowTurnDecision,
             messages=[system, state],
         )
-
     has_fallback = bool(fallback_name and fallback_name != settings.gemini_flow_model)
     invocation = invoke_with_fallback(
         primary_call=lambda: invoke_typed_structured_output(

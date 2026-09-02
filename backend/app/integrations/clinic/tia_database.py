@@ -48,7 +48,7 @@ from app.models.patient import Patient
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.models.staff import Staff
-from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.services.activity import record_activity_event
 from app.services.appointment_operations import (
@@ -104,22 +104,14 @@ def filter_bookable_doctor_rows(
     service_ids_by_doctor: dict[UUID, list[str]],
     branch_ids_by_doctor: dict[UUID, list[str]],
     scheduled_branch_ids_by_doctor: dict[UUID, list[str]],
-    dated_branch_ids_by_doctor: dict[UUID, list[str]] | None = None,
 ) -> list[tuple[Any, Any]]:
-    """Keep doctors connected to a real booking schedule.
-
-    Regular doctors may use weekly hours. Visiting doctors become discoverable
-    only while they have at least one dated availability window.
-    """
-    dated_branch_ids_by_doctor = dated_branch_ids_by_doctor or {}
+    """Keep doctors connected to a complete active booking graph."""
     eligible: list[tuple[Any, Any]] = []
     for doctor, staff in doctor_rows:
         service_ids = service_ids_by_doctor.get(doctor.id, [])
         branch_ids = set(branch_ids_by_doctor.get(doctor.id, []))
-        weekly = set(scheduled_branch_ids_by_doctor.get(doctor.id, []))
-        dated = set(dated_branch_ids_by_doctor.get(doctor.id, []))
-        available_branches = dated if getattr(doctor, "doctor_type", "regular") == "visiting" else weekly.union(dated)
-        if service_ids and branch_ids.intersection(available_branches):
+        scheduled_branch_ids = set(scheduled_branch_ids_by_doctor.get(doctor.id, []))
+        if service_ids and branch_ids.intersection(scheduled_branch_ids):
             eligible.append((doctor, staff))
     return eligible
 
@@ -182,7 +174,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             (DoctorBranch, DoctorBranch.workspace_id),
             (BranchWorkingHour, BranchWorkingHour.workspace_id),
             (DoctorWorkingHour, DoctorWorkingHour.workspace_id),
-            (DoctorAvailabilityWindow, DoctorAvailabilityWindow.workspace_id),
         )
         columns = []
         for index, (model, workspace_column) in enumerate(specs):
@@ -200,7 +191,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             )
             columns.extend((count_sq, updated_sq))
         row = self.db.execute(select(*columns)).one()
-        return (workspace.primary_branch_id, *tuple(row))
+        return (self.workspace.primary_branch_id, *tuple(row))
 
     def get_availability(self, request: AvailabilityRequest) -> AvailabilityResult:
         """Expose the existing booking engine through the canonical adapter contract."""
@@ -834,7 +825,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 .where(
                     Branch.workspace_id == workspace.id,
                     Branch.is_active.is_(True),
-                    *([Branch.id == workspace.primary_branch_id] if workspace.primary_branch_id else []),
                 )
                 .order_by(Branch.name)
             )
@@ -895,17 +885,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 )
             )
         )
-        now_utc = datetime.now(UTC)
-        doctor_windows = list(
-            db.scalars(
-                select(DoctorAvailabilityWindow)
-                .where(
-                    DoctorAvailabilityWindow.workspace_id == workspace.id,
-                    DoctorAvailabilityWindow.end_at >= now_utc,
-                )
-                .order_by(DoctorAvailabilityWindow.start_at)
-            )
-        )
 
         active_service_ids = {row.id for row in services}
         active_branch_ids = {row.id for row in branches}
@@ -930,18 +909,11 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 str(row.branch_id)
             )
 
-        dated_branch_ids_by_doctor: dict[UUID, list[str]] = {}
-        for row in doctor_windows:
-            if row.branch_id not in active_branch_ids:
-                continue
-            dated_branch_ids_by_doctor.setdefault(row.doctor_id, []).append(str(row.branch_id))
-
         doctor_rows = filter_bookable_doctor_rows(
             doctor_rows,
             service_ids_by_doctor=service_ids_by_doctor,
             branch_ids_by_doctor=branch_ids_by_doctor,
             scheduled_branch_ids_by_doctor=scheduled_branch_ids_by_doctor,
-            dated_branch_ids_by_doctor=dated_branch_ids_by_doctor,
         )
         eligible_doctor_ids = {doctor.id for doctor, _ in doctor_rows}
 
@@ -972,18 +944,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     "weekday_name": _WEEKDAY_NAMES[row.weekday],
                     "start": row.start_time.strftime("%H:%M"),
                     "end": row.end_time.strftime("%H:%M"),
-                }
-            )
-
-        windows_by_doctor: dict[UUID, list[dict[str, object]]] = {}
-        for row in doctor_windows:
-            if row.doctor_id not in eligible_doctor_ids or row.branch_id not in active_branch_ids:
-                continue
-            windows_by_doctor.setdefault(row.doctor_id, []).append(
-                {
-                    "branch_id": str(row.branch_id),
-                    "start_at": row.start_at.isoformat(),
-                    "end_at": row.end_at.isoformat(),
                 }
             )
 
@@ -1022,12 +982,10 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 {
                     "id": str(doctor.id),
                     "name": f"{staff.first_name} {staff.last_name}".strip(),
-                    "doctor_type": doctor.doctor_type,
                     "specialization": doctor.specialization,
                     "service_ids": sorted(service_ids_by_doctor.get(doctor.id, [])),
                     "branch_ids": sorted(branch_ids_by_doctor.get(doctor.id, [])),
                     "working_hours": hours_by_doctor.get(doctor.id, []),
-                    "availability_windows": windows_by_doctor.get(doctor.id, []),
                 }
                 for doctor, staff in doctor_rows
             ],

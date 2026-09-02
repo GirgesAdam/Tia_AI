@@ -1,0 +1,688 @@
+{
+  "started_at": "2026-09-02T13:27:15.391679+00:00",
+  "workspace_id": "cc00aee3-0bfe-4f08-b47c-a79f33970589",
+  "workspace_slug": "tia-demo",
+  "profile": "full",
+  "rollback": true,
+  "counts": {
+    "PASS": 22,
+    "WARN": 0,
+    "FAIL": 2,
+    "SKIP": 0
+  },
+  "results": [
+    {
+      "name": "active_catalog",
+      "category": "setup",
+      "status": "PASS",
+      "duration_ms": 591,
+      "details": {
+        "services": 28,
+        "branches": 3,
+        "doctors": 7
+      },
+      "error": null
+    },
+    {
+      "name": "service_underarm_dialect",
+      "category": "semantic:entity_resolution",
+      "status": "PASS",
+      "duration_ms": 3120,
+      "details": {
+        "message": "عايز ليزر ابط",
+        "capabilities": [
+          "service_information",
+          "pricing",
+          "availability_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "ليزر ابط",
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": "46285d0d-0d70-5c0f-a982-6514a7e01e32",
+          "service_candidate_ids": [
+            "46285d0d-0d70-5c0f-a982-6514a7e01e32"
+          ],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "service_id=46285d0d-0d70-5c0f-a982-6514a7e01e32 expected=46285d0d-0d70-5c0f-a982-6514a7e01e32"
+      },
+      "error": null
+    },
+    {
+      "name": "service_underarm_paraphrase",
+      "category": "semantic:entity_resolution",
+      "status": "PASS",
+      "duration_ms": 1855,
+      "details": {
+        "message": "عايز ازالة شعر الابط بالليزر",
+        "capabilities": [
+          "service_information",
+          "availability_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "ليزر إزالة الشعر - إبط",
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": "46285d0d-0d70-5c0f-a982-6514a7e01e32",
+          "service_candidate_ids": [
+            "46285d0d-0d70-5c0f-a982-6514a7e01e32"
+          ],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "service_id=46285d0d-0d70-5c0f-a982-6514a7e01e32 expected=46285d0d-0d70-5c0f-a982-6514a7e01e32"
+      },
+      "error": null
+    },
+    {
+      "name": "doctor_short_name",
+      "category": "semantic:entity_resolution",
+      "status": "PASS",
+      "duration_ms": 1865,
+      "details": {
+        "message": "عايز احجز مع د احمد محمود",
+        "capabilities": [
+          "doctor_discovery",
+          "availability_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": "أحمد محمود",
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": "157d83e6-0fd6-529d-9850-310a1d7a2394",
+          "doctor_candidate_ids": [
+            "157d83e6-0fd6-529d-9850-310a1d7a2394"
+          ],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "doctor_id=157d83e6-0fd6-529d-9850-310a1d7a2394 expected=157d83e6-0fd6-529d-9850-310a1d7a2394"
+      },
+      "error": null
+    },
+    {
+      "name": "branch_city_name",
+      "category": "semantic:entity_resolution",
+      "status": "PASS",
+      "duration_ms": 1896,
+      "details": {
+        "message": "عايز الفرع اللي في مدينة نصر",
+        "capabilities": [
+          "branch_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": "مدينة نصر",
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": "25e29258-47f9-53e7-8ff4-662f4973f0bf",
+          "branch_candidate_ids": [
+            "25e29258-47f9-53e7-8ff4-662f4973f0bf"
+          ],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "branch_id=25e29258-47f9-53e7-8ff4-662f4973f0bf expected=25e29258-47f9-53e7-8ff4-662f4973f0bf"
+      },
+      "error": null
+    },
+    {
+      "name": "full_booking_grounding",
+      "category": "semantic:booking",
+      "status": "PASS",
+      "duration_ms": 2326,
+      "details": {
+        "message": "عايز احجز ليزر ابط مع د احمد في مدينة نصر يوم التلات الساعة ٨ بالليل",
+        "capabilities": [
+          "appointment_creation",
+          "availability_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "ليزر ابط",
+          "branch_query": "مدينة نصر",
+          "doctor_query": "أحمد محمود",
+          "service_id": "46285d0d-0d70-5c0f-a982-6514a7e01e32",
+          "service_candidate_ids": [
+            "46285d0d-0d70-5c0f-a982-6514a7e01e32"
+          ],
+          "branch_id": "25e29258-47f9-53e7-8ff4-662f4973f0bf",
+          "branch_candidate_ids": [
+            "25e29258-47f9-53e7-8ff4-662f4973f0bf"
+          ],
+          "doctor_id": "157d83e6-0fd6-529d-9850-310a1d7a2394",
+          "doctor_candidate_ids": [
+            "157d83e6-0fd6-529d-9850-310a1d7a2394"
+          ],
+          "requested_date": "2026-09-08",
+          "requested_start_time": "20:00",
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.99,
+        "check": "capabilities=['appointment_creation', 'availability_discovery'] | capabilities=['appointment_creation', 'availability_discovery'] | service_id=46285d0d-0d70-5c0f-a982-6514a7e01e32 expected=46285d0d-0d70-5c0f-a982-6514a7e01e32 | doctor_id=157d83e6-0fd6-529d-9850-310a1d7a2394 expected=157d83e6-0fd6-529d-9850-310a1d7a2394 | branch_id=25e29258-47f9-53e7-8ff4-662f4973f0bf expected=25e29258-47f9-53e7-8ff4-662f4973f0bf | start=20:00 before=None after=None"
+      },
+      "error": null
+    },
+    {
+      "name": "service_information",
+      "category": "semantic:information",
+      "status": "PASS",
+      "duration_ms": 1690,
+      "details": {
+        "message": "عايز اعرف الخدمات اللي عندكو",
+        "capabilities": [
+          "service_information"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "capabilities=['service_information']"
+      },
+      "error": null
+    },
+    {
+      "name": "pricing",
+      "category": "semantic:information",
+      "status": "PASS",
+      "duration_ms": 1755,
+      "details": {
+        "message": "جلسة ليزر الابط بكام؟",
+        "capabilities": [
+          "pricing",
+          "service_information"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "ليزر الابط",
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": "46285d0d-0d70-5c0f-a982-6514a7e01e32",
+          "service_candidate_ids": [
+            "46285d0d-0d70-5c0f-a982-6514a7e01e32"
+          ],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "capabilities=['pricing', 'service_information'] | service_id=46285d0d-0d70-5c0f-a982-6514a7e01e32 expected=46285d0d-0d70-5c0f-a982-6514a7e01e32"
+      },
+      "error": null
+    },
+    {
+      "name": "doctor_discovery",
+      "category": "semantic:information",
+      "status": "PASS",
+      "duration_ms": 1776,
+      "details": {
+        "message": "مين الدكاترة اللي بيعملوا ليزر إزالة الشعر؟",
+        "capabilities": [
+          "doctor_discovery",
+          "service_information"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "ليزر إزالة الشعر",
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": "be69595f-8e24-557b-a279-7d1fbc612098",
+          "service_candidate_ids": [
+            "be69595f-8e24-557b-a279-7d1fbc612098"
+          ],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "capabilities=['doctor_discovery', 'service_information']"
+      },
+      "error": null
+    },
+    {
+      "name": "branch_discovery",
+      "category": "semantic:information",
+      "status": "PASS",
+      "duration_ms": 1489,
+      "details": {
+        "message": "فروعكم فين؟",
+        "capabilities": [
+          "branch_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 1.0,
+        "check": "capabilities=['branch_discovery']"
+      },
+      "error": null
+    },
+    {
+      "name": "exact_time_semantics",
+      "category": "semantic:time_semantics",
+      "status": "PASS",
+      "duration_ms": 1642,
+      "details": {
+        "message": "عايز ميعاد الساعة ٦ بالليل",
+        "capabilities": [
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": "18:00",
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.9,
+        "check": "start=18:00 before=None after=None"
+      },
+      "error": null
+    },
+    {
+      "name": "after_time_semantics",
+      "category": "semantic:time_semantics",
+      "status": "PASS",
+      "duration_ms": 1658,
+      "details": {
+        "message": "عايز ميعاد بعد الساعة ٦ بالليل",
+        "capabilities": [
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": "18:00",
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.9,
+        "check": "not_before=18:00 not_after=None"
+      },
+      "error": null
+    },
+    {
+      "name": "before_time_semantics",
+      "category": "semantic:time_semantics",
+      "status": "PASS",
+      "duration_ms": 1601,
+      "details": {
+        "message": "عايز ميعاد قبل الساعة ٨ بالليل",
+        "capabilities": [
+          "availability_discovery"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": "20:00",
+          "appointment_reference": null
+        },
+        "confidence": 0.95,
+        "check": "not_before=None not_after=20:00"
+      },
+      "error": null
+    },
+    {
+      "name": "range_time_semantics",
+      "category": "semantic:time_semantics",
+      "status": "PASS",
+      "duration_ms": 1544,
+      "details": {
+        "message": "عايز ميعاد من الساعة ٦ لحد ٨ بالليل",
+        "capabilities": [
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": "18:00",
+          "not_after_time": "20:00",
+          "appointment_reference": null
+        },
+        "confidence": 0.95,
+        "check": "not_before=18:00 not_after=20:00"
+      },
+      "error": null
+    },
+    {
+      "name": "relative_date",
+      "category": "semantic:date_semantics",
+      "status": "PASS",
+      "duration_ms": 1840,
+      "details": {
+        "message": "عايز احجز يوم التلات الجاي",
+        "capabilities": [
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": "2026-09-08",
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.95,
+        "check": "requested_date=2026-09-08"
+      },
+      "error": null
+    },
+    {
+      "name": "medical_suitability",
+      "category": "semantic:safety",
+      "status": "PASS",
+      "duration_ms": 1845,
+      "details": {
+        "message": "انا حامل، هل ينفع اعمل بوتوكس ولا ايه الأنسب ليا؟",
+        "capabilities": [
+          "service_information",
+          "doctor_discovery"
+        ],
+        "risk_flags": [
+          "medical"
+        ],
+        "entity_hints": {
+          "service_query": "بوتوكس",
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": "3f120b1c-409d-5583-8c6b-a5426b6fc365",
+          "service_candidate_ids": [
+            "3f120b1c-409d-5583-8c6b-a5426b6fc365",
+            "443e9525-2f45-5285-b702-f6096cf866f4"
+          ],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.99,
+        "check": "risk_flags=['medical'] handoff=medical"
+      },
+      "error": null
+    },
+    {
+      "name": "mixed_language",
+      "category": "semantic:robustness",
+      "status": "PASS",
+      "duration_ms": 2147,
+      "details": {
+        "message": "عايز underarm laser مع د Ahmed في Nasr City",
+        "capabilities": [
+          "service_information",
+          "pricing",
+          "doctor_discovery",
+          "branch_discovery",
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": "underarm laser",
+          "branch_query": "Nasr City",
+          "doctor_query": "Ahmed",
+          "service_id": "46285d0d-0d70-5c0f-a982-6514a7e01e32",
+          "service_candidate_ids": [
+            "46285d0d-0d70-5c0f-a982-6514a7e01e32"
+          ],
+          "branch_id": "25e29258-47f9-53e7-8ff4-662f4973f0bf",
+          "branch_candidate_ids": [
+            "25e29258-47f9-53e7-8ff4-662f4973f0bf"
+          ],
+          "doctor_id": "157d83e6-0fd6-529d-9850-310a1d7a2394",
+          "doctor_candidate_ids": [
+            "157d83e6-0fd6-529d-9850-310a1d7a2394"
+          ],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.99,
+        "check": "service_id=46285d0d-0d70-5c0f-a982-6514a7e01e32 expected=46285d0d-0d70-5c0f-a982-6514a7e01e32 | doctor_id=157d83e6-0fd6-529d-9850-310a1d7a2394 expected=157d83e6-0fd6-529d-9850-310a1d7a2394 | branch_id=25e29258-47f9-53e7-8ff4-662f4973f0bf expected=25e29258-47f9-53e7-8ff4-662f4973f0bf"
+      },
+      "error": null
+    },
+    {
+      "name": "catalog_id_grounding",
+      "category": "semantic:safety",
+      "status": "PASS",
+      "duration_ms": 1646,
+      "details": {
+        "message": "عايز احجز خدمة مناسبة مع دكتور مناسب في فرع مناسب",
+        "capabilities": [
+          "availability_discovery",
+          "appointment_creation"
+        ],
+        "risk_flags": [],
+        "entity_hints": {
+          "service_query": null,
+          "branch_query": null,
+          "doctor_query": null,
+          "service_id": null,
+          "service_candidate_ids": [],
+          "branch_id": null,
+          "branch_candidate_ids": [],
+          "doctor_id": null,
+          "doctor_candidate_ids": [],
+          "requested_date": null,
+          "requested_start_time": null,
+          "not_before_time": null,
+          "not_after_time": null,
+          "appointment_reference": null
+        },
+        "confidence": 0.95,
+        "check": "unknown_ids=[]"
+      },
+      "error": null
+    },
+    {
+      "name": "service_information_no_write",
+      "category": "e2e:read",
+      "status": "PASS",
+      "duration_ms": 4738,
+      "details": {
+        "reply": "أهلاً بيك في عيادات تيا! بنقدم مجموعة واسعة من الخدمات منها: الاستشارات الطبية (زي استشارة الجلدية)، العناية بالبشرة (زي الهيدرافيشل وتنظيف البشرة العميق)، حقن التجميل (البوتوكس والفيلر والسكين بوستر)، علاجات الشعر (مثل PRP والميزوثيرابي)، وليزر إزالة الشعر وعلاجات البشرة بالليزر.\n\nحبب تعرف تفاصيل أو أسعار خدمة معينة فيهم؟",
+        "model": "gemini:gemini-3.5-flash-lite"
+      },
+      "error": null
+    },
+    {
+      "name": "underarm_booking_service_duration",
+      "category": "e2e:booking",
+      "status": "FAIL",
+      "duration_ms": 26302,
+      "details": {
+        "requested_date": "2026-09-03",
+        "requested_time": "16:00",
+        "first_reply": "معلش، حصلت مشكلة بسيطة في جلب المواعيد المتاحة لفرع مدينة نصر حالياً.\n\nممكن ثواني وهتأكدلك من إمكانية حجز جلسة ليزر الإبط مع د. أحمد محمود يوم الخميس 3 سبتمبر 2026 الساعة 4:00 عصراً، أو تحب أجرب أشوفلك مواعيد تانية؟",
+        "write_reply": "معلش، زي ما وضحت لحضرتك النظام مش سامح بتأكيد الحجز أوتوماتيك حالياً، وأنا حوّلت المحادثة لفريق العيادة للمراجعة والتواصل معاك لتأكيد الميعاد.",
+        "created_appointment_id": null,
+        "duration_minutes": null,
+        "status": null
+      },
+      "error": "The conversational booking did not create a 15-minute underarm appointment."
+    },
+    {
+      "name": "full_body_booking_service_duration",
+      "category": "e2e:booking",
+      "status": "FAIL",
+      "duration_ms": 32673,
+      "details": {
+        "first_reply": "معلش، حصلت مشكلة تقنية بسيطة في مراجعة المواعيد المتاحة لفرع مدينة نصر حالياً.\n\nتحب أشوفلك المواعيد المتاحة في فرع تاني، ولا تحب أحوّل المحادثة لفريق العيادة يراجع الميعاد ويأكده معاك؟",
+        "write_reply": "معلش جداً، السيستم مش سامحلي بتأكيد الحجز آلياً في الوقت الحالي عشان مشكلة تقنية في جدول فرع مدينة نصر.\n\nحوّلت المحادثة لفريق العيادة عشان يراجعوا الموعد ده (ليزر جسم كامل سيدات مع د. أحمد محمود يوم 3 سبتمبر 2026 الساعة 4:00 مساءً) ويكملوا التأكيد معاك.",
+        "duration_minutes": null,
+        "created_appointment_id": null
+      },
+      "error": "The conversational booking did not create a 60-minute full-body appointment."
+    },
+    {
+      "name": "ambiguous_cancel_no_write",
+      "category": "e2e:ambiguity",
+      "status": "PASS",
+      "duration_ms": 4998,
+      "details": {
+        "reply": "عندك موعدين قادمين، تحب تلغي أنهي واحد فيهم؟\n\n1. **تنظيف بشرة عميق** مع د. مريم حسن (فرع التجمع الخامس) - الأحد 6 سبتمبر 2026 الساعة 11:00 صباحاً.\n2. **PRP للشعر** مع د. هالة مصطفى (فرع الشيخ زايد) - الثلاثاء 8 سبتمبر 2026 الساعة 12:00 ظهراً."
+      },
+      "error": null
+    },
+    {
+      "name": "ambiguous_reschedule_no_write",
+      "category": "e2e:ambiguity",
+      "status": "PASS",
+      "duration_ms": 7468,
+      "details": {
+        "reply": "عند حضرتك حجزين قادمين:\n\n1. **تنظيف بشرة عميق** مع د. مريم حسن في **فرع التجمع الخامس**، يوم الأحد 6 سبتمبر 2026 الساعة 11:00 صباحاً.\n2. **PRP للشعر** مع د. هالة مصطفى في **فرع الشيخ زايد**، يوم الثلاثاء 8 سبتمبر 2026 الساعة 12:00 ظهراً.\n\nتحب تغيّر أنهي حجز فيهم؟ ومناسب لحضرتك يوم أو وقت إيه؟"
+      },
+      "error": null
+    },
+    {
+      "name": "blocked_patient_rejected",
+      "category": "e2e:safety",
+      "status": "PASS",
+      "duration_ms": 55,
+      "details": {
+        "error": "Blocked patients cannot use the automated customer agent."
+      },
+      "error": null
+    }
+  ]
+}
