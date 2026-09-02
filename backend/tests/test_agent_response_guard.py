@@ -7,18 +7,15 @@ def test_full_uuid_is_removed() -> None:
     assert "50c4d2be" not in cleaned
 
 
-def test_short_doctor_id_is_replaced() -> None:
-    cleaned = sanitize_customer_reply("الدكتور 50c4d2be متاح الساعة 8")
-    assert cleaned == "الدكتور المتاح متاح الساعة 8"
+def test_short_entity_ids_are_replaced_without_exposing_identifiers() -> None:
+    assert sanitize_customer_reply("الدكتور 50c4d2be متاح الساعة 8") == "الدكتور المتاح متاح الساعة 8"
+    assert sanitize_customer_reply("الفرع deadbeef متاح") == "الفرع المتاح متاح"
+    assert sanitize_customer_reply("الخدمة cafe1234 متاحة") == "الخدمة متاحة"
 
 
-def test_common_fusha_handoff_is_softened() -> None:
-    cleaned = sanitize_customer_reply(
+def test_guard_does_not_rewrite_tone_or_semantics() -> None:
+    reply = (
         "أعتذر، لكن هذا الموضوع يحتاج تقييم طبي مباشر. "
         "لقد حولت المحادثة للفريق، وسيتواصل معك قريبًا."
     )
-    assert "أعتذر" not in cleaned
-    assert "هذا الموضوع يحتاج" not in cleaned
-    assert "لقد" not in cleaned
-    assert "سيتواصل معك" not in cleaned
-    assert "الموضوع ده محتاج" in cleaned
+    assert sanitize_customer_reply(reply) == reply
