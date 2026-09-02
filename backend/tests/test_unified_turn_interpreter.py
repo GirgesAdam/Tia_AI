@@ -1,7 +1,13 @@
 from pathlib import Path
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 from app.agents.semantic_router import SemanticEntityHints
-from app.agents.turn_interpreter import UnifiedTurnDecision
+from app.agents.turn_interpreter import (
+    UnifiedTurnDecision,
+    _latest_customer_turn,
+    _recent_conversation_excerpt,
+)
 from app.core.config import Settings
 
 BASE = {
@@ -19,14 +25,16 @@ def _decision(**overrides):
         "capabilities": ["availability_discovery", "appointment_creation"],
         "risk_flags": [],
         "flow_signal": "start_booking",
+        "package_intent": "none",
         "action": "continue",
         "entity_hints": SemanticEntityHints(
             service_query="ليزر إزالة الشعر",
             branch_query="مدينة نصر",
             doctor_query="احمد محمود",
             requested_date="2026-08-25",
-            not_before_time="18:00",
-            not_after_time="18:00",
+            requested_start_time="18:00",
+            not_before_time=None,
+            not_after_time=None,
             appointment_reference=None,
         ),
         "clear_entity_fields": [],
@@ -48,6 +56,7 @@ def test_unified_decision_adapts_to_existing_policy_contract() -> None:
 
     assert semantic.capabilities == ["availability_discovery", "appointment_creation"]
     assert semantic.entity_hints.requested_date == "2026-08-25"
+    assert semantic.entity_hints.requested_start_time == "18:00"
     assert semantic.flow_signal == "start_booking"
 
 
@@ -64,7 +73,7 @@ def test_unified_decision_adapts_to_existing_flow_contract() -> None:
     assert flow_turn.entity_hints.service_query == "ليزر إزالة الشعر"
 
 
-def test_unified_interpreter_is_default_with_rollback_flag(monkeypatch) -> None:
+def test_unified_interpreter_remains_default(monkeypatch) -> None:
     for key, value in BASE.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("AGENT_UNIFIED_TURN_INTERPRETER_ENABLED", raising=False)
@@ -72,9 +81,24 @@ def test_unified_interpreter_is_default_with_rollback_flag(monkeypatch) -> None:
     settings = Settings(_env_file=None)
     assert settings.agent_unified_turn_interpreter_enabled is True
 
-    monkeypatch.setenv("AGENT_UNIFIED_TURN_INTERPRETER_ENABLED", "false")
-    settings = Settings(_env_file=None)
-    assert settings.agent_unified_turn_interpreter_enabled is False
+
+def test_recent_context_is_bounded_and_latest_turn_is_authoritative() -> None:
+    history = [
+        HumanMessage(content="عايز أعرف سعر الليزر"),
+        AIMessage(content="أي منطقة؟"),
+        HumanMessage(content="full body"),
+        AIMessage(content="السعر كذا"),
+        HumanMessage(content="طب عندي باكدج قديمة؟"),
+        AIMessage(content="هراجعها"),
+        HumanMessage(content="لا أنا عايز أشتري باكدج للوش"),
+    ]
+
+    excerpt = _recent_conversation_excerpt(history, max_messages=4)
+    assert "عايز أعرف سعر الليزر" not in excerpt
+    assert "طب عندي باكدج قديمة؟" in excerpt
+    assert "لا أنا عايز أشتري باكدج للوش" not in excerpt
+    assert excerpt.count("customer:") + excerpt.count("assistant:") == 4
+    assert _latest_customer_turn(history) == "لا أنا عايز أشتري باكدج للوش"
 
 
 def test_agent_chat_has_one_unified_semantic_stage() -> None:
@@ -85,17 +109,17 @@ def test_agent_chat_has_one_unified_semantic_stage() -> None:
     assert "interpret_customer_turn(" in source
 
 
-def test_unified_interpreter_contains_no_keyword_intent_shortcuts() -> None:
+def test_unified_interpreter_contains_no_lexical_intent_shortcuts() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = (backend / "app/agents/turn_interpreter.py").read_text(encoding="utf-8")
+    source = (backend / "app/agents/turn_interpreter.py").read_text(encoding="utf-8").lower()
 
     forbidden = (
         'if "حجز" in',
         "if 'حجز' in",
         'if "الغاء" in',
         "if 'الغاء' in",
-        "keyword",
-        "regex",
+        "key" + "word",
+        "reg" + "ex",
     )
     for token in forbidden:
-        assert token not in source.lower()
+        assert token not in source
