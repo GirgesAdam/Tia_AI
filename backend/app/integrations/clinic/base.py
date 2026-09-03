@@ -4,11 +4,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ClinicCapability(str, Enum):
+class ClinicCapability(StrEnum):
     """Canonical abilities a clinic source can expose to Tia.
 
     These capabilities describe what the connected clinic system can support,

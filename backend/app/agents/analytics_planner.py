@@ -15,7 +15,6 @@ from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
 from app.schemas.analytics_bi import AnalyticsBIPlan
 
-
 _OPERATION_GUIDE = """
 Allowed operation meanings:
 - clinic_summary: general appointment/patient/payment snapshot.

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, distinct, extract, func, select
+from sqlalchemy import case, extract, func, select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
@@ -210,7 +210,7 @@ def _time_grid_rows(
     hours = sorted(present_hours)
     if not hours:
         return [], AnalyticsCatalogChartDataRead(labels=[], series=[])
-    value_label = {
+    {
         "appointments": "المواعيد",
         "no_show_rate": "نسبة عدم الحضور",
         "cancellation_rate": "نسبة الإلغاء",

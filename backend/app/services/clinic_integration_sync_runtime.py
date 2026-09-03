@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
 from uuid import UUID
 
 from sqlalchemy import select
@@ -12,15 +12,14 @@ from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
     external_domain_write_enabled,
 )
+from app.integrations.clinic.mapped_sync import ClinicMappedSyncError, MappedClinicSyncSource
 from app.integrations.clinic.prototype_external import PrototypeExternalConfigurationError
 from app.integrations.clinic.registry import ClinicAdapterConfigurationError, get_clinic_adapter
-from app.integrations.clinic.mapped_sync import ClinicMappedSyncError, MappedClinicSyncSource
-from app.schemas.clinic_connector_mapping import ClinicSyncMapping
 from app.integrations.clinic.sync_contract import (
+    ClinicRawSyncSource,
     ClinicSyncDomain,
     ClinicSyncFetchRequest,
     ClinicSyncPage,
-    ClinicRawSyncSource,
     ClinicSyncSource,
 )
 from app.models.clinic_integration import ClinicIntegration
@@ -31,6 +30,7 @@ from app.models.clinic_integration_sync import (
     ClinicIntegrationSyncSchedule,
 )
 from app.models.workspace import Workspace
+from app.schemas.clinic_connector_mapping import ClinicSyncMapping
 from app.schemas.clinic_integration import (
     ClinicSyncCycleRead,
     ClinicSyncDomainCycleRead,
@@ -83,7 +83,7 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _connector_failure_digest(domain: ClinicSyncDomain) -> str:
-    return hashlib.sha256(f"connector:{domain.value}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"connector:{domain.value}".encode()).hexdigest()
 
 
 def _schedule_locked(schedule: ClinicIntegrationSyncSchedule, *, now: datetime) -> bool:

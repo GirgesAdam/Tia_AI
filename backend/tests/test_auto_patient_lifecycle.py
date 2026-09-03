@@ -1,6 +1,6 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
-import json
 
 from app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for
 

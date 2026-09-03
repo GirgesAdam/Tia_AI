@@ -177,7 +177,7 @@ def test_phase76_routes_migration_and_frontend_are_explicit_about_attribution() 
     assert 'revision: str = "0044_campaign_analytics_tracking"' in migration
     assert 'down_revision: str | None = "0043_analytics_scale_guards"' in migration
     assert 'REVOKE ALL ON TABLE public."crm_campaign_conversions" FROM anon, authenticated' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
     assert '@router.get("/campaigns"' in route and '@router.get("/campaigns/{campaign_id}"' in route
     assert "get_analytics_db" in route and "get_analytics_workspace_reader" in route
     assert "direct_same_conversation_response" in attribution
@@ -187,5 +187,8 @@ def test_phase76_routes_migration_and_frontend_are_explicit_about_attribution() 
     assert "transfer_campaign_booking_conversion" in operations
     assert frontend.exists() and frontend_detail.exists()
     assert "حجوزات متتبعة" in frontend.read_text(encoding="utf-8")
-    assert "حدود نسب النتائج للحملة" in frontend_detail.read_text(encoding="utf-8")
+    detail_source = frontend_detail.read_text(encoding="utf-8")
+    assert "campaign.booking_conversion_rate" in detail_source
+    assert "campaign.attributed_revenue_minor" in detail_source
+    assert "data.definitions.map" in detail_source
     assert "أداء الحملات" in analytics_page.read_text(encoding="utf-8")

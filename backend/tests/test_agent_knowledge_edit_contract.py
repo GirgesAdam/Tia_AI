@@ -1,4 +1,3 @@
-from datetime import datetime, time, timezone
 from uuid import uuid4
 
 import pytest
@@ -9,7 +8,6 @@ from app.schemas.agent_knowledge import (
     KnowledgeDoctor,
     KnowledgeEditAction,
     KnowledgeFieldChange,
-    KnowledgeHour,
     KnowledgeNamedLink,
     KnowledgeScheduleInterval,
     KnowledgeService,

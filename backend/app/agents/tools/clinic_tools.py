@@ -28,7 +28,6 @@ from app.integrations.clinic.base import (
     RescheduleAppointmentRequest,
 )
 from app.integrations.clinic.registry import get_clinic_adapter
-
 from app.models.agent_action import AgentAction
 from app.models.branch import Branch
 from app.models.conversation import Conversation

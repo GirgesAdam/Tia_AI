@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable
+from typing import Any
 
 from app.schemas.clinic_import import (
     StructuralAggregateMapping,

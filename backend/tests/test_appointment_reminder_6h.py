@@ -82,8 +82,10 @@ def test_automation_ui_labels_six_hour_rule() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(
         encoding="utf-8"
     )
-    assert 'appointment_reminder_6h' in page
-    assert 'تذكير قبل 6 ساعات' in page
+
+    assert page.count("appointment_reminder_6h") >= 3
+    assert 'rule.key === "appointment_reminder_6h"' in page
+
 
 
 def test_setup_documents_six_hour_template_as_the_only_default_reminder() -> None:

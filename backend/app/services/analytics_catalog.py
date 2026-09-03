@@ -23,7 +23,11 @@ from app.services.analytics_audience import execute_audience_plan, validate_audi
 from app.services.analytics_bi import AnalyticsBIError, analytics_entity_catalog
 from app.services.analytics_business import execute_business_plan, validate_business_plan_entities
 from app.services.analytics_catalog_special import execute_special_catalog_analysis
-from app.services.analytics_runtime import get_cached_aggregate, log_catalog_execution, put_cached_aggregate
+from app.services.analytics_runtime import (
+    get_cached_aggregate,
+    log_catalog_execution,
+    put_cached_aggregate,
+)
 
 Mode = Literal["business", "audience", "custom"]
 

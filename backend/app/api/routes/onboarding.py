@@ -30,9 +30,11 @@ from app.services.ai_onboarding import (
     OnboardingExecutionError,
     OnboardingPlanValidationError,
     OnboardingSessionConflictError,
-    cancel_session as cancel_ai_session,
     execute_plan,
     process_onboarding_message,
+)
+from app.services.ai_onboarding import (
+    cancel_session as cancel_ai_session,
 )
 
 router = APIRouter()

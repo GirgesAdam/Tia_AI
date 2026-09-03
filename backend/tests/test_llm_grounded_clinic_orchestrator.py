@@ -6,6 +6,7 @@ from app.agents.capability_policy import resolve_capability_policy
 from app.agents.clinic_grounding import grounded_catalog_facts, validate_grounded_entity_ids
 from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
 from app.services import agent_chat
+
 SERVICE_UNDERARM = "11111111-1111-4111-8111-111111111111"
 SERVICE_FULL = "22222222-2222-4222-8222-222222222222"
 BRANCH_NASR = "33333333-3333-4333-8333-333333333333"

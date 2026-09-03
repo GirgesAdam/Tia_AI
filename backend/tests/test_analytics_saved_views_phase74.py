@@ -4,7 +4,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.schemas.analytics_catalog import AnalyticsCatalogRunRequest
@@ -235,9 +234,10 @@ def test_phase74_routes_frontend_and_migration_use_deterministic_saved_view_cont
     assert "ENABLE ROW LEVEL SECURITY" in migration
     assert "REVOKE ALL" in migration
     assert "created_by_user_id" in migration and "ondelete=\"CASCADE\"" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
     assert 'tiaRequest<AnalyticsSavedView[]>("/analytics/views?limit=20")' in page
-    assert "عروضك المحفوظة" in catalog
+    assert "savedViews.length > 0" in catalog
+    assert "savedViews.map" in catalog
     assert "حفظ العرض" in catalog
     assert 'fetch("/api/analytics/export"' in catalog
     assert 'tiaRawRequest("/analytics/catalog/export"' in proxy

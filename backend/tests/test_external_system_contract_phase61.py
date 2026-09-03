@@ -213,14 +213,17 @@ def test_admin_runtime_diagnostics_expose_capabilities_and_link_counts() -> None
     assert "func.count(ClinicIntegrationEntityLink.id)" in service_source
 
 
-def test_integration_setup_ui_surfaces_patient_and_payment_contract() -> None:
+def test_integration_setup_ui_surfaces_historical_import_contract() -> None:
     root = Path(__file__).resolve().parent.parent.parent
     source = (
         root / "frontend/src/app/(dashboard)/setup/integration/page.tsx"
     ).read_text(encoding="utf-8")
-    assert '"patients.read": "Patients"' in source
-    assert '"payments.read": "Payments"' in source
-    assert '"/clinic/integration/runtime"' in source
+
+    assert "HistoricalImportUploader" in source
+    assert "HistoricalBatch" in source
+    assert '"/clinic/history/batches"' in source
+    assert 'href="/api/clinic-history-template"' in source
+
 
 
 def test_shipped_external_example_contains_patient_and_payment_vendor_sections() -> None:

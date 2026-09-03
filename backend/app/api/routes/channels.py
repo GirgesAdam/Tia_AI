@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
-from app.core.config import settings
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.core.channel_adapter import generate_adapter_token
+from app.core.config import settings
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
 from app.schemas.channel import (

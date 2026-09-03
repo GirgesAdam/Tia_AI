@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.agents.capability_policy import (
     CapabilityPolicyDecision,
     ToolAuthorizationError,
@@ -21,9 +22,9 @@ from app.agents.clinic_grounding import (
     choice_snapshot_from_grounded_facts,
     grounded_catalog_facts,
 )
+from app.agents.flow_interpreter import FlowTurnDecision, interpret_active_flow_turn
 from app.agents.grounded_response import compose_grounded_customer_reply
 from app.agents.llm_runtime import LLMProviderError
-from app.agents.flow_interpreter import FlowTurnDecision, interpret_active_flow_turn
 from app.agents.response_guard import sanitize_customer_reply
 from app.agents.semantic_actions import (
     booking_tool_args,
@@ -38,8 +39,8 @@ from app.agents.semantic_router import (
     route_customer_message,
 )
 from app.agents.tia_customer_agent import run_tia_customer_agent
-from app.agents.turn_interpreter import interpret_customer_turn
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
+from app.agents.turn_interpreter import interpret_customer_turn
 from app.core.config import settings
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
@@ -62,20 +63,20 @@ from app.services.conversation_flows import (
     sync_flow_from_agent_run,
     transition_flow,
 )
-from app.services.handoffs import get_active_handoff
-from app.services.patient_packages import (
-    _package_financial_rows,
-    list_patient_packages,
-    reserve_package_usage,
-    validate_package_for_booking,
-)
-from app.services.handoff_intelligence import build_handoff_context
 from app.services.conversation_ownership import (
     OWNER_HUMAN,
     agent_can_reply,
     lock_conversation_ownership,
     record_customer_inbound,
     return_to_ai,
+)
+from app.services.handoff_intelligence import build_handoff_context
+from app.services.handoffs import get_active_handoff
+from app.services.patient_packages import (
+    _package_financial_rows,
+    list_patient_packages,
+    reserve_package_usage,
+    validate_package_for_booking,
 )
 
 logger = logging.getLogger(__name__)

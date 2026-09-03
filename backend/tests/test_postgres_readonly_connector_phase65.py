@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
@@ -449,7 +447,10 @@ def test_reference_candidates_are_explicit_distinct_reads(monkeypatch) -> None:
 
 
 def test_mapping_schema_validates_reference_identity_columns() -> None:
-    from app.integrations.clinic.mapped_sync import ClinicMappedSyncError, validate_sync_mapping_schema
+    from app.integrations.clinic.mapped_sync import (
+        ClinicMappedSyncError,
+        validate_sync_mapping_schema,
+    )
     from app.schemas.clinic_connector_mapping import (
         ClinicReferenceIdentityMapping,
         ClinicReferenceIdentityMappings,

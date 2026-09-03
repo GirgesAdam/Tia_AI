@@ -166,7 +166,8 @@ def test_ai_followup_uses_existing_semantic_turn_and_backend_validated_tool() ->
     assert "create_crm_task(" in tools
     assert 'dedupe_key=f"agent:{ctx.run_id}:follow_up"' in tools
     assert "Follow-up time must be in the future." in tools
-    assert "create_follow_up_task" in prompt
+    assert "create_follow_up_task" not in prompt
+
 
 
 def test_followup_ui_uses_backend_task_api_and_patient_profile_entrypoint() -> None:
@@ -178,14 +179,16 @@ def test_followup_ui_uses_backend_task_api_and_patient_profile_entrypoint() -> N
     patient_actions = (_root() / "frontend/src/app/(dashboard)/patients/actions.ts").read_text(
         encoding="utf-8"
     )
-    nav = (_root() / "frontend/src/components/dashboard-shell.tsx").read_text(encoding="utf-8")
+    nav = (_root() / "frontend/src/components/dashboard-navigation.tsx").read_text(encoding="utf-8")
 
     assert 'scope: "100"' not in page
     assert 'scope: filters.scope || "all"' in page
     assert "assigned_to_me" in page
-    assert "claimTask" in page and "setTaskStatus" in page
+    assert "claimTask" in page
+    assert "setTaskStatus" in page
     assert "/crm/tasks/${taskId}/claim" in actions
     assert "createPatientTask" in patient_page
     assert 'type="datetime-local"' in patient_page
     assert 'tiaRequest("/crm/tasks"' in patient_actions
-    assert '["/tasks","المتابعات",ListTodo]' in nav
+    assert 'href: "/tasks"' in nav
+    assert "icon: ListTodo" in nav

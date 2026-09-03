@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { CheckCircle2, LoaderCircle, ListChecks, UsersRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,9 +35,9 @@ function localTomorrowAtTen() {
 }
 
 export function AnalyticsCohortActions({ result }: { result: AnalyticsBIAnswer }) {
-  const [cohortRequestId, setCohortRequestId] = useState("");
-  const [taskRequestId, setTaskRequestId] = useState("");
-  const [defaultDue, setDefaultDue] = useState("");
+  const [cohortRequestId] = useState(() => createClientRequestId());
+  const [taskRequestId] = useState(() => createClientRequestId());
+  const [defaultDue, setDefaultDue] = useState(() => localTomorrowAtTen());
   const [cohortState, cohortAction, cohortPending] = useActionState<AnalyticsCohortState, FormData>(
     createAnalyticsCohortAction,
     { cohort: null, error: null },
@@ -47,12 +47,6 @@ export function AnalyticsCohortActions({ result }: { result: AnalyticsBIAnswer }
     { result: null, error: null },
   );
   const defaultName = cohortNames[result.plan.operation] || "قائمة عملاء";
-
-  useEffect(() => {
-    setCohortRequestId(createClientRequestId());
-    setTaskRequestId(createClientRequestId());
-    setDefaultDue(localTomorrowAtTen());
-  }, []);
 
   if (!cohortableOperations.has(result.plan.operation) || result.rows.length === 0) return null;
 

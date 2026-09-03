@@ -12,11 +12,16 @@ from app.api.dependencies.security import (
     get_workspace_admin,
     get_workspace_admin_user_id,
 )
-from app.database.session import get_db
 from app.core.doctor_names import normalize_doctor_name_parts
+from app.database.session import get_db
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    integration_authority_policy,
+    normalize_authority_policy,
+)
 from app.models.booking_settings import BookingSettings
-from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
 from app.models.branch import Branch
+from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -30,21 +35,6 @@ from app.schemas.agent_knowledge import (
     KnowledgeEditApplyResponse,
     KnowledgeEditProposal,
     KnowledgeEditProposeRequest,
-)
-from app.schemas.clinic_integration import (
-    ClinicEntityLinkRead,
-    ClinicEntityLinkUpsert,
-    ClinicDataIssueListRead,
-    ClinicDataIssueResolveRequest,
-    ClinicIntegrationAuthorityRead,
-    ClinicIntegrationAuthorityUpsert,
-    ClinicIntegrationRead,
-    ClinicIntegrationRuntimeRead,
-    ClinicIntegrationUpsert,
-    ClinicSyncCycleRead,
-    ClinicSyncRunRequest,
-    ClinicSyncScheduleRead,
-    ClinicSyncScheduleUpsert,
 )
 from app.schemas.clinic import (
     BookingSettingsRead,
@@ -69,11 +59,20 @@ from app.schemas.clinic import (
     StaffUpdate,
     WorkingHoursReplace,
 )
-
-from app.integrations.clinic.authority import (
-    ClinicIntegrationAuthorityError,
-    integration_authority_policy,
-    normalize_authority_policy,
+from app.schemas.clinic_integration import (
+    ClinicDataIssueListRead,
+    ClinicDataIssueResolveRequest,
+    ClinicEntityLinkRead,
+    ClinicEntityLinkUpsert,
+    ClinicIntegrationAuthorityRead,
+    ClinicIntegrationAuthorityUpsert,
+    ClinicIntegrationRead,
+    ClinicIntegrationRuntimeRead,
+    ClinicIntegrationUpsert,
+    ClinicSyncCycleRead,
+    ClinicSyncRunRequest,
+    ClinicSyncScheduleRead,
+    ClinicSyncScheduleUpsert,
 )
 from app.services.activity import record_activity_event
 from app.services.agent_knowledge import build_agent_knowledge_snapshot
@@ -83,12 +82,6 @@ from app.services.agent_knowledge_edit import (
     apply_agent_knowledge_edit,
     propose_agent_knowledge_edit,
 )
-from app.services.clinic_integration_sync_runtime import (
-    ClinicSyncRuntimeError,
-    read_sync_schedule,
-    run_manual_sync,
-    update_sync_schedule,
-)
 from app.services.clinic_data_quality import (
     ClinicDataQualityError,
     list_data_issues,
@@ -97,6 +90,12 @@ from app.services.clinic_data_quality import (
 from app.services.clinic_integration_runtime import (
     ClinicIntegrationRuntimeError,
     build_clinic_integration_runtime,
+)
+from app.services.clinic_integration_sync_runtime import (
+    ClinicSyncRuntimeError,
+    read_sync_schedule,
+    run_manual_sync,
+    update_sync_schedule,
 )
 
 router = APIRouter()

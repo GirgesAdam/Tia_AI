@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 import app.services.analytics_catalog as catalog_service
-from app.services.analytics_capacity import is_statement_timeout
 from app.core.config import settings
 from app.schemas.analytics_catalog import AnalyticsCatalogRunRequest
+from app.services.analytics_capacity import is_statement_timeout
 from app.services.analytics_export import AnalyticsExportLimitError, analytics_result_csv
 from app.services.analytics_runtime import clear_analytics_aggregate_cache
 from tests.test_deterministic_analytics_catalog_phase72 import NOW, _engine, _seed
@@ -146,7 +146,7 @@ def test_phase75_uses_isolated_pool_timeout_cache_export_guards_and_payment_inde
     assert 'down_revision: str | None = "0042_analytics_saved_views"' in migration
     assert "autocommit_block" in migration
     assert "postgresql_concurrently=True" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_catalog_validation_reuses_entity_catalog_in_same_run(monkeypatch) -> None:

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { CheckCircle2, LoaderCircle, Megaphone, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -48,15 +48,10 @@ export function SavedCohortCampaignForm({
   whatsappConnections: ChannelConnection[];
   isAdmin: boolean;
 }) {
-  const [requestId, setRequestId] = useState("");
-  const [confirmationId, setConfirmationId] = useState("");
+  const [requestId] = useState(() => createClientRequestId());
+  const [confirmationId] = useState(() => createClientRequestId());
   const [prepareState, prepareAction, preparePending] = useActionState<CohortCampaignState, FormData>(prepareCohortCampaignAction, initialState);
   const [confirmState, confirmAction, confirmPending] = useActionState<CohortCampaignState, FormData>(confirmCohortCampaignAction, initialState);
-
-  useEffect(() => {
-    setRequestId(createClientRequestId());
-    setConfirmationId(createClientRequestId());
-  }, []);
 
   const campaign = prepareState.campaign;
   const result = confirmState.result;

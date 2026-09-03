@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "seed_realistic_aesthetic_clinic.py"
 SOURCE = SCRIPT.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)

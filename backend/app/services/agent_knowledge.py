@@ -5,7 +5,7 @@ import json
 from collections import defaultdict
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment

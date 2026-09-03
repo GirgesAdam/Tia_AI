@@ -45,28 +45,36 @@ function BatchStatus({ batch }: { batch: HistoricalBatch }) {
 }
 
 export function HistoricalImportUploader({ initialBatch = null }: { initialBatch?: HistoricalBatch | null }) {
-  const [state, formAction, pendingPreview] = useActionState(previewHistoricalImportAction, initialHistoricalImportActionState);
   const [batch, setBatch] = useState<HistoricalBatch | null>(initialBatch);
+  const [state, formAction, pendingPreview] = useActionState(
+    async (
+      previous: HistoricalImportActionState,
+      formData: FormData,
+    ) => {
+      const next = await previewHistoricalImportAction(previous, formData);
+      if (next.preview?.batch) setBatch(next.preview.batch);
+      return next;
+    },
+    initialHistoricalImportActionState,
+  );
   const [pendingApply, startTransition] = useTransition();
   const [applyError, setApplyError] = useState<string | null>(null);
+  const batchId = batch?.batch_id ?? null;
+  const batchStatus = batch?.status ?? null;
 
   useEffect(() => {
-    if (state.preview?.batch) setBatch(state.preview.batch);
-  }, [state.preview]);
-
-  useEffect(() => {
-    if (!batch || batch.status !== "importing") return;
+    if (!batchId || batchStatus !== "importing") return;
     let cancelled = false;
     const timer = window.setInterval(async () => {
       try {
-        const latest = await readHistoricalImportBatchAction(batch.batch_id);
+        const latest = await readHistoricalImportBatchAction(batchId);
         if (!cancelled) setBatch(latest);
       } catch {
         // Keep the current state and retry on the next interval. Import state is durable in the backend.
       }
     }, 1600);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [batch?.batch_id, batch?.status]);
+  }, [batchId, batchStatus]);
 
   const preview = state.preview;
   const readyTotal = preview ? Object.values(preview.ready_counts).reduce((sum, value) => sum + value, 0) : 0;

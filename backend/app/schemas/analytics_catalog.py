@@ -120,7 +120,7 @@ class AnalyticsCatalogRunRequest(BaseModel):
         return result
 
     @model_validator(mode="after")
-    def validate_ranges(self) -> "AnalyticsCatalogRunRequest":
+    def validate_ranges(self) -> AnalyticsCatalogRunRequest:
         explicit_dates = self.start_date is not None or self.end_date is not None
         if self.all_history and (self.lookback_days is not None or explicit_dates):
             raise ValueError("all_history cannot be combined with a bounded period")

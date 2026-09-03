@@ -471,7 +471,7 @@ def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:
 def _select_rule_template(rule: AutomationRule, appointment_id: UUID) -> tuple[str, str, int]:
     """Choose one stable template per appointment/rule so retries never change the copy."""
     candidates = _rule_template_candidates(rule)
-    digest = hashlib.sha256(f"{appointment_id}:{rule.key}".encode("utf-8")).digest()
+    digest = hashlib.sha256(f"{appointment_id}:{rule.key}".encode()).digest()
     index = int.from_bytes(digest[:8], "big") % len(candidates)
     name, language = candidates[index]
     return name, language, len(candidates)

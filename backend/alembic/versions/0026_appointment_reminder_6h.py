@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
 from alembic import op
 
 revision: str = "0026_appointment_reminder_6h"

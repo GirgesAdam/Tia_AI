@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -21,13 +21,13 @@ from app.models.workspace import Workspace
 from app.schemas.clinic_setup_v2 import (
     BookingPolicyUpdateV2,
     ClinicDoctorCreateV2,
-    ClinicDoctorUpdateV2,
     ClinicDoctorReadV2,
+    ClinicDoctorUpdateV2,
     ClinicProfileReadV2,
     ClinicProfileUpsert,
     ClinicServiceCreateV2,
-    ClinicServiceUpdateV2,
     ClinicServiceReadV2,
+    ClinicServiceUpdateV2,
     ClinicSetupReadinessV2,
     ClinicSetupV2Snapshot,
     VisitingWindowsUpdateV2,

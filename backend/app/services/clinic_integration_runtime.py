@@ -10,13 +10,16 @@ from app.integrations.clinic.authority import (
     domain_authority_owner,
     integration_authority_policy,
 )
-from app.integrations.clinic.sync_contract import ClinicRawSyncSource, ClinicSyncDomain, ClinicSyncSource
 from app.integrations.clinic.mapped_sync import MappedClinicSyncSource
-from app.schemas.clinic_connector_mapping import ClinicSyncMapping
 from app.integrations.clinic.registry import (
     ClinicAdapterConfigurationError,
     get_clinic_adapter,
     registered_clinic_adapter_keys,
+)
+from app.integrations.clinic.sync_contract import (
+    ClinicRawSyncSource,
+    ClinicSyncDomain,
+    ClinicSyncSource,
 )
 from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
 from app.models.clinic_integration_sync import (
@@ -26,6 +29,7 @@ from app.models.clinic_integration_sync import (
     ClinicIntegrationSyncSchedule,
 )
 from app.models.workspace import Workspace
+from app.schemas.clinic_connector_mapping import ClinicSyncMapping
 from app.schemas.clinic_integration import (
     ClinicIntegrationAuthorityRead,
     ClinicIntegrationRuntimeRead,
@@ -245,5 +249,5 @@ def build_clinic_integration_runtime(
             if approved_fingerprint else None
         ),
         sync_schedule=schedule_read,
-        data_quality=dict((integration.config_json or {}).get("data_quality") or {}),
+        data_quality=dict(config_json.get("data_quality") or {}),
     )

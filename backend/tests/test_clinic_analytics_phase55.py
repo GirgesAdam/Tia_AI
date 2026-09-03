@@ -91,17 +91,22 @@ def test_daily_buckets_use_workspace_timezone_and_zero_fill_calendar_days() -> N
     assert "patient_daily.get(current_day, 0)" in source
 
 
-def test_analytics_ui_has_catalog_period_filters_real_data_disclaimer_and_no_chart_dependency() -> None:
+def test_analytics_ui_has_catalog_period_filters_and_no_chart_dependency() -> None:
     root = _root()
     page = (root / "frontend/src/app/(dashboard)/analytics/page.tsx").read_text(encoding="utf-8")
     catalog = (root / "frontend/src/app/(dashboard)/analytics/catalog.tsx").read_text(encoding="utf-8")
-    shell = (root / "frontend/src/components/dashboard-shell.tsx").read_text(encoding="utf-8")
+    navigation = (root / "frontend/src/components/dashboard-navigation.tsx").read_text(encoding="utf-8")
     types = (root / "frontend/src/lib/types.ts").read_text(encoding="utf-8")
+
     assert 'tiaRequest<AnalyticsCatalog>("/analytics/catalog")' in page
+    assert "<AnalyticsCatalogPanel" in page
     assert 'name="period"' in catalog
-    assert "آخر 7 أيام" in catalog and "آخر 30 يوم" in catalog and "آخر 90 يوم" in catalog
-    assert "البيانات المسجلة فعليًا في Tia" in page
+    assert '<option value="7">' in catalog
+    assert '<option value="30">' in catalog
+    assert '<option value="90">' in catalog
     assert 'name="currency"' not in catalog
-    assert "recharts" not in page.lower() and "recharts" not in catalog.lower()
-    assert '["/analytics","Analytics",BarChart3]' in shell
+    assert "recharts" not in page.lower()
+    assert "recharts" not in catalog.lower()
+    assert 'href: "/analytics"' in navigation
+    assert "icon: BarChart3" in navigation
     assert "export interface AnalyticsCatalog" in types

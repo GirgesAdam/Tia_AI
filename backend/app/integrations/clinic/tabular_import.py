@@ -9,7 +9,7 @@ import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -19,9 +19,10 @@ from app.integrations.clinic.structural_transform import (
     StructuralTransformError,
     apply_structural_transforms,
 )
-from app.schemas.crm import normalize_patient_identity_phone
 from app.schemas.clinic_import import (
     AppointmentSheetMapping,
+    AppointmentSource,
+    BillingContext,
     ClinicImportCapabilities,
     ClinicImportDocument,
     ClinicImportIssue,
@@ -32,17 +33,16 @@ from app.schemas.clinic_import import (
     NormalizedAppointmentImport,
     NormalizedBranchImport,
     NormalizedDoctorImport,
-    NormalizedPaymentAllocationImport,
-    NormalizedPaymentImport,
     NormalizedPackageImport,
     NormalizedPackageUsageImport,
+    NormalizedPaymentAllocationImport,
+    NormalizedPaymentImport,
     NormalizedServiceImport,
     NormalizedWorkingHourImport,
-    AppointmentSource,
-    BillingContext,
     PaymentMethod,
     PaymentStatus,
 )
+from app.schemas.crm import normalize_patient_identity_phone
 
 MAX_DOCUMENT_COUNT = 100
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
@@ -366,7 +366,9 @@ def _datetime_value(value: Any, *, timezone_name: str | None, path: str) -> date
                 except ValueError:
                     continue
             if parsed is None:
-                raise ClinicImportError(f"{path}: unsupported datetime value {value!r}.")
+                raise ClinicImportError(
+                    f"{path}: unsupported datetime value {value!r}."
+                ) from None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         parsed = parsed.replace(tzinfo=_timezone(timezone_name, path=path))
     return parsed
@@ -3121,7 +3123,7 @@ def build_import_preview(
                     {
                         "label": f"ربط الباقة بـ {patient_name}",
                         "detail": (
-                            f"كل الأدلة المتاحة من جلسات/دفعات الباقة تشير لهذا العميل."
+                            "كل الأدلة المتاحة من جلسات/دفعات الباقة تشير لهذا العميل."
                             if evidence_source in {"usage", "payment"} and len(ranked_patients) == 1
                             else (
                                 f"{count} نقاط دليل من استخدامات/دفعات الباقة مرتبطة بهذا العميل."

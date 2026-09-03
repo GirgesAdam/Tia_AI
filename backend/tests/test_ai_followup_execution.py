@@ -155,11 +155,14 @@ def test_patient_and_task_ui_make_automatic_followup_explicit() -> None:
     tasks_page = (_root() / "frontend/src/app/(dashboard)/tasks/page.tsx").read_text(
         encoding="utf-8"
     )
+
     assert 'name="execution_mode"' in patient_page
-    assert 'value="ai">Tia تبعت المتابعة تلقائيًا' in patient_page
-    assert 'execution_mode: executionMode' in patient_actions
-    assert 'Tia AI تلقائيًا' in tasks_page
-    assert 'استلام من Tia' in tasks_page
+    assert '<option value="ai">' in patient_page
+    assert '<option value="human">' in patient_page
+    assert "execution_mode: executionMode" in patient_actions
+    assert 'task.execution_mode === "ai"' in tasks_page
+    assert 'task.execution_mode === "human"' in tasks_page
+
 
 
 def test_whatsapp_followup_models_customer_service_window_explicitly() -> None:

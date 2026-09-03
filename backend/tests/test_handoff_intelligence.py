@@ -26,7 +26,7 @@ class _FakeDB:
     def flush(self) -> None:
         for value in self.added:
             if hasattr(value, "id") and getattr(value, "id", None) is None:
-                setattr(value, "id", uuid4())
+                value.id = uuid4()
 
     def commit(self) -> None:
         self.commits += 1

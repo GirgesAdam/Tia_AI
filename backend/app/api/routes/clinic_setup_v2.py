@@ -20,11 +20,11 @@ from app.schemas.clinic_setup_v2 import (
     ClinicServiceCreateV2,
     ClinicServiceReadV2,
     ClinicServiceUpdateV2,
-    ClinicSetupV2Snapshot,
     ClinicSetupApplyDraftRequest,
     ClinicSetupImportDocument,
     ClinicSetupImportResponse,
     ClinicSetupPreviewResponse,
+    ClinicSetupV2Snapshot,
     VisitingWindowsUpdateV2,
     WorkingHoursUpdateV2,
 )
@@ -35,6 +35,13 @@ from app.schemas.historical_import import (
     HistoricalImportPreviewResponse,
 )
 from app.services.activity import record_activity_event
+from app.services.clinic_setup_import import (
+    ClinicSetupImportError,
+    build_clinic_setup_template,
+    clinic_setup_draft_to_workbook_base64,
+    import_clinic_setup_workbook,
+    preview_clinic_setup_workbook,
+)
 from app.services.clinic_setup_v2 import (
     ClinicSetupV2Error,
     build_setup_v2_snapshot,
@@ -47,13 +54,6 @@ from app.services.clinic_setup_v2 import (
     update_doctor_v2,
     update_service_v2,
     upsert_clinic_profile,
-)
-from app.services.clinic_setup_import import (
-    ClinicSetupImportError,
-    build_clinic_setup_template,
-    clinic_setup_draft_to_workbook_base64,
-    import_clinic_setup_workbook,
-    preview_clinic_setup_workbook,
 )
 from app.services.historical_import import (
     HistoricalImportConflictError,

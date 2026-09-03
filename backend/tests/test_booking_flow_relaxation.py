@@ -160,7 +160,6 @@ def test_flow_decision_defaults_to_no_clear_for_backward_compatibility() -> None
 
 def test_exact_unavailable_time_handles_adapter_slots(monkeypatch) -> None:
     from datetime import UTC, date, datetime, time, timedelta
-    from types import SimpleNamespace
     from uuid import uuid4
 
     from app.agents.tools import clinic_tools
@@ -232,7 +231,6 @@ def test_exact_unavailable_time_handles_adapter_slots(monkeypatch) -> None:
 
 def test_exact_available_start_returns_only_that_start_and_preserves_service_duration(monkeypatch) -> None:
     from datetime import UTC, date, datetime, time, timedelta
-    from types import SimpleNamespace
     from uuid import uuid4
 
     from app.agents.tools import clinic_tools

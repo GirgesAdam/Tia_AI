@@ -12,10 +12,14 @@ from sqlalchemy.orm import Session, aliased
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    require_tia_patient_fields_writable,
+)
 from app.models.branch import Branch
 from app.models.conversation import Conversation
-from app.models.crm_cohort import CRMCohort, CRMCohortMember
 from app.models.crm_campaign import CRMCampaign, CRMCampaignRecipient
+from app.models.crm_cohort import CRMCohort, CRMCohortMember
 from app.models.crm_task import CRMTask
 from app.models.lead import Lead
 from app.models.message import Message
@@ -25,33 +29,18 @@ from app.models.patient_tag import PatientTag, PatientTagAssignment
 from app.models.service import Service
 from app.models.user import User
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
-from app.schemas.patient_history import PatientHistoryContextRead
 from app.schemas.analytics_bi import AnalyticsBIPlan
 from app.schemas.analytics_composable import AnalyticsAudiencePlan
-from app.schemas.crm_cohort import (
-    AnalyticsCohortCreateRequest,
-    AnalyticsAudienceActionConfirmRequest,
-    AnalyticsAudienceActionResult,
-    CRMCohortMemberRead,
-    CRMCohortRead,
-    CohortFollowUpCreateRequest,
-    CohortFollowUpResult,
-    CohortCampaignPrepareRequest,
-    CohortCampaignConfirmRequest,
-    CohortCampaignConfirmResult,
-    CRMCampaignRead,
-    CRMCampaignRecipientRead,
-)
 from app.schemas.crm import (
     ConversationChannel,
-    CRMTaskCreate,
-    CRMTaskRead,
-    CRMTaskStatus,
-    CRMTaskUpdate,
     ConversationCreate,
     ConversationRead,
     ConversationStatus,
     ConversationUpdate,
+    CRMTaskCreate,
+    CRMTaskRead,
+    CRMTaskStatus,
+    CRMTaskUpdate,
     LeadCreate,
     LeadRead,
     LeadStatus,
@@ -70,13 +59,36 @@ from app.schemas.crm import (
     PatientUpdate,
     normalize_phone,
 )
+from app.schemas.crm_cohort import (
+    AnalyticsAudienceActionConfirmRequest,
+    AnalyticsAudienceActionResult,
+    AnalyticsCohortCreateRequest,
+    CohortCampaignConfirmRequest,
+    CohortCampaignConfirmResult,
+    CohortCampaignPrepareRequest,
+    CohortFollowUpCreateRequest,
+    CohortFollowUpResult,
+    CRMCampaignRead,
+    CRMCampaignRecipientRead,
+    CRMCohortMemberRead,
+    CRMCohortRead,
+)
+from app.schemas.patient_history import PatientHistoryContextRead
+from app.services.conversation_ownership import (
+    record_customer_inbound,
+    return_to_ai,
+)
+from app.services.crm_campaigns import (
+    CRMCampaignError,
+    confirm_cohort_campaign,
+    prepare_cohort_campaign,
+)
 from app.services.crm_cohorts import (
     CRMCohortError,
     create_analytics_cohort,
     create_cohort_follow_up_tasks,
     execute_confirmed_audience_action,
 )
-from app.services.crm_campaigns import CRMCampaignError, confirm_cohort_campaign, prepare_cohort_campaign
 from app.services.crm_tasks import (
     ACTIVE_TASK_STATUSES,
     CRMTaskConflict,
@@ -87,10 +99,6 @@ from app.services.crm_tasks import (
     replace_legacy_lead_follow_up,
     update_crm_task,
 )
-from app.services.conversation_ownership import (
-    record_customer_inbound,
-    return_to_ai,
-)
 from app.services.handoff_intelligence import build_handoff_context
 from app.services.handoffs import (
     HandoffStateError,
@@ -98,8 +106,8 @@ from app.services.handoffs import (
     create_handoff,
     ensure_active_workspace_user,
 )
-from app.services.patient_timeline import build_patient_profile
 from app.services.patient_history import build_patient_history_context
+from app.services.patient_timeline import build_patient_profile
 
 router = APIRouter()
 

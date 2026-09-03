@@ -25,7 +25,10 @@ from app.models.clinic_integration_sync import ClinicIntegrationSyncFailure
 from app.models.patient import Patient
 from app.services import clinic_integration_sync as sync_service
 from app.services.clinic_integration_runtime import build_clinic_integration_runtime
-from app.services.clinic_integration_sync import ClinicIntegrationSyncError, apply_external_sync_page
+from app.services.clinic_integration_sync import (
+    ClinicIntegrationSyncError,
+    apply_external_sync_page,
+)
 from app.services.payments import PaymentOperationError, record_payment
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=UTC)

@@ -31,7 +31,6 @@ from app.integrations.clinic.base import (
     RescheduleAppointmentRequest,
 )
 from app.integrations.clinic.mapped_sync import (
-    ClinicMappedSyncError,
     schema_fingerprint,
     sync_mapping_extraction_plan,
     sync_mapping_required_raw_columns,

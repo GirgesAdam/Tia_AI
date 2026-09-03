@@ -1,5 +1,5 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 from app.integrations.clinic.authority import PATIENT_EXTERNAL_SYNC_FIELDS
 from app.integrations.clinic.base import PatientRecord
@@ -48,21 +48,31 @@ def test_frontend_patient_views_do_not_reference_patient_email() -> None:
     assert "KnowledgePatient = { id: string; name: string; phone: string | null; email:" not in joined
 
 
-def test_alembic_revision_ids_fit_default_version_column_and_new_chain_is_short() -> None:
+def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None:
     backend = Path(__file__).resolve().parent.parent
     revisions: dict[str, str | None] = {}
+    long_revisions: dict[str, str] = {}
+
     for path in (backend / "alembic/versions").glob("*.py"):
         source = path.read_text(encoding="utf-8")
         revision_match = re.search(r'^revision:\s*str\s*=\s*["\']([^"\']+)', source, re.M)
         if revision_match is None:
             continue
+
         revision = revision_match.group(1)
-        assert len(revision) <= 32, f"Alembic revision exceeds VARCHAR(32): {revision}"
+        if len(revision) > 32:
+            long_revisions[revision] = source
+
         down_match = re.search(r'^down_revision:.*?=\s*["\']([^"\']+)', source, re.M)
         revisions[revision] = down_match.group(1) if down_match else None
 
+    assert set(long_revisions) == {"0052_payment_reference_constraint_repair"}
+    assert "ALTER COLUMN version_num TYPE VARCHAR(255)" in long_revisions[
+        "0052_payment_reference_constraint_repair"
+    ]
     assert revisions["0033_sync_authority"] == "0032_external_sync_engine"
     assert revisions["0034_drop_customer_email"] == "0033_sync_authority"
+
 
 
 def test_drop_patient_email_migration_is_explicit() -> None:

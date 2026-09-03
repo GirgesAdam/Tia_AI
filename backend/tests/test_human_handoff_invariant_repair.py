@@ -23,7 +23,7 @@ class _FakeDB:
     def flush(self) -> None:
         for value in self.added:
             if hasattr(value, "id") and getattr(value, "id", None) is None:
-                setattr(value, "id", uuid4())
+                value.id = uuid4()
 
     def commit(self) -> None:
         self.commits += 1
@@ -114,6 +114,6 @@ def test_team_inbox_offers_explicit_repair_action_for_missing_handoff() -> None:
         _root() / "frontend/src/app/(dashboard)/inbox/[conversationId]/page.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "استلمها لإصلاح الحالة والرد بأمان" in source
-    assert "<form action={takeOverConversation}>" in source
-    assert ">استلم المحادثة</Button>" in source
+    assert 'conversation.owner_type === "ai"' in source
+    assert "handoff && unassigned" in source
+    assert source.count("<form action={takeOverConversation}>") >= 2

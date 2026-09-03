@@ -12,8 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.integrations.clinic.authority import (
-    ClinicIntegrationAuthorityError,
     PATIENT_EXTERNAL_SYNC_FIELDS,
+    ClinicIntegrationAuthorityError,
     external_patient_fields,
     require_external_domain_authority,
 )
@@ -26,24 +26,27 @@ from app.integrations.clinic.sync_contract import (
 )
 from app.models.appointment import Appointment
 from app.models.branch import Branch
-from app.models.doctor import Doctor
 from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
 from app.models.clinic_integration_sync import (
     ClinicIntegrationSyncCheckpoint,
     ClinicIntegrationSyncFailure,
     ClinicIntegrationSyncRun,
 )
+from app.models.doctor import Doctor
 from app.models.patient import PATIENT_SOURCES, PATIENT_STATUSES, Patient
-from app.models.service import Service
 from app.models.payment_transaction import (
     PAYMENT_METHODS,
     PaymentAllocation,
     PaymentTransaction,
 )
+from app.models.service import Service
 from app.models.workspace import Workspace
 from app.schemas.crm import normalize_phone
 from app.services.activity import record_activity_event
-from app.services.appointment_operations import add_appointment_history, cancel_pending_appointment_jobs
+from app.services.appointment_operations import (
+    add_appointment_history,
+    cancel_pending_appointment_jobs,
+)
 from app.services.payments import (
     reallocate_appointment_payments_on_reschedule,
     refresh_appointment_payment_snapshots,
@@ -849,7 +852,7 @@ def _create_external_appointment(
         amount_paid_minor=0,
         payment_method="unknown",
         idempotency_key=(
-            "extsync:" + hashlib.sha256(f"{workspace.id}:appointment:{external_id}".encode("utf-8")).hexdigest()[:56]
+            "extsync:" + hashlib.sha256(f"{workspace.id}:appointment:{external_id}".encode()).hexdigest()[:56]
         ),
     )
     _set_appointment_status_timestamps(appointment, status=desired["status"], status_at=desired["status_at"])
@@ -918,7 +921,7 @@ def _replace_external_appointment(
         customer_note=current.customer_note,
         idempotency_key=(
             "extsync-reschedule:" + hashlib.sha256(
-                f"{workspace.id}:{external_id}:{desired['start_at'].isoformat()}:{desired['doctor_id']}:{desired['service_id']}".encode("utf-8")
+                f"{workspace.id}:{external_id}:{desired['start_at'].isoformat()}:{desired['doctor_id']}:{desired['service_id']}".encode()
             ).hexdigest()[:44]
         ),
     )
@@ -1440,7 +1443,7 @@ def _sync_payment(
         idempotency_key=(
             "extsync:"
             + hashlib.sha256(
-                f"{workspace.id}:payment:{external_id}".encode("utf-8")
+                f"{workspace.id}:payment:{external_id}".encode()
             ).hexdigest()[:56]
         ),
         created_at=record.created_at,

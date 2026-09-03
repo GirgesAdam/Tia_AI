@@ -14,12 +14,12 @@ from app.integrations.clinic.authority import (
     normalize_authority_policy,
     require_tia_workspace_domain_write,
 )
-from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.integrations.clinic.sync_contract import (
     ClinicSyncDomain,
     ClinicSyncPage,
     ExternalAppointmentSyncRecord,
 )
+from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.models.appointment import Appointment
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
@@ -30,8 +30,9 @@ from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.services import clinic_integration_sync as sync_service
 from app.services.booking import BookingRuleError
-from app.services.clinic_integration_sync import ClinicIntegrationSyncError, apply_external_sync_page
-
+from app.services.clinic_integration_sync import (
+    apply_external_sync_page,
+)
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 START = NOW + timedelta(days=1)
@@ -80,6 +81,7 @@ def _create_schema(engine) -> None:
         """
         CREATE TABLE doctors (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), staff_id CHAR(32),
+            doctor_type VARCHAR(16) DEFAULT 'regular',
             specialization VARCHAR(200), license_number VARCHAR(120), bio VARCHAR(2000),
             booking_enabled BOOLEAN, is_active BOOLEAN,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -497,7 +499,7 @@ def test_migration_0035_extends_sync_domain_checks_and_head() -> None:
     assert 'revision: str = "0035_appointment_sync"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0034_drop_customer_email"' in migration
     assert "'patients', 'payments', 'appointments'" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def _load_appointment_sync_migration_module():

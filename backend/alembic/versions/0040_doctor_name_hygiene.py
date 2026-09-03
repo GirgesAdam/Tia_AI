@@ -11,8 +11,9 @@ import re
 import unicodedata
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "0040_doctor_name_hygiene"
 down_revision: str | None = "0039_crm_campaigns"

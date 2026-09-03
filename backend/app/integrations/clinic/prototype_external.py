@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,6 +23,7 @@ from app.integrations.clinic.base import (
     PaymentReadResult,
     PaymentRecord,
 )
+from app.integrations.clinic.mapped_sync import schema_fingerprint
 from app.integrations.clinic.sync_contract import (
     ClinicRawSyncFetchRequest,
     ClinicRawSyncPage,
@@ -34,7 +35,6 @@ from app.integrations.clinic.sync_contract import (
     ExternalPaymentAllocationSyncRecord,
     ExternalPaymentSyncRecord,
 )
-from app.integrations.clinic.mapped_sync import schema_fingerprint
 from app.schemas.clinic_connector_mapping import (
     ClinicConnectorColumnSchema,
     ClinicConnectorSchemaSnapshot,

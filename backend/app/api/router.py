@@ -3,10 +3,10 @@ from fastapi import APIRouter
 from app.api.routes.agent import router as agent_router
 from app.api.routes.analytics import router as analytics_router
 from app.api.routes.analytics_views import router as analytics_views_router
-from app.api.routes.campaign_analytics import router as campaign_analytics_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.automations import router as automations_router
 from app.api.routes.booking import router as booking_router
+from app.api.routes.campaign_analytics import router as campaign_analytics_router
 from app.api.routes.channels import router as channels_router
 from app.api.routes.clinic import router as clinic_router
 from app.api.routes.clinic_setup_v2 import router as clinic_setup_v2_router

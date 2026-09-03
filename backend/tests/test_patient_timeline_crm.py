@@ -146,13 +146,14 @@ def test_patient_ui_links_list_to_profile_and_writes_notes_through_existing_api(
 
     assert "`/patients/${patient.id}`" in list_page
     assert "/profile?timeline_limit=75" in profile_page
-    assert "Patient Timeline" in profile_page
+    assert "profile.timeline.map" in profile_page
     assert "profile.latest_conversation_id" in profile_page
     assert "addPatientNote" in profile_page
     assert "/notes" in actions
     assert 'method: "POST"' in actions
     assert "`/patients/${conversation.patient.id}`" in inbox_detail
     assert "llm" not in profile_page.lower()
+
 
 
 def test_patient_profile_latency_path_reuses_notes_and_batches_kpis() -> None:

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 BACKEND = Path(__file__).resolve().parent.parent
 
 

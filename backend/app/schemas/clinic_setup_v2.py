@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, time
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -195,7 +195,7 @@ class ClinicSetupImportResponse(BaseModel):
     imported_counts: dict[str, int]
     skipped_counts: dict[str, int]
     issues: list[ClinicSetupImportIssue] = Field(default_factory=list)
-    snapshot: "ClinicSetupV2Snapshot"
+    snapshot: ClinicSetupV2Snapshot
 
 
 class ClinicSetupV2Snapshot(BaseModel):

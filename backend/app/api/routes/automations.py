@@ -16,10 +16,6 @@ from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
 from app.models.message_dispatch import MessageDispatch
 from app.models.workspace import Workspace
-from app.schemas.clinic_integration import (
-    ClinicSyncWorkerTickRequest,
-    ClinicSyncWorkerTickResponse,
-)
 from app.schemas.automation import (
     AutomationExecuteResponse,
     AutomationJobActionResponse,
@@ -36,8 +32,11 @@ from app.schemas.automation import (
     AutomationWorkerStatusUpdate,
     AutomationWorkerTokenRotated,
 )
+from app.schemas.clinic_integration import (
+    ClinicSyncWorkerTickRequest,
+    ClinicSyncWorkerTickResponse,
+)
 from app.services.activity import record_activity_event
-from app.services.clinic_integration_sync_runtime import run_scheduled_sync_tick
 from app.services.automations import (
     AUTOMATION_JOB_STALE_MINUTES,
     AutomationError,
@@ -51,6 +50,7 @@ from app.services.automations import (
     plan_automation_jobs,
     retry_automation_job,
 )
+from app.services.clinic_integration_sync_runtime import run_scheduled_sync_tick
 
 router = APIRouter()
 

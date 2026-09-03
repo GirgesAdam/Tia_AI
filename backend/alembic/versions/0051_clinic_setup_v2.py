@@ -10,8 +10,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0051_clinic_setup_v2"
 down_revision: str | None = "0050_clinic_data_issues"

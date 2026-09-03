@@ -76,7 +76,8 @@ def test_automation_dashboard_has_health_attention_and_safe_actions() -> None:
     actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(encoding="utf-8")
 
     assert 'tiaRequest<AutomationOperationsOverview>("/automations/overview")' in page
-    assert "Needs attention" in page
+    assert "attentionLabel" in page
+    assert "attentionJobs" in page
     assert "dispatch_status" in page
     assert "retryAutomationJob" in page
     assert "cancelAutomationJob" in page
@@ -85,9 +86,10 @@ def test_automation_dashboard_has_health_attention_and_safe_actions() -> None:
     assert '/automations/jobs/${id}/cancel' in actions
 
 
+
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:

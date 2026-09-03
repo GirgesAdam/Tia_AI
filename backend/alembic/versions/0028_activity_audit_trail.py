@@ -8,8 +8,9 @@ Create Date: 2026-08-25
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0028_activity_audit_trail"
 down_revision: str | Sequence[str] | None = "0027_human_handoff_invariant"

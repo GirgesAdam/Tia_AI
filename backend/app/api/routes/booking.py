@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    require_tia_workspace_domain_write,
+)
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
@@ -25,9 +29,9 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.booking import (
+    AppointmentAutomationRead,
     AppointmentCancel,
     AppointmentCreate,
-    AppointmentAutomationRead,
     AppointmentEntitySummary,
     AppointmentListScope,
     AppointmentOperationalStatusUpdate,
@@ -60,9 +64,12 @@ from app.services.appointment_operations import (
     reschedule_appointment_operation,
     update_operational_status_operation,
 )
-from app.integrations.clinic.authority import (
-    ClinicIntegrationAuthorityError,
-    require_tia_workspace_domain_write,
+from app.services.booking import (
+    BookingRuleError,
+    SlotCandidate,
+    calculate_availability,
+    find_exact_slot,
+    get_effective_booking_settings,
 )
 from app.services.patient_packages import (
     PackageOperationError,
@@ -73,13 +80,6 @@ from app.services.patient_packages import (
     record_package_payment,
     reserve_package_usage,
     validate_package_for_booking,
-)
-from app.services.booking import (
-    BookingRuleError,
-    SlotCandidate,
-    calculate_availability,
-    find_exact_slot,
-    get_effective_booking_settings,
 )
 
 router = APIRouter()

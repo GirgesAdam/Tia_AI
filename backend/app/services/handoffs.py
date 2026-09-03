@@ -19,7 +19,6 @@ from app.models.patient import Patient
 from app.models.user import User
 from app.models.workspace_member import WorkspaceMember
 from app.services.activity import record_activity_event
-from app.services.handoff_intelligence import merge_handoff_context
 from app.services.conversation_ownership import (
     OWNER_AI,
     OwnershipTransitionBlockedError,
@@ -30,6 +29,7 @@ from app.services.conversation_ownership import (
     return_to_ai,
     transfer_to_human,
 )
+from app.services.handoff_intelligence import merge_handoff_context
 
 
 class HandoffStateError(ValueError):

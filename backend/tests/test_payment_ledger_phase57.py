@@ -101,7 +101,7 @@ def test_migration_backfills_legacy_snapshots_and_advances_readiness_head() -> N
     assert "legacy-payment" in migration
     assert "legacy-refund" in migration
     assert "a.payment_status IN ('paid', 'partial', 'refunded')" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_historical_import_writes_canonical_payment_ledger_directly() -> None:
