@@ -45,6 +45,7 @@ def test_provider_readiness_does_not_expose_api_key() -> None:
     service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     assert '"gemini_api_key"' not in service
+    assert '"openai_api_key"' not in service
     assert '"onboarding_primary_model"' in service
     assert '"onboarding_fallback_model"' in service
 
@@ -56,6 +57,7 @@ def test_readiness_checks_workspace_clinic_integration() -> None:
     assert 'key="clinic_integration"' in service
     assert "registered_clinic_adapter_keys()" in service
     assert 'clinic_integration.status == "active"' in service
+
 
 def test_provider_readiness_is_provider_aware() -> None:
     backend = Path(__file__).resolve().parent.parent
