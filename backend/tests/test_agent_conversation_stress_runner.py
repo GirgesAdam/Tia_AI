@@ -1,7 +1,11 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from scripts.run_agent_conversation_stress import _conversation_specs, _semantic_specs, _static_architecture_findings
+from scripts.run_agent_conversation_stress import (
+    _conversation_specs,
+    _semantic_specs,
+    _static_architecture_findings,
+)
 
 
 def test_stress_catalog_is_within_requested_turn_range() -> None:

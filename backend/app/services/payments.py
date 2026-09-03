@@ -53,7 +53,7 @@ def _row_amount_minor(row: object) -> int:
     allocated = getattr(row, "allocated_amount_minor", None)
     if allocated is not None:
         return int(allocated)
-    return int(getattr(row, "amount_minor"))
+    return int(row.amount_minor)
 
 
 def _locked_appointment(db: Session, *, workspace_id: UUID, appointment_id: UUID) -> Appointment:

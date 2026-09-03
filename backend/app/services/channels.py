@@ -8,12 +8,12 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.channel_adapter import (
     channel_to_patient_source,
     hash_adapter_token,
 )
 from app.core.channel_delivery import apply_provider_delivery_status
+from app.core.config import settings
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_delivery_event import ChannelDeliveryEvent
 from app.models.channel_identity import ChannelIdentity
@@ -28,8 +28,6 @@ from app.schemas.agent import AgentChatResponse
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.schemas.crm import normalize_phone
 from app.services.agent_chat import run_agent_for_existing_inbound
-from app.services.crm_tasks import reconcile_ai_followup_dispatch
-from app.services.crm_campaigns import guard_campaign_dispatch_before_claim, reconcile_campaign_dispatch
 from app.services.conversation_ownership import (
     DISPATCH_SEND_LEASE,
     OWNER_HUMAN,
@@ -38,6 +36,11 @@ from app.services.conversation_ownership import (
     record_customer_inbound,
     return_to_ai,
 )
+from app.services.crm_campaigns import (
+    guard_campaign_dispatch_before_claim,
+    reconcile_campaign_dispatch,
+)
+from app.services.crm_tasks import reconcile_ai_followup_dispatch
 
 
 class ChannelError(ValueError):

@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 from app.schemas.agent_knowledge import (
     KnowledgeEditAction,
     KnowledgeEditDecision,
-    KnowledgeEditField,
     KnowledgeEditKind,
     KnowledgeFieldChange,
     KnowledgeScheduleInterval,
@@ -190,9 +189,9 @@ def _normalize_flat_decision(
             actions=[],
         )
 
-    field_groups: "OrderedDict[tuple[str, str | None, str | None], list[KnowledgeFieldChange]]" = OrderedDict()
-    schedule_groups: "OrderedDict[tuple[str, str, str | None], list[KnowledgeScheduleInterval]]" = OrderedDict()
-    relationship_actions: "OrderedDict[tuple[str, str], KnowledgeEditAction]" = OrderedDict()
+    field_groups: OrderedDict[tuple[str, str | None, str | None], list[KnowledgeFieldChange]] = OrderedDict()
+    schedule_groups: OrderedDict[tuple[str, str, str | None], list[KnowledgeScheduleInterval]] = OrderedDict()
+    relationship_actions: OrderedDict[tuple[str, str], KnowledgeEditAction] = OrderedDict()
 
     for operation in decision.operations:
         kind = operation.kind

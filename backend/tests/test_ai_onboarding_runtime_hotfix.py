@@ -43,5 +43,6 @@ def test_onboarding_route_surfaces_missing_migration_as_503() -> None:
     source = (backend / "app/api/routes/onboarding.py").read_text(encoding="utf-8")
 
     assert "except ProgrammingError as exc" in source
-    assert "0013_ai_onboarding_sessions" in source
+    assert '"onboarding_ai_sessions" in message' in source
+    assert '"onboarding_ai_events" in message' in source
     assert "Run Alembic upgrade head" in source

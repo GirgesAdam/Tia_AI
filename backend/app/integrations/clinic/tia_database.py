@@ -59,16 +59,16 @@ from app.services.appointment_operations import (
     confirm_appointment_operation,
     reschedule_appointment_operation,
 )
-from app.services.patient_packages import (
-    PackageOperationError,
-    reserve_package_usage,
-    validate_package_for_booking,
-)
 from app.services.booking import (
     BookingRuleError,
     calculate_availability,
     find_exact_slot,
     get_effective_booking_settings,
+)
+from app.services.patient_packages import (
+    PackageOperationError,
+    reserve_package_usage,
+    validate_package_for_booking,
 )
 
 _WEEKDAY_NAMES = (

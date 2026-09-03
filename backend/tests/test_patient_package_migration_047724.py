@@ -15,4 +15,4 @@ def test_patient_package_migration_contract_and_readiness_head() -> None:
     assert '["workspace_id", "id"]' in migration
     assert 'ENABLE ROW LEVEL SECURITY' in migration
     assert 'REVOKE ALL ON TABLE' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness

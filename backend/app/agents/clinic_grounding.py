@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from collections.abc import Iterable
 from copy import deepcopy
-import logging
 from threading import Lock
 from time import perf_counter
 from typing import Any
@@ -12,13 +12,40 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.integrations.clinic.registry import get_clinic_adapter
-from app.integrations.clinic.tia_database import (
-    filter_bookable_doctor_rows as _filter_bookable_doctor_rows,
-)
 from app.models.workspace import Workspace
 
-
 logger = logging.getLogger(__name__)
+
+
+def _filter_bookable_doctor_rows(
+    rows: Iterable[tuple[Any, Any]],
+    *,
+    service_ids_by_doctor: dict[Any, Iterable[Any]],
+    branch_ids_by_doctor: dict[Any, Iterable[Any]],
+    scheduled_branch_ids_by_doctor: dict[Any, Iterable[Any]],
+) -> list[tuple[Any, Any]]:
+    """Keep doctors that have a complete bookable service/branch/schedule graph."""
+    result: list[tuple[Any, Any]] = []
+
+    for doctor, staff in rows:
+        doctor_id = doctor.id
+        service_ids = set(service_ids_by_doctor.get(doctor_id, ()))
+        branch_ids = set(branch_ids_by_doctor.get(doctor_id, ()))
+        scheduled_branch_ids = set(
+            scheduled_branch_ids_by_doctor.get(doctor_id, ())
+        )
+
+        if not service_ids:
+            continue
+        if not branch_ids:
+            continue
+        if not branch_ids.intersection(scheduled_branch_ids):
+            continue
+
+        result.append((doctor, staff))
+
+    return result
+
 
 _CATALOG_CACHE_MAX_ENTRIES = 128
 _catalog_cache_lock = Lock()

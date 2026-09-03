@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.clinic_import import StructuralTransformMapping
 
-
 ConnectorColumnKind = Literal[
     "text",
     "integer",

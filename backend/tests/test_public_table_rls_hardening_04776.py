@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 EXPECTED_HARDENED_TABLES = {
     "activity_events",
     "clinic_integration_entity_links",
@@ -40,7 +39,7 @@ def test_v04776_operational_readiness_tracks_new_migration_head() -> None:
     readiness = (backend / "app/services/operational_readiness.py").read_text(
         encoding="utf-8"
     )
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_v04776_upgrade_emits_rls_and_revoke_for_each_target(monkeypatch) -> None:

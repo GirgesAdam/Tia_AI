@@ -22,12 +22,10 @@ from app.models.clinic_integration import ClinicIntegrationEntityLink
 from app.models.clinic_integration_sync import (
     ClinicIntegrationSyncCheckpoint,
     ClinicIntegrationSyncFailure,
-    ClinicIntegrationSyncRun,
 )
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.schemas.clinic_import import (
-    StructuralAggregateMapping,
     StructuralFieldMapping,
     StructuralJoinKey,
     StructuralJoinMapping,
@@ -38,7 +36,6 @@ from app.services.clinic_integration_sync import (
     ClinicIntegrationSyncError,
     apply_external_sync_page,
 )
-
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
 

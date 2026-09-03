@@ -19,19 +19,19 @@ from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.payment_transaction import PaymentTransaction
 from app.models.service import Service
-from app.schemas.crm import normalize_patient_identity_phone, normalize_phone
 from app.schemas.clinic_import import (
     NormalizedAppointmentImport,
     NormalizedPackageImport,
     NormalizedPackageUsageImport,
     NormalizedPaymentImport,
 )
-from app.services.payments import seed_payment_ledger_from_appointment_snapshot
 from app.schemas.clinic_integration import (
     ClinicDataIssueListRead,
     ClinicDataIssueRead,
     ClinicIntegrationDataQualityRead,
 )
+from app.schemas.crm import normalize_patient_identity_phone, normalize_phone
+from app.services.payments import seed_payment_ledger_from_appointment_snapshot
 
 
 class ClinicDataQualityError(RuntimeError):

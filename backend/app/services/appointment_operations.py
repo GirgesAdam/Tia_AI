@@ -14,13 +14,13 @@ from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
 from app.services.campaign_attribution import transfer_campaign_booking_conversion
-from app.services.payments import reallocate_appointment_payments_on_reschedule
 from app.services.patient_packages import (
     PackageOperationError,
     consume_package_usage,
     release_package_usage,
     transfer_package_usage,
 )
+from app.services.payments import reallocate_appointment_payments_on_reschedule
 
 AppointmentOperationAction = Literal[
     "confirm",

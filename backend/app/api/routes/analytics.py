@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.analytics import get_analytics_db, get_analytics_workspace_reader
 from app.api.dependencies.security import WorkspaceAccess
 from app.schemas.analytics import AnalyticsOverviewRead
-from app.schemas.analytics_catalog import AnalyticsCatalogRead, AnalyticsCatalogRunRead, AnalyticsCatalogRunRequest
+from app.schemas.analytics_catalog import (
+    AnalyticsCatalogRead,
+    AnalyticsCatalogRunRead,
+    AnalyticsCatalogRunRequest,
+)
 from app.schemas.patient_history import HistoricalAnalyticsRead
 from app.services.analytics import ANALYTICS_ALLOWED_DAYS, analytics_overview
 from app.services.analytics_bi import AnalyticsBIError

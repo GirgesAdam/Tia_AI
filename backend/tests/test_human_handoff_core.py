@@ -24,7 +24,7 @@ class _FakeDB:
     def flush(self, *args) -> None:
         for value in self.added:
             if hasattr(value, "id") and getattr(value, "id", None) is None:
-                setattr(value, "id", uuid4())
+                value.id = uuid4()
 
     def execute(self, *args, **kwargs):
         return []

@@ -99,7 +99,7 @@ class AnalyticsBusinessPlan(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_shape(self) -> "AnalyticsBusinessPlan":
+    def validate_shape(self) -> AnalyticsBusinessPlan:
         explicit_dates = self.start_date is not None or self.end_date is not None
         if explicit_dates:
             if self.start_date is None or self.end_date is None:

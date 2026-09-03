@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { CheckCircle2, ListChecks, LoaderCircle, MessageSquareMore, Save, UsersRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -57,10 +57,12 @@ export function AnalyticsAudienceActions({ result, allowedActions }: { result: A
     if (allowed.has("whatsapp_campaign")) items.push("whatsapp_campaign");
     return items;
   }, [allowedActions]);
-  const [audienceRequestId, setAudienceRequestId] = useState("");
-  const [actionRequestId, setActionRequestId] = useState("");
-  const [dueAt, setDueAt] = useState("");
-  const [actionKind, setActionKind] = useState<ActionKind>("save_audience");
+  const [audienceRequestId] = useState(() => createClientRequestId());
+  const [actionRequestId] = useState(() => createClientRequestId());
+  const [dueAt, setDueAt] = useState(() => localDue(1));
+  const [actionKind, setActionKind] = useState<ActionKind>(
+    () => enabledKinds[0] ?? "save_audience",
+  );
   const [state, action, pending] = useActionState<AnalyticsAudienceActionState, FormData>(
     confirmAnalyticsAudienceAction,
     { result: null, error: null },
@@ -69,16 +71,6 @@ export function AnalyticsAudienceActions({ result, allowedActions }: { result: A
     const compact = result.question.replace(/\s+/g, " ").trim();
     return compact.length <= 70 ? compact : `${compact.slice(0, 67)}...`;
   }, [result.question]);
-
-  useEffect(() => {
-    setAudienceRequestId(createClientRequestId());
-    setActionRequestId(createClientRequestId());
-    setDueAt(localDue(1));
-  }, [result.question]);
-
-  useEffect(() => {
-    if (!enabledKinds.includes(actionKind) && enabledKinds[0]) setActionKind(enabledKinds[0]);
-  }, [actionKind, enabledKinds]);
 
   if (result.mode !== "audience" || !plan || result.rows.length === 0 || enabledKinds.length === 0) return null;
 

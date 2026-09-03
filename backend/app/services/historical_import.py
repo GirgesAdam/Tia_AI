@@ -7,10 +7,11 @@ import io
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -21,7 +22,6 @@ from sqlalchemy.orm import Session
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
-from app.models.clinic_integration import ClinicIntegrationEntityLink
 from app.models.crm_campaign_conversion import CRMCampaignConversion
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
@@ -38,13 +38,13 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.schemas.crm import normalize_patient_identity_phone
-from app.services.activity import record_activity_event
 from app.schemas.historical_import import (
     HistoricalImportBatchRead,
     HistoricalImportDocument,
     HistoricalImportIssueGroup,
     HistoricalImportPreviewResponse,
 )
+from app.services.activity import record_activity_event
 
 SCHEMA_VERSION = "tia_history_v1"
 MAX_DOCUMENT_BYTES = 25 * 1024 * 1024

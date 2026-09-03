@@ -14,13 +14,13 @@ from app.models.patient import Patient
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.models.staff import Staff
-from app.schemas.crm import normalize_phone
 from app.schemas.analytics_bi import (
     AnalyticsBIAnswerRead,
     AnalyticsBIMetricRead,
     AnalyticsBIPlan,
     AnalyticsBIResultRow,
 )
+from app.schemas.crm import normalize_phone
 from app.services.patient_history import build_patient_history_context
 
 

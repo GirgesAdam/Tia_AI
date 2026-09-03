@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from time import monotonic, perf_counter
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 from google.genai import errors
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
@@ -91,7 +91,7 @@ class LLMProviderError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class LLMInvocationResult(Generic[T]):
+class LLMInvocationResult[T]:
     value: T
     model_name: str
     used_fallback: bool

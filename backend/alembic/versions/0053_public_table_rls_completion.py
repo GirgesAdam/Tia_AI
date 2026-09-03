@@ -8,6 +8,7 @@ Create Date: 2026-09-02
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0053_public_table_rls_completion"

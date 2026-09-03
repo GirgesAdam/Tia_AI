@@ -7,6 +7,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.integrations.clinic.registry import registered_clinic_adapter_keys
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
@@ -23,7 +24,6 @@ from app.models.onboarding_ai_session import OnboardingAISession
 from app.models.service import Service
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.operations import OperationalCheck, WorkspaceOperationalReadiness
-from app.integrations.clinic.registry import registered_clinic_adapter_keys
 
 EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"
 STALE_LOCK_MINUTES = 15

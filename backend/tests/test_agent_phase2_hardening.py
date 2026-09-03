@@ -11,6 +11,8 @@ from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_router import (
     SemanticCapabilityDecision,
     SemanticEntityHints,
+)
+from app.agents.semantic_router import (
     _history_excerpt as semantic_history_excerpt,
 )
 from app.agents.turn_interpreter import _history_excerpt as turn_history_excerpt
@@ -222,7 +224,7 @@ def test_single_verified_slot_selection_defaults_to_first_option() -> None:
         reason="customer confirmed booking",
     )
 
-    normalized = agent_chat._normalize_single_verified_booking_selection(flow, turn)
+    normalized = agent_chat._normalize_unambiguous_slot_selection(flow, turn)
 
     assert normalized.action == "select_option"
     assert normalized.selection_index == 1
@@ -248,7 +250,7 @@ def test_single_verified_slot_does_not_autobook_non_selection_turn() -> None:
         reason="price question",
     )
 
-    normalized = agent_chat._normalize_single_verified_booking_selection(flow, turn)
+    normalized = agent_chat._normalize_unambiguous_slot_selection(flow, turn)
 
     assert normalized.action == "continue"
     assert normalized.selection_index is None

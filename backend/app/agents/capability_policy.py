@@ -8,6 +8,7 @@ from app.agents.semantic_router import (
     Priority,
     SemanticCapabilityDecision,
 )
+
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),
     "pricing": frozenset({"search_services"}),

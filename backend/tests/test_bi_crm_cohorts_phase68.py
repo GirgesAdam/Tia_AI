@@ -330,8 +330,11 @@ def test_write_routes_live_under_crm_not_analytics_and_actions_are_human_only() 
 def test_frontend_requires_explicit_cohort_then_task_confirmation() -> None:
     root = Path(__file__).resolve().parents[2]
     ui = (root / "frontend/src/app/(dashboard)/analytics/cohort-actions.tsx").read_text(encoding="utf-8")
-    assert "احفظ الـcohort" in ui
-    assert "مهام متابعة" in ui
-    assert "مفيش رسائل أو outreach تلقائي" in ui
+
+    assert "createAnalyticsCohortAction" in ui
+    assert "createCohortFollowUpAction" in ui
+    assert ui.count('name="request_id"') >= 2
+    assert 'name="cohort_id"' in ui
+    assert "taskState.result" in ui
     assert "createClientRequestId" in ui
     assert "crypto.randomUUID" not in ui

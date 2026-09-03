@@ -5,7 +5,6 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PAYMENT_MIGRATIONS = (
     BACKEND_ROOT / "alembic" / "versions" / "0029_payment_ledger.py",

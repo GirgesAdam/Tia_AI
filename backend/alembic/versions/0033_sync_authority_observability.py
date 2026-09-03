@@ -8,8 +8,9 @@ Create Date: 2026-08-26
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0033_sync_authority"
 down_revision: str | Sequence[str] | None = "0032_external_sync_engine"

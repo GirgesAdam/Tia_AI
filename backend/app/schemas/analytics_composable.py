@@ -89,7 +89,7 @@ class AnalyticsAudiencePlan(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_ranges(self) -> "AnalyticsAudiencePlan":
+    def validate_ranges(self) -> AnalyticsAudiencePlan:
         if not self.appointment_statuses:
             raise ValueError("appointment_statuses must contain at least one status")
         if not self.patient_statuses:
@@ -115,7 +115,7 @@ class AnalyticsActionProposal(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
-    def validate_action_fields(self) -> "AnalyticsActionProposal":
+    def validate_action_fields(self) -> AnalyticsActionProposal:
         if self.kind == "none":
             return self
         if self.kind == "follow_up_tasks":
@@ -138,7 +138,7 @@ class AnalyticsComposePlan(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
-    def validate_shape(self) -> "AnalyticsComposePlan":
+    def validate_shape(self) -> AnalyticsComposePlan:
         if self.mode == "metric":
             if self.metric_plan is None or self.business_plan is not None or self.audience_plan is not None or self.reuse_previous_audience:
                 raise ValueError("metric mode requires metric_plan only")

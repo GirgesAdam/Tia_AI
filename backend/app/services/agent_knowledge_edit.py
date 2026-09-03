@@ -23,12 +23,11 @@ from app.schemas.agent_knowledge import (
     KnowledgeEditProposal,
     KnowledgeFieldChange,
 )
+from app.services.activity import record_activity_event
 from app.services.agent_knowledge import (
     agent_knowledge_configuration_fingerprint,
     build_agent_knowledge_snapshot,
 )
-
-from app.services.activity import record_activity_event
 
 
 class KnowledgeEditError(RuntimeError):
@@ -242,17 +241,23 @@ def apply_agent_knowledge_edit(
         for action in actions:
             if action.kind == "update_service":
                 row = db.scalar(select(Service).where(Service.workspace_id == wid, Service.id == _uuid(action.entity_id, "service")))
-                if row is None: raise KnowledgeEditConflictError("Service no longer exists.")
+                if row is None:
+                    raise KnowledgeEditConflictError("Service no longer exists.")
                 _apply_field_changes(row, action.changes, kind="service")
             elif action.kind == "update_branch":
                 row = db.scalar(select(Branch).where(Branch.workspace_id == wid, Branch.id == _uuid(action.entity_id, "branch")))
-                if row is None: raise KnowledgeEditConflictError("Branch no longer exists.")
+                if row is None:
+                    raise KnowledgeEditConflictError("Branch no longer exists.")
                 _apply_field_changes(row, action.changes, kind="branch")
             elif action.kind == "update_doctor":
                 doctor = db.scalar(select(Doctor).where(Doctor.workspace_id == wid, Doctor.id == _uuid(action.entity_id, "doctor")))
-                if doctor is None: raise KnowledgeEditConflictError("Doctor no longer exists.")
+                if doctor is None:
+                    raise KnowledgeEditConflictError("Doctor no longer exists.")
                 staff = db.scalar(select(Staff).where(Staff.workspace_id == wid, Staff.id == doctor.staff_id))
-                if staff is None: raise KnowledgeEditConflictError("Doctor staff record no longer exists.")
+                if staff is None:
+                    raise KnowledgeEditConflictError(
+                        "Doctor staff record no longer exists."
+                    )
                 staff_changes = [c for c in action.changes if c.field in {"first_name", "last_name", "phone", "email"}]
                 doctor_changes = [c for c in action.changes if c.field not in {"first_name", "last_name", "phone", "email"}]
                 _apply_field_changes(staff, staff_changes, kind="staff")
@@ -264,7 +269,10 @@ def apply_agent_knowledge_edit(
             elif action.kind == "set_doctor_hours":
                 doctor_id, branch_id = _uuid(action.entity_id, "doctor"), _uuid(action.branch_id, "branch")
                 assignment = db.scalar(select(DoctorBranch).where(DoctorBranch.workspace_id == wid, DoctorBranch.doctor_id == doctor_id, DoctorBranch.branch_id == branch_id, DoctorBranch.is_active.is_(True)))
-                if assignment is None: raise KnowledgeEditConflictError("Doctor must be assigned to the branch before setting hours.")
+                if assignment is None:
+                    raise KnowledgeEditConflictError(
+                        "Doctor must be assigned to the branch before setting hours."
+                    )
                 db.execute(delete(DoctorWorkingHour).where(DoctorWorkingHour.workspace_id == wid, DoctorWorkingHour.doctor_id == doctor_id, DoctorWorkingHour.branch_id == branch_id))
                 db.add_all([DoctorWorkingHour(workspace_id=wid, doctor_id=doctor_id, branch_id=branch_id, weekday=x.weekday, start_time=time.fromisoformat(x.start_time), end_time=time.fromisoformat(x.end_time)) for x in action.schedule])
             elif action.kind == "set_doctor_services":
@@ -272,7 +280,8 @@ def apply_agent_knowledge_edit(
                 desired = {_uuid(x, "service") for x in action.related_ids}
                 existing = list(db.scalars(select(DoctorService).where(DoctorService.workspace_id == wid, DoctorService.doctor_id == doctor_id)))
                 by_service = {x.service_id: x for x in existing}
-                for service_id, row in by_service.items(): row.is_active = service_id in desired
+                for service_id, row in by_service.items():
+                    row.is_active = service_id in desired
                 for service_id in desired - set(by_service):
                     db.add(DoctorService(workspace_id=wid, doctor_id=doctor_id, service_id=service_id, custom_duration_minutes=None, custom_price_minor=None, is_active=True))
             elif action.kind == "set_doctor_branches":

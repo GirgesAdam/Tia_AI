@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
-from app.models.crm_cohort import CRMCohort, CRMCohortMember
+from app.models.crm_cohort import CRMCohortMember
 from app.models.crm_task import CRMTask
 from app.schemas.analytics_composable import AnalyticsAudiencePlan
 from app.services.analytics_audience import execute_audience_plan

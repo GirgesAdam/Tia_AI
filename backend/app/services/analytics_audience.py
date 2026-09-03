@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.patient import Patient
-from app.models.service import Service
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
+from app.models.service import Service
 from app.schemas.analytics_bi import AnalyticsBIMetricRead, AnalyticsBIResultRow
 from app.schemas.analytics_composable import AnalyticsAudiencePlan
 from app.services.analytics_bi import AnalyticsBIError

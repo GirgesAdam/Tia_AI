@@ -78,7 +78,7 @@ class ClinicIntegrationUpsert(BaseModel):
         return _validate_non_secret_config(value)
 
     @model_validator(mode="after")
-    def validate_mode_and_adapter(self) -> "ClinicIntegrationUpsert":
+    def validate_mode_and_adapter(self) -> ClinicIntegrationUpsert:
         if self.mode in {"tia_native", "imported"} and self.adapter_key != "tia_database":
             raise ValueError(
                 f"mode={self.mode!r} currently requires adapter_key='tia_database'."
@@ -161,7 +161,7 @@ class ClinicIntegrationAuthorityUpsert(BaseModel):
     appointments: ClinicAuthorityDomainPolicy
 
     @model_validator(mode="after")
-    def validate_supported_field_authority(self) -> "ClinicIntegrationAuthorityUpsert":
+    def validate_supported_field_authority(self) -> ClinicIntegrationAuthorityUpsert:
         from app.integrations.clinic.authority import PATIENT_EXTERNAL_SYNC_FIELDS
 
         unsupported_patient = set(self.patients.fields) - set(PATIENT_EXTERNAL_SYNC_FIELDS)

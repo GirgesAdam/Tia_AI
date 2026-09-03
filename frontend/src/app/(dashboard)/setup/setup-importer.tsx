@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useMemo, useState, useTransition } from "react";
+import { useActionState, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, Download, FileSpreadsheet, LoaderCircle, Plus, RotateCcw, Save, TriangleAlert } from "lucide-react";
 
@@ -154,20 +154,27 @@ function TableEditor({ title, rows, columns, onChange }: TableEditorProps) {
 
 export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetupV2Snapshot }) {
   const router = useRouter();
-  const [state, previewAction, previewPending] = useActionState(importClinicSetupWorkbookAction, initialClinicSetupImportState);
   const [draft, setDraft] = useState<ClinicSetupDraft>(() => emptyDraft());
   const [saveResult, setSaveResult] = useState<ClinicSetupImportResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
   const [dirty, setDirty] = useState(false);
-
-  useEffect(() => {
-    if (!state.result) return;
-    setDraft(state.result.draft);
-    setSaveResult(null);
-    setSaveError(null);
-    setDirty(true);
-  }, [state.result]);
+  const [state, previewAction, previewPending] = useActionState(
+    async (
+      previous: ClinicSetupImportActionState,
+      formData: FormData,
+    ) => {
+      const next = await importClinicSetupWorkbookAction(previous, formData);
+      if (next.result) {
+        setDraft(next.result.draft);
+        setSaveResult(null);
+        setSaveError(null);
+        setDirty(true);
+      }
+      return next;
+    },
+    initialClinicSetupImportState,
+  );
 
   const importedCells = useMemo(() => {
     const profile = Object.values(draft.clinic_profile).filter((value) => value !== null && value !== "").length;

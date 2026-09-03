@@ -41,13 +41,13 @@ from app.integrations.clinic.registry import (
     registered_clinic_adapter_keys,
 )
 from app.integrations.clinic.sync_contract import (
-    ClinicConnectorSchemaSource,
     ClinicConnectorMappingRuntimeValidator,
     ClinicConnectorReferenceSource,
-    ClinicReferenceCandidate,
+    ClinicConnectorSchemaSource,
     ClinicRawSyncFetchRequest,
     ClinicRawSyncPage,
     ClinicRawSyncSource,
+    ClinicReferenceCandidate,
     ClinicSyncDomain,
     ClinicSyncFetchRequest,
     ClinicSyncPage,

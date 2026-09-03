@@ -15,7 +15,6 @@ from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
 from app.schemas.analytics_composable import AnalyticsComposePlan
 
-
 _COMPOSABLE_GUIDE = """
 You have three read-only analysis modes.
 

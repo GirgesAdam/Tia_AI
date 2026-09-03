@@ -1,6 +1,6 @@
 from app.models.activity_event import ActivityEvent
-from app.models.analytics_saved_view import AnalyticsSavedView
 from app.models.agent_action import AgentAction
+from app.models.analytics_saved_view import AnalyticsSavedView
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
@@ -23,20 +23,20 @@ from app.models.clinic_integration_sync import (
 from app.models.conversation import Conversation
 from app.models.conversation_flow_event import ConversationFlowEvent
 from app.models.conversation_flow_state import ConversationFlowState
-from app.models.crm_cohort import CRMCohort, CRMCohortMember
 from app.models.crm_campaign import CRMCampaign, CRMCampaignRecipient
 from app.models.crm_campaign_conversion import CRMCampaignConversion
+from app.models.crm_cohort import CRMCohort, CRMCohortMember
 from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
 from app.models.handoff_event import HandoffEvent
+from app.models.handoff_request import HandoffRequest
 from app.models.historical_import import (
     ClinicHistoricalImportBatch,
     ClinicHistoricalImportLink,
     ClinicHistoricalImportRow,
 )
-from app.models.handoff_request import HandoffRequest
 from app.models.lead import Lead
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch

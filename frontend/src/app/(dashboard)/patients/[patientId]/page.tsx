@@ -14,7 +14,6 @@ import {
   Pin,
   StickyNote,
   Tag,
-  UserRound,
 } from "lucide-react";
 import { addPatientNote, createPatientTask } from "../actions";
 import { PageHeader } from "@/components/page-header";

@@ -10,16 +10,19 @@ from openpyxl import load_workbook
 
 from app.schemas.clinic_setup_v2 import ClinicDoctorCreateV2, ClinicServiceCreateV2
 from app.schemas.historical_import import HistoricalImportDocument
-from app.services.clinic_setup_import import build_clinic_setup_template, preview_clinic_setup_workbook
+from app.services.clinic_setup_import import (
+    build_clinic_setup_template,
+    preview_clinic_setup_workbook,
+)
 from app.services.historical_import import (
+    _assign_patient_phone_if_available,
+    _fill_missing_patient_facts,
     _normalize_allocation,
     _normalize_appointment,
     _normalize_package,
     _normalize_patient,
     _normalize_payment,
     _patient_identity,
-    _fill_missing_patient_facts,
-    _assign_patient_phone_if_available,
     build_historical_import_template,
 )
 
@@ -439,6 +442,7 @@ def test_setup_ui_uses_blank_review_draft_and_clear_next_step() -> None:
 
 def test_setup_preview_preserves_missing_cells_as_blank_without_weekday() -> None:
     import base64
+
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -474,7 +478,7 @@ def test_setup_template_booking_policy_values_are_blank() -> None:
 
 def test_setup_excel_optional_columns_are_tolerant_and_preserve_required_runtime_fields() -> None:
     import base64
-    from openpyxl import Workbook
+
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
 
@@ -487,7 +491,11 @@ def test_setup_excel_optional_columns_are_tolerant_and_preserve_required_runtime
     from app.models.service import Service
     from app.models.staff import Staff
     from app.models.user import User
-    from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+    from app.models.working_hours import (
+        BranchWorkingHour,
+        DoctorAvailabilityWindow,
+        DoctorWorkingHour,
+    )
     from app.models.workspace import Workspace
     from app.services.clinic_setup_import import import_clinic_setup_workbook
 
@@ -535,6 +543,7 @@ def test_setup_excel_optional_columns_are_tolerant_and_preserve_required_runtime
 
 def test_setup_apply_does_not_invent_defaults_for_incomplete_new_rows() -> None:
     import base64
+
     from openpyxl import Workbook
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
@@ -548,7 +557,11 @@ def test_setup_apply_does_not_invent_defaults_for_incomplete_new_rows() -> None:
     from app.models.service import Service
     from app.models.staff import Staff
     from app.models.user import User
-    from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+    from app.models.working_hours import (
+        BranchWorkingHour,
+        DoctorAvailabilityWindow,
+        DoctorWorkingHour,
+    )
     from app.models.workspace import Workspace
     from app.services.clinic_setup_import import import_clinic_setup_workbook
 
@@ -625,6 +638,7 @@ def test_historical_patient_contract_has_no_gender_and_defaults_to_female() -> N
 
 def test_setup_excel_import_applies_valid_rows_and_keeps_invalid_rows_editable() -> None:
     import base64
+
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
 
@@ -637,7 +651,11 @@ def test_setup_excel_import_applies_valid_rows_and_keeps_invalid_rows_editable()
     from app.models.service import Service
     from app.models.staff import Staff
     from app.models.user import User
-    from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+    from app.models.working_hours import (
+        BranchWorkingHour,
+        DoctorAvailabilityWindow,
+        DoctorWorkingHour,
+    )
     from app.models.workspace import Workspace
     from app.services.clinic_setup_import import import_clinic_setup_workbook
 

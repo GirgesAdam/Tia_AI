@@ -3,11 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 from app.agents import clinic_grounding
 from app.agents.structured_output import _cached_provider_schema
 from app.services import agent_chat
 from app.services.booking import calculate_availability
-from pydantic import BaseModel
 
 
 class _TinySchema(BaseModel):

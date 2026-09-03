@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { CheckCircle2, ListChecks, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,17 +17,12 @@ function tomorrowAtTen() {
 }
 
 export function SavedCohortFollowUpForm({ cohortId, cohortName, memberCount }: { cohortId: string; cohortName: string; memberCount: number }) {
-  const [requestId, setRequestId] = useState("");
-  const [dueAt, setDueAt] = useState("");
+  const [requestId] = useState(() => createClientRequestId());
+  const [dueAt, setDueAt] = useState(() => tomorrowAtTen());
   const [state, action, pending] = useActionState<CohortFollowUpState, FormData>(
     createCohortFollowUpAction,
     { result: null, error: null },
   );
-
-  useEffect(() => {
-    setRequestId(createClientRequestId());
-    setDueAt(tomorrowAtTen());
-  }, []);
 
   if (state.result) {
     return <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950"><div className="flex items-center gap-2 font-black"><CheckCircle2 size={17}/>تم إنشاء {state.result.created_tasks} مهمة جديدة.</div>{state.result.reused_tasks > 0 && <div className="mt-1 text-xs">كان فيه {state.result.reused_tasks} مهمة موجودة بالفعل ولم يتم تكرارها.</div>}<Link href="/tasks" className="mt-2 inline-block text-xs font-bold underline">افتح قائمة المهام</Link></div>;

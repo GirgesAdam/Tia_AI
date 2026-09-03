@@ -13,6 +13,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
+
 SemanticDomain = Literal[
     "services",
     "clinic",

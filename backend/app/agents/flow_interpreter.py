@@ -6,6 +6,7 @@ from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.agents.llm_runtime import invoke_with_fallback
 from app.agents.model_provider import (
     build_flow_interpreter_fallback_model,
@@ -23,6 +24,7 @@ from app.agents.semantic_router import (
 from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
 from app.models.conversation_flow_state import ConversationFlowState
+
 FlowTurnAction = Literal[
     "continue",
     "modify",

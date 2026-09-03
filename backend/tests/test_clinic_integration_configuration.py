@@ -184,7 +184,8 @@ def test_new_workspace_creation_persists_native_integration_row() -> None:
     backend = Path(__file__).resolve().parent.parent
     source = (backend / "app/api/routes/onboarding.py").read_text(encoding="utf-8")
 
-    assert "integration = ClinicIntegration(" in source
+    assert "ClinicIntegration(" in source
     assert 'mode="tia_native"' in source
     assert 'adapter_key="tia_database"' in source
     assert 'status="active"' in source
+    assert "config_json={}" in source

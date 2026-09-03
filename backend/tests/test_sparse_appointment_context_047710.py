@@ -14,7 +14,7 @@ def test_sparse_appointment_migration_is_current_head_and_excludes_unknown_docto
     )
     model = (backend / "app/models/appointment.py").read_text(encoding="utf-8")
 
-    assert EXPECTED_MIGRATION_HEAD == "0052_payment_reference_constraint_repair"
+    assert EXPECTED_MIGRATION_HEAD == "0053_public_table_rls_completion"
     assert 'revision: str = "0046_sparse_appointment_context"' in migration
     assert 'down_revision: str | None = "0045_public_table_rls_hardening"' in migration
     assert '"doctor_assignment_known"' in migration

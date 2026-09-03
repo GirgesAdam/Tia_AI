@@ -7,18 +7,21 @@ from uuid import uuid4
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
 
-from app.models.channel_connection import ChannelConnection
 from app.models.crm_campaign import CRMCampaign, CRMCampaignRecipient
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
-from app.services.crm_campaigns import confirm_cohort_campaign, guard_campaign_dispatch_before_claim, prepare_cohort_campaign
+from app.services.crm_campaigns import (
+    confirm_cohort_campaign,
+    guard_campaign_dispatch_before_claim,
+    prepare_cohort_campaign,
+)
 
 NOW = datetime(2026, 8, 27, 1, 0, tzinfo=UTC)
 
 
 def _schema(engine) -> None:
     ddl = [
-        """CREATE TABLE workspaces (id CHAR(32) PRIMARY KEY, name VARCHAR(200), slug VARCHAR(120), timezone VARCHAR(64), is_active BOOLEAN, created_at DATETIME, updated_at DATETIME)""",
+        """CREATE TABLE workspaces (id CHAR(32) PRIMARY KEY, name VARCHAR(200), slug VARCHAR(120), timezone VARCHAR(64), primary_branch_id CHAR(32), is_active BOOLEAN, created_at DATETIME, updated_at DATETIME)""",
         """CREATE TABLE patients (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40), phone_normalized VARCHAR(40),
             gender VARCHAR(32), birth_date DATE, preferred_language VARCHAR(10), preferred_branch_id CHAR(32), source VARCHAR(32), source_detail VARCHAR(200),
@@ -93,7 +96,7 @@ def _seed(db: Session, *, eligible=2, no_consent=1, inactive=1, no_route=1):
     patients: list[tuple] = []
     rank = 1
     for kind, count in (("eligible", eligible), ("no_consent", no_consent), ("inactive", inactive), ("no_route", no_route)):
-        for index in range(count):
+        for _index in range(count):
             pid = uuid4()
             patients.append((pid, kind, rank))
             consent = 0 if kind == "no_consent" else 1
@@ -242,7 +245,7 @@ def test_campaign_migration_and_readiness_head() -> None:
     assert 'revision: str = "0039_crm_campaigns"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0038_crm_cohorts"' in migration
     assert len("0039_crm_campaigns") <= 32
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_steps() -> None:
@@ -272,9 +275,12 @@ def test_frontend_campaign_flow_has_preview_then_separate_confirmation() -> None
     root = Path(__file__).resolve().parents[2]
     ui = (root / "frontend/src/app/(dashboard)/analytics/cohorts/[cohortId]/campaign-form.tsx").read_text(encoding="utf-8")
     actions = (root / "frontend/src/app/(dashboard)/analytics/actions.ts").read_text(encoding="utf-8")
-    assert "جهّز Preview قبل الإرسال" in ui
-    assert "تأكيد وإرسال" in ui
-    assert "لسه مفيش رسالة اتبعتت" in ui
+
+    assert "prepareState.campaign" in ui
+    assert "confirmState.result" in ui
+    assert "<form action={prepareAction}" in ui
+    assert "<form action={confirmAction}" in ui
+    assert "campaign.eligible_count" in ui
     assert "prepareCohortCampaignAction" in actions
     assert "confirmCohortCampaignAction" in actions
     assert "/confirm" in actions

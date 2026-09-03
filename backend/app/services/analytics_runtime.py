@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from collections import OrderedDict
+from datetime import datetime
 from threading import Lock
 from time import monotonic, perf_counter, time
 from uuid import UUID

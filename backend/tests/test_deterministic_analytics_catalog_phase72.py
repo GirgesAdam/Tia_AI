@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.schemas.analytics_catalog import AnalyticsCatalogRunRequest
 from app.services.analytics_bi import AnalyticsBIError
-from app.services.analytics_catalog import _BY_KEY, _DEFINITIONS, analytics_catalog, run_catalog_analysis
+from app.services.analytics_catalog import (
+    _BY_KEY,
+    _DEFINITIONS,
+    analytics_catalog,
+    run_catalog_analysis,
+)
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
 
@@ -289,27 +294,30 @@ def test_frontend_primary_analytics_page_uses_catalog_not_ai_assistant() -> None
     root = Path(__file__).resolve().parents[2]
     page = (root / "frontend/src/app/(dashboard)/analytics/page.tsx").read_text(encoding="utf-8")
     catalog = (root / "frontend/src/app/(dashboard)/analytics/catalog.tsx").read_text(encoding="utf-8")
+
     assert "AnalyticsCatalogPanel" in page
     assert "<AnalyticsAssistant" not in page
-    assert "اسأل Tia عن أرقام العيادة" not in page
     assert "/analytics/catalog" in page
     assert "runAnalyticsCatalogAction" in catalog
     assert 'name="currency"' not in catalog
     assert "chart_data" in catalog
     assert "highlights" in catalog
-    assert "ابحث عن تحليل في كل الأقسام" in catalog
-    assert "وصول سريع" in catalog
-    assert "فلترة أدق" in catalog
+    assert 'const [query, setQuery] = useState("")' in catalog
+    assert "normalizedQuery" in catalog
+    assert "includes(normalizedQuery)" in catalog
+    assert "quickAccess.map" in catalog
+    assert "hasEntityFilters" in catalog
     assert "value / first * 100" in catalog
     assert "fromPrevious" in catalog
-    assert "تعريف وطريقة الحساب" in catalog
-    assert "توحيد سجلات الدكاترة" not in catalog
+    assert "result.definitions.map" in catalog
     assert "canManageDoctorIdentities" not in page
     assert "/analytics/overview" not in page
     assert "/analytics/history" not in page
+
     assistant = (root / "frontend/src/app/(dashboard)/analytics/assistant.tsx").read_text(encoding="utf-8")
     assert "analyticsAssistantAction" not in assistant
     assert "return null" in assistant
+
 
 
 def test_analytics_query_index_migration_is_current_head() -> None:
@@ -319,7 +327,7 @@ def test_analytics_query_index_migration_is_current_head() -> None:
     assert 'revision: str = "0041_analytics_query_indexes"' in migration
     assert 'down_revision: str | None = "0040_doctor_name_hygiene"' in migration
     assert 'ix_appointments_workspace_status_start_patient' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
 
 
 def test_catalog_filter_options_hide_inactive_legacy_entities() -> None:

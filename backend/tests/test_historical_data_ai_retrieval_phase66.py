@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import create_engine, text
@@ -212,5 +211,5 @@ def test_migration_preserves_original_patient_timestamp_and_head() -> None:
     assert 'revision: str = "0037_patient_history"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0036_sync_runtime"' in migration
     assert 'sa.Column("source_created_at", sa.DateTime(timezone=True), nullable=True)' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0052_payment_reference_constraint_repair"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
     assert len("0037_patient_history") <= 32

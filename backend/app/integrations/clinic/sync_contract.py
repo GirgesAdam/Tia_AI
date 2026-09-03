@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 
-class ClinicSyncDomain(str, Enum):
+class ClinicSyncDomain(StrEnum):
     """Canonical domains that Phase 6.2c can synchronize into Tia.
 
     The connector/extractor owns vendor-specific reads and structural mapping.

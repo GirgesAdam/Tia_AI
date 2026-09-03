@@ -44,14 +44,14 @@ def test_upper_bound_requires_whole_appointment_to_fit() -> None:
     assert filtered[0][1].strftime("%H:%M") == "20:00"
 
 
-def test_prompt_prefers_composite_tools() -> None:
+def test_prompt_keeps_composite_tool_mechanics_out_of_customer_contract() -> None:
     prompt = build_customer_service_system_prompt(
         clinic_name="Tia",
         timezone_name="Africa/Cairo",
         local_now=datetime(2026, 8, 12, 20, 0),
     )
 
-    assert "get_booking_options" in prompt
-    assert "get_reschedule_options" in prompt
-    assert "السبب اختياري" in prompt
-    assert "من غير وعد" in prompt
+    assert "get_booking_options" not in prompt
+    assert "get_reschedule_options" not in prompt
+    assert "نتيجة Tool ناجحة" in prompt
+    assert "سياق موثّق" in prompt

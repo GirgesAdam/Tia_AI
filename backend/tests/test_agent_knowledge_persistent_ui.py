@@ -16,16 +16,15 @@ def test_persistent_agent_knowledge_page_is_wired() -> None:
     assert "نفس المصدر الذي تعتمد عليه Tia أثناء العمل" in page
 
 
-def test_weekly_schedule_component_remains_available_for_clinic_views() -> None:
+def test_weekly_schedule_editing_remains_available_in_rebuilt_setup() -> None:
     root = _root()
     schedule = (root / "frontend/src/components/weekly-schedule-table.tsx").read_text(encoding="utf-8")
-    setup = (root / "frontend/src/app/(dashboard)/setup/page.tsx").read_text(encoding="utf-8")
+    importer = (root / "frontend/src/app/(dashboard)/setup/setup-importer.tsx").read_text(encoding="utf-8")
+
     assert 'label: "السبت"' in schedule
     assert 'label: "الجمعة"' in schedule
-    assert "مواعيد عمل العيادة" in setup
-    assert "الجدول الأسبوعي" in setup
-
-
+    assert 'clinic_hours: "مواعيد العيادة"' in importer
+    assert 'doctor_hours: "مواعيد الدكاترة الثابتين"' in importer
 def test_agent_knowledge_chat_requires_confirmation() -> None:
     root = _root()
     route = (root / "backend/app/api/routes/clinic.py").read_text(encoding="utf-8")
