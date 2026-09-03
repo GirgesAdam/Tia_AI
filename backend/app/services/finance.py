@@ -102,9 +102,16 @@ def update_expense(
     payload: ExpenseUpdate,
 ) -> Expense:
     expense = _expense_or_raise(db, workspace_id=workspace_id, expense_id=expense_id)
-    changes = payload.model_dump(exclude_unset=True)
-    for field_name, value in changes.items():
+    requested_changes = payload.model_dump(exclude_unset=True)
+    changed_fields: list[str] = []
+    for field_name, value in requested_changes.items():
+        if getattr(expense, field_name) == value:
+            continue
         setattr(expense, field_name, value)
+        changed_fields.append(field_name)
+    if not changed_fields:
+        return expense
+
     db.flush()
     record_activity_event(
         db,
@@ -115,7 +122,7 @@ def update_expense(
         entity_type="expense",
         entity_id=expense.id,
         summary="Updated an expense record.",
-        metadata={"changed_fields": sorted(changes)},
+        metadata={"changed_fields": sorted(changed_fields)},
     )
     return expense
 
