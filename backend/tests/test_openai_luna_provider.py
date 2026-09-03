@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from langchain_openai import ChatOpenAI
 
 from app.agents.model_provider import build_chat_fallback_model, build_chat_model
@@ -26,6 +28,8 @@ def test_openai_only_settings_use_luna_with_gpt5_mini_fallback() -> None:
     assert configured.openai_fallback_model == "gpt-5-mini"
     assert configured.openai_reasoning_effort == "low"
     assert configured.openai_fallback_reasoning_effort == "low"
+    assert configured.agent_max_tool_rounds == 2
+    assert configured.agent_recursion_limit == 8
 
 
 def test_openai_provider_builds_responses_api_primary_and_fallback(monkeypatch) -> None:
@@ -49,3 +53,27 @@ def test_openai_provider_builds_responses_api_primary_and_fallback(monkeypatch) 
     assert fallback.use_responses_api is True
     assert fallback.store is False
     assert fallback.reasoning == {"effort": "low"}
+
+
+def test_openai_base_models_are_process_cached() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    source = (backend / "app/agents/model_provider.py").read_text(encoding="utf-8")
+    assert "@lru_cache(maxsize=32)" in source
+    assert "def _cached_openai_model" in source
+
+
+def test_runtime_has_no_groq_dependency() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    files = (
+        "app/core/config.py",
+        "app/agents/model_provider.py",
+        "app/agents/structured_output.py",
+        "app/agents/llm_runtime.py",
+    )
+    source = "\n".join(
+        (backend / relative).read_text(encoding="utf-8") for relative in files
+    ).lower()
+
+    assert "chatgroq" not in source
+    assert "langchain_groq" not in source
+    assert "groq_api_key" not in source
