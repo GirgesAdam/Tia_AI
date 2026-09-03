@@ -78,6 +78,20 @@ def test_selected_doctor_rejects_incompatible_selected_service() -> None:
     assert result.service_candidate_ids == []
 
 
+def test_rejected_explicit_service_is_not_replaced_by_candidate() -> None:
+    result = validate_grounded_entity_ids(
+        _hints(
+            doctor_id="doctor-1",
+            service_id="service-missing-from-catalog",
+            service_candidate_ids=["service-compatible"],
+        ),
+        _catalog(),
+    )
+
+    assert result.service_id is None
+    assert result.service_candidate_ids == ["service-compatible"]
+
+
 def test_selected_doctor_resolves_one_compatible_branch_candidate() -> None:
     result = validate_grounded_entity_ids(
         _hints(
