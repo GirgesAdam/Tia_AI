@@ -1,7 +1,8 @@
+import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,18 +27,12 @@ class Settings(BaseSettings):
     supabase_publishable_key: str
     supabase_secret_key: str
 
-    llm_provider: Literal["gemini"] = "gemini"
+    llm_provider: Literal["gemini", "openai"] = "gemini"
     llm_timeout_seconds: int = Field(default=60, ge=5, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=6)
-    # Customer-facing WhatsApp/API turns are latency-sensitive. With the current
-    # langchain-google-genai/google-genai stack, max_retries=1 maps to one total
-    # provider attempt (zero same-model retries). That lets a provider 5xx cross
-    # over to the configured fallback immediately instead of waiting on repeated
-    # calls to the same overloaded model. Onboarding/background workloads keep
-    # the normal llm_max_retries policy above.
+    # Realtime turns are latency-sensitive. Keep provider retries bounded; the
+    # runtime error boundary decides whether a separate configured model may run.
     llm_realtime_max_retries: int = Field(default=0, ge=0, le=2)
-    # After a realtime primary-model 5xx, temporarily bypass that model for new
-    # turns instead of paying the same capacity timeout on every message.
     llm_realtime_circuit_breaker_cooldown_seconds: int = Field(default=120, ge=0, le=900)
     llm_max_output_tokens: int = Field(default=2048, ge=256, le=8192)
 
@@ -78,13 +73,19 @@ class Settings(BaseSettings):
         le=24,
     )
 
+    # OpenAI. The public demo can select this provider without changing the
+    # deterministic agent/tool/database layers. Luna is the low-cost default.
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.6-luna"
+    openai_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "low"
+
+    # Gemini remains available for staging/rollback while the OpenAI path is
+    # validated. Existing field names are retained so the current orchestration
+    # call sites do not need a risky provider-wide rewrite in the demo patch.
     gemini_api_key: str | None = None
 
-    # Realtime customer path. Gemini 3.5 Flash-Lite is intentionally the first
-    # interpreter/composer model: it is optimized for low-latency, high-throughput
-    # extraction/routing workloads and supports structured output. Provider-side
-    # 5xx failures advance through the bounded model chain below; each model has
-    # its own process-local circuit breaker in llm_runtime.py.
     gemini_realtime_interpreter_model: str = "gemini-3.5-flash-lite"
     gemini_realtime_interpreter_fallback_model: str | None = "gemini-3.6-flash"
     gemini_realtime_interpreter_emergency_model: str | None = "gemini-3.5-flash"
@@ -98,8 +99,6 @@ class Settings(BaseSettings):
         "minimal", "low", "medium", "high"
     ] = "minimal"
 
-    # Legacy customer-agent / split-router rollback path. 3.7 stays out of the
-    # realtime critical path while its availability is observed separately.
     gemini_agent_model: str = "gemini-3.6-flash"
     gemini_agent_fallback_model: str | None = "gemini-3.5-flash"
     gemini_agent_thinking_level: Literal["minimal", "low", "medium", "high"] = "low"
@@ -112,9 +111,6 @@ class Settings(BaseSettings):
     gemini_flow_fallback_model: str | None = "gemini-3.5-flash"
     gemini_flow_thinking_level: Literal["minimal", "low", "medium", "high"] = "low"
 
-    # AI-assisted onboarding: primary quality model plus a stable same-family
-    # failover used only after retryable 5xx capacity failures exhaust the
-    # Google/LangChain client retries. 400/429 never switch models.
     gemini_onboarding_model: str = "gemini-3.7-flash"
     gemini_onboarding_fallback_model: str | None = "gemini-3.6-flash"
     gemini_onboarding_thinking_level: Literal["low", "medium", "high"] = "medium"
@@ -124,7 +120,6 @@ class Settings(BaseSettings):
         le=65536,
     )
 
-    # Cheap background/utility workload model. Not used for write authorization.
     gemini_utility_model: str = "gemini-3.5-flash-lite"
     gemini_utility_thinking_level: Literal[
         "minimal",
@@ -135,7 +130,10 @@ class Settings(BaseSettings):
 
     gemini_embedding_model: str = "gemini-embedding-001"
 
-    cors_origins: list[str] = Field(default_factory=list)
+    # Keep the environment value scalar so pydantic-settings never treats it as
+    # a complex value and never attempts JSON decoding before app validation.
+    # The public cors_origins property below normalizes plain, CSV, and JSON forms.
+    cors_origins_raw: str = Field(default="", validation_alias="CORS_ORIGINS")
 
     db_pool_size: int = 5
     db_max_overflow: int = 5
@@ -149,8 +147,6 @@ class Settings(BaseSettings):
     analytics_db_pool_timeout_seconds: int = Field(default=3, ge=1, le=30)
     analytics_statement_timeout_ms: int = Field(default=10_000, ge=1_000, le=60_000)
 
-    # Aggregate-only micro-cache. Patient lists and CSV exports never use it.
-    # A short TTL absorbs duplicate refreshes while keeping staleness bounded.
     analytics_aggregate_cache_ttl_seconds: int = Field(default=5, ge=0, le=60)
     analytics_aggregate_cache_max_entries: int = Field(default=256, ge=0, le=2048)
     analytics_export_max_rows: int = Field(default=5_000, ge=100, le=50_000)
@@ -163,16 +159,36 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value: object) -> list[str]:
-        if value is None or value == "":
-            return []
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        if isinstance(value, list):
-            return value
-        raise ValueError("CORS_ORIGINS must be a comma-separated string or list.")
+    @model_validator(mode="after")
+    def apply_openai_model_aliases(self) -> "Settings":
+        """Keep existing orchestration call sites provider-neutral at runtime.
+
+        The legacy field names are still referenced by turn/router/flow modules for
+        model labels and ordered failover. When OpenAI is selected, map every text
+        generation role to the configured OpenAI model and disable Gemini-specific
+        fallback chains. This prevents duplicate calls to the same Luna model and
+        reports the real model name in runtime diagnostics.
+        """
+        if self.llm_provider != "openai":
+            return self
+
+        model = self.openai_model.strip()
+        self.openai_model = model
+        self.gemini_realtime_interpreter_model = model
+        self.gemini_realtime_interpreter_fallback_model = None
+        self.gemini_realtime_interpreter_emergency_model = None
+        self.gemini_realtime_composer_model = model
+        self.gemini_realtime_composer_fallback_model = None
+        self.gemini_agent_model = model
+        self.gemini_agent_fallback_model = None
+        self.gemini_router_model = model
+        self.gemini_router_fallback_model = None
+        self.gemini_flow_model = model
+        self.gemini_flow_fallback_model = None
+        self.gemini_onboarding_model = model
+        self.gemini_onboarding_fallback_model = None
+        self.gemini_utility_model = model
+        return self
 
     @field_validator("database_url", "migration_database_url")
     @classmethod
@@ -208,6 +224,7 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
+        "openai_api_key",
         "gemini_api_key",
         "gemini_realtime_interpreter_fallback_model",
         "gemini_realtime_interpreter_emergency_model",
@@ -219,11 +236,38 @@ class Settings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def normalize_optional_api_key(cls, value: object) -> object:
+    def normalize_optional_value(cls, value: object) -> object:
         if isinstance(value, str):
             value = value.strip()
             return value or None
         return value
+
+    @field_validator("openai_model")
+    @classmethod
+    def validate_openai_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("OPENAI_MODEL cannot be empty.")
+        return normalized
+
+    @property
+    def cors_origins(self) -> list[str]:
+        raw = self.cors_origins_raw.strip()
+        if not raw:
+            return []
+
+        if raw.startswith("["):
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "CORS_ORIGINS must be a valid JSON array or comma-separated string."
+                ) from exc
+            if not isinstance(decoded, list):
+                raise ValueError("CORS_ORIGINS JSON value must be an array.")
+            return [str(item).strip() for item in decoded if str(item).strip()]
+
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     @property
     def supabase_auth_issuer(self) -> str:

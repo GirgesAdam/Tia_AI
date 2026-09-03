@@ -8,8 +8,11 @@ from threading import Lock
 from time import monotonic, perf_counter
 from typing import TypeVar
 
+import openai
 from google.genai import errors
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
+
+from app.core.config import settings
 
 T = TypeVar("T")
 
@@ -22,10 +25,13 @@ class _CircuitState:
     probe_inflight: bool = False
 
 
-# Provider health is tracked per model, not per primary->fallback pair. If a model
-# fails in the interpreter, another realtime operation can bypass the same model.
+# Provider health is tracked per model, not per primary->fallback pair.
 _circuit_states: dict[str, _CircuitState] = {}
 _circuit_lock = Lock()
+
+
+def _provider_name() -> str:
+    return "OpenAI" if settings.llm_provider == "openai" else "Gemini"
 
 
 def _should_bypass_model(model_name: str, *, cooldown_seconds: int) -> bool:
@@ -102,6 +108,15 @@ def _status_from_exception(exc: BaseException) -> int | None:
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
+        if isinstance(current, openai.APIStatusError):
+            try:
+                return int(current.status_code)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(current, openai.APIConnectionError):
+            # There is no upstream HTTP status for a connection/timeout failure,
+            # but operationally this is a temporary provider-unavailable condition.
+            return 503
         if isinstance(current, errors.APIError):
             try:
                 return int(current.code) if current.code is not None else None
@@ -113,6 +128,7 @@ def _status_from_exception(exc: BaseException) -> int | None:
 
 _SENSITIVE_PROVIDER_PATTERNS = (
     re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(r"sk-[0-9A-Za-z_-]{20,}"),
     re.compile(
         r"(?i)(?:api[_-]?key|x-goog-api-key|authorization)\s*[=:]\s*[^\s,;]+"
     ),
@@ -134,13 +150,7 @@ def _provider_diagnostic_source(exc: BaseException) -> BaseException:
 
 
 def _safe_provider_detail(exc: BaseException) -> tuple[str, str]:
-    """Return a short backend-only provider diagnostic without request payloads.
-
-    Google/LangChain provider exceptions normally contain only response error
-    metadata (for example INVALID_ARGUMENT / quota / permission messages), not the
-    prompt body. We still redact credential-shaped text and cap length so raw
-    clinic rows can never become an accidental log payload through this helper.
-    """
+    """Return a short backend-only provider diagnostic without request payloads."""
     source = _provider_diagnostic_source(exc)
     detail = " ".join(str(source).split())
     for pattern in _SENSITIVE_PROVIDER_PATTERNS:
@@ -155,7 +165,7 @@ def _provider_error(exc: BaseException) -> LLMProviderError:
     retryable = code == 429 or (code is not None and code >= 500)
     error_type, detail = _safe_provider_detail(exc)
     return LLMProviderError(
-        "Gemini API request failed.",
+        f"{_provider_name()} API request failed.",
         status_code=code,
         retryable=retryable,
         provider_detail=detail or None,
@@ -164,7 +174,7 @@ def _provider_error(exc: BaseException) -> LLMProviderError:
 
 
 def is_cross_model_failover_eligible(exc: LLMProviderError) -> bool:
-    """Only provider-side 5xx errors can advance to another model."""
+    """Only provider-side 5xx errors can advance to another configured model."""
     return exc.status_code is not None and 500 <= exc.status_code <= 599
 
 
@@ -183,6 +193,8 @@ def invoke_model(call: Callable[[], T]) -> T:
     except ChatGoogleGenerativeAIError as exc:
         raise _provider_error(exc) from exc
     except errors.APIError as exc:
+        raise _provider_error(exc) from exc
+    except openai.APIError as exc:
         raise _provider_error(exc) from exc
 
 
@@ -206,14 +218,15 @@ def invoke_with_model_chain(
     operation: str,
     circuit_breaker_cooldown_seconds: int = 0,
 ) -> LLMInvocationResult[T]:
-    """Bounded ordered Gemini failover with a circuit breaker per model.
+    """Bounded ordered provider failover with a circuit breaker per model.
 
-    5xx advances to the next model. 4xx/429/schema/application errors fail
-    immediately so a provider switch cannot conceal a broken request.
+    5xx advances to the next configured model. 4xx/429/schema/application errors
+    fail immediately so switching models cannot conceal a broken request.
     """
     candidates = _unique_model_calls(model_calls)
+    provider = _provider_name()
     if not candidates:
-        raise RuntimeError("No Gemini model is configured for this operation.")
+        raise RuntimeError(f"No {provider} model is configured for this operation.")
 
     chain_started = perf_counter()
     last_provider_error: LLMProviderError | None = None
@@ -226,8 +239,8 @@ def invoke_with_model_chain(
         ):
             next_model = candidates[index + 1][0] if index + 1 < len(candidates) else None
             logger.warning(
-                "Gemini runtime operation=%s model=%s circuit=open bypass_model=true next_model=%s",
-                operation, model_name, next_model,
+                "%s runtime operation=%s model=%s circuit=open bypass_model=true next_model=%s",
+                provider, operation, model_name, next_model,
             )
             continue
 
@@ -240,9 +253,9 @@ def invoke_with_model_chain(
             if not is_cross_model_failover_eligible(exc):
                 _release_model_probe(model_name)
                 logger.warning(
-                    "Gemini runtime operation=%s model=%s failed status=%s retryable=%s "
+                    "%s runtime operation=%s model=%s failed status=%s retryable=%s "
                     "duration_ms=%s failover=false",
-                    operation, model_name, exc.status_code, exc.retryable, elapsed_ms,
+                    provider, operation, model_name, exc.status_code, exc.retryable, elapsed_ms,
                 )
                 raise
             _open_model_circuit(
@@ -252,9 +265,9 @@ def invoke_with_model_chain(
             last_provider_error = exc
             next_model = candidates[index + 1][0] if index + 1 < len(candidates) else None
             logger.warning(
-                "Gemini runtime operation=%s model=%s failed status=%s duration_ms=%s; "
+                "%s runtime operation=%s model=%s failed status=%s duration_ms=%s; "
                 "open_circuit_seconds=%s next_model=%s",
-                operation, model_name, exc.status_code, elapsed_ms,
+                provider, operation, model_name, exc.status_code, elapsed_ms,
                 circuit_breaker_cooldown_seconds, next_model,
             )
             continue
@@ -266,9 +279,9 @@ def invoke_with_model_chain(
         elapsed_ms = int((perf_counter() - started) * 1000)
         total_ms = int((perf_counter() - chain_started) * 1000)
         logger.info(
-            "Gemini runtime operation=%s model=%s candidate_index=%s fallback=%s "
+            "%s runtime operation=%s model=%s candidate_index=%s fallback=%s "
             "duration_ms=%s total_duration_ms=%s",
-            operation, model_name, index, index > 0, elapsed_ms, total_ms,
+            provider, operation, model_name, index, index > 0, elapsed_ms, total_ms,
         )
         return LLMInvocationResult(
             value=value, model_name=model_name, used_fallback=index > 0
@@ -276,23 +289,23 @@ def invoke_with_model_chain(
 
     if last_provider_error is not None:
         logger.error(
-            "Gemini runtime operation=%s model_chain_exhausted=true models=%s total_duration_ms=%s",
-            operation, [name for name, _ in candidates],
+            "%s runtime operation=%s model_chain_exhausted=true models=%s total_duration_ms=%s",
+            provider, operation, [name for name, _ in candidates],
             int((perf_counter() - chain_started) * 1000),
         )
         raise last_provider_error
 
     if not attempted_any:
         logger.error(
-            "Gemini runtime operation=%s model_chain_unavailable=true all_circuits_open=true models=%s",
-            operation, [name for name, _ in candidates],
+            "%s runtime operation=%s model_chain_unavailable=true all_circuits_open=true models=%s",
+            provider, operation, [name for name, _ in candidates],
         )
         raise LLMProviderError(
-            "All configured Gemini realtime models are temporarily unavailable.",
+            f"All configured {provider} realtime models are temporarily unavailable.",
             status_code=503, retryable=True,
         )
 
-    raise RuntimeError("Gemini model chain ended without a result.")
+    raise RuntimeError(f"{provider} model chain ended without a result.")
 
 
 def invoke_with_fallback(
