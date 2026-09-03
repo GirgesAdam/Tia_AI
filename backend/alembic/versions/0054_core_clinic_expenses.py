@@ -22,7 +22,7 @@ def upgrade() -> None:
         "clinic_expenses",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
-        sa.Column("incurred_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("incurred_on", sa.Date(), nullable=False),
         sa.Column("category", sa.String(length=32), nullable=False),
         sa.Column("description", sa.String(length=240), nullable=True),
         sa.Column("amount_minor", sa.Integer(), nullable=False),
@@ -46,7 +46,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_clinic_expenses_workspace_incurred",
         "clinic_expenses",
-        ["workspace_id", "incurred_at"],
+        ["workspace_id", "incurred_on"],
         unique=False,
     )
     op.execute(sa.text('ALTER TABLE public."clinic_expenses" ENABLE ROW LEVEL SECURITY'))
