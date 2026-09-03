@@ -4,6 +4,18 @@ import { revalidatePath } from "next/cache";
 
 import { tiaRequest } from "@/lib/tia/api";
 
+const expenseCategories = new Set([
+  "rent",
+  "payroll",
+  "supplies",
+  "marketing",
+  "utilities",
+  "maintenance",
+  "software",
+  "taxes",
+  "other",
+]);
+
 function parseAmountMinor(value: FormDataEntryValue | null) {
   const raw = String(value || "").trim().replace(",", ".");
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
@@ -20,7 +32,13 @@ function expensePayload(formData: FormData) {
   const incurredOn = String(formData.get("incurred_on") || "").trim();
   const note = String(formData.get("note") || "").trim();
 
-  if (!title || !amountMinor || !/^\w{3}$/.test(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(incurredOn)) {
+  if (
+    !title ||
+    !expenseCategories.has(category) ||
+    !amountMinor ||
+    !/^[A-Z]{3}$/.test(currency) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(incurredOn)
+  ) {
     return null;
   }
 
