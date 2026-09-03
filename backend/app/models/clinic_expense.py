@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -29,7 +29,7 @@ class ClinicExpense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "category IN ('rent','payroll','marketing','supplies','utilities','software','other')",
             name="clinic_expense_category_valid",
         ),
-        Index("ix_clinic_expenses_workspace_incurred", "workspace_id", "incurred_at"),
+        Index("ix_clinic_expenses_workspace_incurred", "workspace_id", "incurred_on"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(
@@ -37,7 +37,7 @@ class ClinicExpense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    incurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    incurred_on: Mapped[date] = mapped_column(Date, nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     description: Mapped[str | None] = mapped_column(String(240), nullable=True)
     amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
