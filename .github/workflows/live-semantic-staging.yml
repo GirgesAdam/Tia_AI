@@ -7,6 +7,11 @@ on:
       - feat/core-product-hardening
     paths:
       - .github/workflows/live-semantic-staging.yml
+      - backend/scripts/run_live_semantic_staging.py
+      - backend/scripts/run_agent_e2e_matrix.py
+      - backend/app/agents/clinic_grounding.py
+      - backend/app/agents/turn_interpreter.py
+      - backend/app/agents/semantic_router.py
 
 permissions:
   contents: read
