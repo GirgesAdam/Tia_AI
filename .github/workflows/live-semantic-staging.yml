@@ -32,9 +32,11 @@ jobs:
       DOCS_ENABLED: "false"
       DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
       MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      # The semantic profile only needs PostgreSQL + OpenAI. These satisfy
+      # application settings validation without granting Supabase API access.
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_live_semantic_unused
+      SUPABASE_SECRET_KEY: sb_secret_live_semantic_unused
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       LLM_PROVIDER: openai
       OPENAI_MODEL: gpt-5.6-luna
@@ -66,9 +68,8 @@ jobs:
       - name: Verify required staging secrets are available
         shell: bash
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing from the staging environment"; exit 1; }
-          test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing from the staging environment"; exit 1; }
-          test -n "$SUPABASE_URL" || { echo "SUPABASE_URL is missing from the staging environment"; exit 1; }
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing from GitHub Actions secrets"; exit 1; }
+          test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing from GitHub Actions secrets"; exit 1; }
 
       - name: Run live semantic matrix
         run: |
