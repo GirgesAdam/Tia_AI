@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+import app.services.finance as finance_service
 from app.schemas.finance import ExpenseCreate, ExpenseUpdate
 from app.services.finance import FinanceOperationError, _utc_bounds, profitability_summary
 
@@ -30,6 +32,82 @@ def test_expense_update_rejects_null_for_non_nullable_columns() -> None:
         ExpenseUpdate(amount_minor=None)
 
     assert ExpenseUpdate(note=None).note is None
+
+
+def test_expense_mutations_emit_workspace_scoped_staff_activity(monkeypatch) -> None:
+    workspace_id = uuid4()
+    user_id = uuid4()
+    expense_id = uuid4()
+    events: list[dict] = []
+
+    def fake_record_activity(_db, **kwargs):
+        events.append(kwargs)
+        return None
+
+    monkeypatch.setattr(finance_service, "record_activity_event", fake_record_activity)
+
+    class _Db:
+        def add(self, value):
+            value.id = expense_id
+
+        def delete(self, _value):
+            return None
+
+        def flush(self):
+            return None
+
+    db = _Db()
+    payload = ExpenseCreate(
+        title="Clinic rent",
+        category="rent",
+        amount_minor=250000,
+        currency="EGP",
+        incurred_on=date(2026, 9, 1),
+        note="private finance note",
+    )
+    created = finance_service.create_expense(
+        db,
+        workspace_id=workspace_id,
+        created_by_user_id=user_id,
+        payload=payload,
+    )
+
+    assert created.id == expense_id
+    assert events[-1]["action"] == "expense.created"
+    assert events[-1]["workspace_id"] == workspace_id
+    assert events[-1]["actor_user_id"] == user_id
+    assert "note" not in events[-1]["metadata"]
+    assert "title" not in events[-1]["metadata"]
+
+    existing = SimpleNamespace(
+        id=expense_id,
+        category="rent",
+        amount_minor=250000,
+        currency="EGP",
+        incurred_on=date(2026, 9, 1),
+        note="private finance note",
+    )
+    monkeypatch.setattr(finance_service, "_expense_or_raise", lambda *_args, **_kwargs: existing)
+
+    finance_service.update_expense(
+        db,
+        workspace_id=workspace_id,
+        expense_id=expense_id,
+        actor_user_id=user_id,
+        payload=ExpenseUpdate(amount_minor=300000, note="updated private note"),
+    )
+    assert events[-1]["action"] == "expense.updated"
+    assert events[-1]["metadata"] == {"changed_fields": ["amount_minor", "note"]}
+
+    finance_service.delete_expense(
+        db,
+        workspace_id=workspace_id,
+        expense_id=expense_id,
+        actor_user_id=user_id,
+    )
+    assert events[-1]["action"] == "expense.deleted"
+    assert events[-1]["entity_id"] == expense_id
+    assert "note" not in events[-1]["metadata"]
 
 
 def test_profitability_bounds_use_workspace_timezone() -> None:
