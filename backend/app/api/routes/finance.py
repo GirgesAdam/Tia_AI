@@ -110,17 +110,18 @@ def expense_delete(
 def profitability(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
-    end_date: date = Query(default_factory=date.today),
+    end_date: date | None = None,
     start_date: date | None = None,
 ) -> ProfitabilityRead:
-    resolved_start = start_date or (end_date - timedelta(days=29))
+    resolved_end = end_date or date.today()
+    resolved_start = start_date or (resolved_end - timedelta(days=29))
     try:
         return profitability_summary(
             db,
             workspace_id=access.workspace.id,
             timezone_name=access.workspace.timezone,
             start_date=resolved_start,
-            end_date=end_date,
+            end_date=resolved_end,
         )
     except FinanceOperationError as exc:
         raise _bad_request(str(exc)) from exc
