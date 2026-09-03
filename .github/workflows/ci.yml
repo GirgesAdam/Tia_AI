@@ -23,7 +23,6 @@ jobs:
       ENVIRONMENT: test
       DEBUG: "false"
       DOCS_ENABLED: "false"
-      CORS_ORIGINS: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
