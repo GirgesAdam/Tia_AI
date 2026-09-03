@@ -15,6 +15,7 @@ from app.schemas.finance import (
     ProfitabilityCurrencyRead,
     ProfitabilityRead,
 )
+from app.services.activity import record_activity_event
 
 
 class FinanceNotFound(ValueError):
@@ -73,6 +74,22 @@ def create_expense(
     )
     db.add(expense)
     db.flush()
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=created_by_user_id,
+        action="expense.created",
+        entity_type="expense",
+        entity_id=expense.id,
+        summary="Added an expense record.",
+        metadata={
+            "category": expense.category,
+            "amount_minor": expense.amount_minor,
+            "currency": expense.currency,
+            "incurred_on": expense.incurred_on.isoformat(),
+        },
+    )
     return expense
 
 
@@ -81,18 +98,54 @@ def update_expense(
     *,
     workspace_id: UUID,
     expense_id: UUID,
+    actor_user_id: UUID,
     payload: ExpenseUpdate,
 ) -> Expense:
     expense = _expense_or_raise(db, workspace_id=workspace_id, expense_id=expense_id)
-    for field_name, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    for field_name, value in changes.items():
         setattr(expense, field_name, value)
     db.flush()
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=actor_user_id,
+        action="expense.updated",
+        entity_type="expense",
+        entity_id=expense.id,
+        summary="Updated an expense record.",
+        metadata={"changed_fields": sorted(changes)},
+    )
     return expense
 
 
-def delete_expense(db: Session, *, workspace_id: UUID, expense_id: UUID) -> None:
+def delete_expense(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    expense_id: UUID,
+    actor_user_id: UUID,
+) -> None:
     expense = _expense_or_raise(db, workspace_id=workspace_id, expense_id=expense_id)
+    metadata = {
+        "category": expense.category,
+        "amount_minor": expense.amount_minor,
+        "currency": expense.currency,
+        "incurred_on": expense.incurred_on.isoformat(),
+    }
     db.delete(expense)
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=actor_user_id,
+        action="expense.deleted",
+        entity_type="expense",
+        entity_id=expense.id,
+        summary="Deleted an expense record.",
+        metadata=metadata,
+    )
     db.flush()
 
 
