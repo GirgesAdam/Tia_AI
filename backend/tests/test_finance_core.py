@@ -74,6 +74,7 @@ def test_profitability_uses_real_payments_minus_refunds_and_expenses() -> None:
             return _Result([
                 ("EGP", 3000),
                 ("USD", 100),
+                ("EUR", 250),
             ])
 
     result = profitability_summary(
@@ -91,3 +92,6 @@ def test_profitability_uses_real_payments_minus_refunds_and_expenses() -> None:
     assert by_currency["USD"].net_revenue_minor == 500
     assert by_currency["USD"].expenses_minor == 100
     assert by_currency["USD"].profit_minor == 400
+    assert by_currency["EUR"].net_revenue_minor == 0
+    assert by_currency["EUR"].expenses_minor == 250
+    assert by_currency["EUR"].profit_minor == -250
