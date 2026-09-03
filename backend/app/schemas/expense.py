@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ExpenseCategory = Literal[
     "rent",
@@ -57,6 +57,13 @@ class ExpenseUpdate(BaseModel):
     @classmethod
     def normalize_currency(cls, value: str | None) -> str | None:
         return value.strip().upper() if value is not None else None
+
+    @model_validator(mode="after")
+    def required_fields_cannot_be_null(self) -> "ExpenseUpdate":
+        for field_name in ("incurred_at", "category", "amount_minor", "currency"):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null.")
+        return self
 
 
 class ExpenseRead(BaseModel):
