@@ -73,9 +73,8 @@ jobs:
 
       - name: Run live semantic matrix
         run: |
-          python -m scripts.run_agent_e2e_matrix \
+          python -m scripts.run_live_semantic_staging \
             --workspace-slug tia \
-            --profile semantic \
             --report artifacts/live-semantic-staging.json
 
       - name: Upload semantic report
