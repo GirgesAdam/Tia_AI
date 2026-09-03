@@ -9,10 +9,6 @@ from time import monotonic, perf_counter
 from typing import TypeVar
 
 import openai
-from google.genai import errors
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
-
-from app.core.config import settings
 
 T = TypeVar("T")
 
@@ -31,7 +27,7 @@ _circuit_lock = Lock()
 
 
 def _provider_name() -> str:
-    return "OpenAI" if settings.llm_provider == "openai" else "Gemini"
+    return "OpenAI"
 
 
 def _should_bypass_model(model_name: str, *, cooldown_seconds: int) -> bool:
@@ -117,21 +113,13 @@ def _status_from_exception(exc: BaseException) -> int | None:
             # There is no upstream HTTP status for a connection/timeout failure,
             # but operationally this is a temporary provider-unavailable condition.
             return 503
-        if isinstance(current, errors.APIError):
-            try:
-                return int(current.code) if current.code is not None else None
-            except (TypeError, ValueError):
-                return None
         current = current.__cause__ or current.__context__
     return None
 
 
 _SENSITIVE_PROVIDER_PATTERNS = (
-    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
     re.compile(r"sk-[0-9A-Za-z_-]{20,}"),
-    re.compile(
-        r"(?i)(?:api[_-]?key|x-goog-api-key|authorization)\s*[=:]\s*[^\s,;]+"
-    ),
+    re.compile(r"(?i)(?:api[_-]?key|authorization)\s*[=:]\s*[^\s,;]+"),
 )
 
 
@@ -165,7 +153,7 @@ def _provider_error(exc: BaseException) -> LLMProviderError:
     retryable = code == 429 or (code is not None and code >= 500)
     error_type, detail = _safe_provider_detail(exc)
     return LLMProviderError(
-        f"{_provider_name()} API request failed.",
+        "OpenAI API request failed.",
         status_code=code,
         retryable=retryable,
         provider_detail=detail or None,
@@ -190,10 +178,6 @@ def invoke_model(call: Callable[[], T]) -> T:
     """Provider error boundary; no graph/workflow replay happens here."""
     try:
         return call()
-    except ChatGoogleGenerativeAIError as exc:
-        raise _provider_error(exc) from exc
-    except errors.APIError as exc:
-        raise _provider_error(exc) from exc
     except openai.APIError as exc:
         raise _provider_error(exc) from exc
 
@@ -218,7 +202,7 @@ def invoke_with_model_chain(
     operation: str,
     circuit_breaker_cooldown_seconds: int = 0,
 ) -> LLMInvocationResult[T]:
-    """Bounded ordered provider failover with a circuit breaker per model.
+    """Bounded ordered OpenAI model failover with a circuit breaker per model.
 
     5xx advances to the next configured model. 4xx/429/schema/application errors
     fail immediately so switching models cannot conceal a broken request.
@@ -226,7 +210,7 @@ def invoke_with_model_chain(
     candidates = _unique_model_calls(model_calls)
     provider = _provider_name()
     if not candidates:
-        raise RuntimeError(f"No {provider} model is configured for this operation.")
+        raise RuntimeError("No OpenAI model is configured for this operation.")
 
     chain_started = perf_counter()
     last_provider_error: LLMProviderError | None = None
@@ -240,7 +224,10 @@ def invoke_with_model_chain(
             next_model = candidates[index + 1][0] if index + 1 < len(candidates) else None
             logger.warning(
                 "%s runtime operation=%s model=%s circuit=open bypass_model=true next_model=%s",
-                provider, operation, model_name, next_model,
+                provider,
+                operation,
+                model_name,
+                next_model,
             )
             continue
 
@@ -255,7 +242,12 @@ def invoke_with_model_chain(
                 logger.warning(
                     "%s runtime operation=%s model=%s failed status=%s retryable=%s "
                     "duration_ms=%s failover=false",
-                    provider, operation, model_name, exc.status_code, exc.retryable, elapsed_ms,
+                    provider,
+                    operation,
+                    model_name,
+                    exc.status_code,
+                    exc.retryable,
+                    elapsed_ms,
                 )
                 raise
             _open_model_circuit(
@@ -267,8 +259,13 @@ def invoke_with_model_chain(
             logger.warning(
                 "%s runtime operation=%s model=%s failed status=%s duration_ms=%s; "
                 "open_circuit_seconds=%s next_model=%s",
-                provider, operation, model_name, exc.status_code, elapsed_ms,
-                circuit_breaker_cooldown_seconds, next_model,
+                provider,
+                operation,
+                model_name,
+                exc.status_code,
+                elapsed_ms,
+                circuit_breaker_cooldown_seconds,
+                next_model,
             )
             continue
         except BaseException:
@@ -281,16 +278,26 @@ def invoke_with_model_chain(
         logger.info(
             "%s runtime operation=%s model=%s candidate_index=%s fallback=%s "
             "duration_ms=%s total_duration_ms=%s",
-            provider, operation, model_name, index, index > 0, elapsed_ms, total_ms,
+            provider,
+            operation,
+            model_name,
+            index,
+            index > 0,
+            elapsed_ms,
+            total_ms,
         )
         return LLMInvocationResult(
-            value=value, model_name=model_name, used_fallback=index > 0
+            value=value,
+            model_name=model_name,
+            used_fallback=index > 0,
         )
 
     if last_provider_error is not None:
         logger.error(
             "%s runtime operation=%s model_chain_exhausted=true models=%s total_duration_ms=%s",
-            provider, operation, [name for name, _ in candidates],
+            provider,
+            operation,
+            [name for name, _ in candidates],
             int((perf_counter() - chain_started) * 1000),
         )
         raise last_provider_error
@@ -298,14 +305,17 @@ def invoke_with_model_chain(
     if not attempted_any:
         logger.error(
             "%s runtime operation=%s model_chain_unavailable=true all_circuits_open=true models=%s",
-            provider, operation, [name for name, _ in candidates],
+            provider,
+            operation,
+            [name for name, _ in candidates],
         )
         raise LLMProviderError(
-            f"All configured {provider} realtime models are temporarily unavailable.",
-            status_code=503, retryable=True,
+            "All configured OpenAI realtime models are temporarily unavailable.",
+            status_code=503,
+            retryable=True,
         )
 
-    raise RuntimeError(f"{provider} model chain ended without a result.")
+    raise RuntimeError("OpenAI model chain ended without a result.")
 
 
 def invoke_with_fallback(
@@ -317,8 +327,10 @@ def invoke_with_fallback(
     operation: str,
     circuit_breaker_cooldown_seconds: int = 0,
 ) -> LLMInvocationResult[T]:
-    """Backward-compatible two-model wrapper."""
-    model_calls: list[tuple[str, Callable[[], T]]] = [(primary_model_name, primary_call)]
+    """Two-model wrapper used by the realtime orchestration modules."""
+    model_calls: list[tuple[str, Callable[[], T]]] = [
+        (primary_model_name, primary_call)
+    ]
     if fallback_call is not None and fallback_model_name:
         model_calls.append((fallback_model_name, fallback_call))
     return invoke_with_model_chain(
