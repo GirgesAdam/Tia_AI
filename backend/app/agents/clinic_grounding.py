@@ -213,8 +213,15 @@ def _filter_candidates_for_selected_doctor(
     selected_id: str | None,
     candidate_ids: list[str],
     allowed_ids: set[str],
+    allow_promotion: bool,
 ) -> tuple[str | None, list[str]]:
-    """Apply a canonical doctor relationship without guessing from customer text."""
+    """Apply one canonical doctor relationship without guessing from customer text.
+
+    A single compatible candidate may become selected only when the model did not
+    provide an explicit selected ID. If an explicit ID was hallucinated or was
+    incompatible, validation rejects it but does not silently replace that model
+    decision in the same pass.
+    """
     if not allowed_ids:
         return selected_id, candidate_ids
 
@@ -226,7 +233,7 @@ def _filter_candidates_for_selected_doctor(
 
     if selected_id is not None:
         return selected_id, []
-    if len(compatible_candidates) == 1:
+    if allow_promotion and len(compatible_candidates) == 1:
         return compatible_candidates[0], []
     return None, compatible_candidates
 
@@ -243,11 +250,14 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
     branch_ids = _catalog_ids(catalog, "branches")
     doctor_ids = _catalog_ids(catalog, "doctors")
 
-    service_id = _valid_id(getattr(entity_hints, "service_id", None), service_ids)
+    raw_service_id = getattr(entity_hints, "service_id", None)
+    raw_branch_id = getattr(entity_hints, "branch_id", None)
+
+    service_id = _valid_id(raw_service_id, service_ids)
     service_candidate_ids = _valid_ids(
         getattr(entity_hints, "service_candidate_ids", []), service_ids
     )
-    branch_id = _valid_id(getattr(entity_hints, "branch_id", None), branch_ids)
+    branch_id = _valid_id(raw_branch_id, branch_ids)
     branch_candidate_ids = _valid_ids(
         getattr(entity_hints, "branch_candidate_ids", []), branch_ids
     )
@@ -265,6 +275,7 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
             selected_id=service_id,
             candidate_ids=service_candidate_ids,
             allowed_ids=doctor_service_ids,
+            allow_promotion=not bool(raw_service_id),
         )
 
         doctor_branch_ids = {
@@ -274,6 +285,7 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
             selected_id=branch_id,
             candidate_ids=branch_candidate_ids,
             allowed_ids=doctor_branch_ids,
+            allow_promotion=not bool(raw_branch_id),
         )
 
     return entity_hints.model_copy(
