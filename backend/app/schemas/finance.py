@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ExpenseCategory = Literal[
     "rent",
@@ -27,18 +27,15 @@ class ExpenseCreate(BaseModel):
     incurred_on: date
     note: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("title")
+    @field_validator("title", mode="before")
     @classmethod
-    def normalize_title(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Expense title cannot be empty.")
-        return value
+    def normalize_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
-    @field_validator("currency")
+    @field_validator("currency", mode="before")
     @classmethod
-    def normalize_currency(cls, value: str) -> str:
-        return value.strip().upper()
+    def normalize_currency(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("note", mode="before")
     @classmethod
@@ -57,20 +54,15 @@ class ExpenseUpdate(BaseModel):
     incurred_on: date | None = None
     note: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("title")
+    @field_validator("title", mode="before")
     @classmethod
-    def normalize_title(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value:
-            raise ValueError("Expense title cannot be empty.")
-        return value
+    def normalize_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
-    @field_validator("currency")
+    @field_validator("currency", mode="before")
     @classmethod
-    def normalize_currency(cls, value: str | None) -> str | None:
-        return value.strip().upper() if value is not None else None
+    def normalize_currency(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("note", mode="before")
     @classmethod
@@ -79,6 +71,13 @@ class ExpenseUpdate(BaseModel):
             value = value.strip()
             return value or None
         return value
+
+    @model_validator(mode="after")
+    def reject_null_for_required_columns(self) -> ExpenseUpdate:
+        for field_name in ("title", "category", "amount_minor", "currency", "incurred_on"):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null.")
+        return self
 
 
 class ExpenseRead(BaseModel):
