@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agents.structured_output import canonicalize_gemini_json_schema
+from app.agents.structured_output import canonicalize_provider_json_schema
 from app.core.config import settings
 from app.schemas.onboarding_provider import OnboardingProviderDecision
 
@@ -12,7 +12,7 @@ def test_onboarding_has_its_own_larger_output_budget() -> None:
 
 
 def test_all_provider_top_level_fields_remain_required() -> None:
-    schema = canonicalize_gemini_json_schema(OnboardingProviderDecision.model_json_schema())
+    schema = canonicalize_provider_json_schema(OnboardingProviderDecision.model_json_schema())
 
     properties = set(schema["properties"])
     required = set(schema["required"])
