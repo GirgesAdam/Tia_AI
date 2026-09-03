@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import app.services.finance as finance_service
+from app.api.routes.finance import _workspace_today
 from app.schemas.finance import ExpenseCreate, ExpenseUpdate
 from app.services.finance import FinanceOperationError, _utc_bounds, profitability_summary
 
@@ -108,6 +109,14 @@ def test_expense_mutations_emit_workspace_scoped_staff_activity(monkeypatch) -> 
     assert events[-1]["action"] == "expense.deleted"
     assert events[-1]["entity_id"] == expense_id
     assert "note" not in events[-1]["metadata"]
+
+
+def test_profitability_default_date_uses_workspace_timezone() -> None:
+    reference = datetime(2026, 9, 3, 22, 30, tzinfo=UTC)
+
+    assert _workspace_today("UTC", now=reference) == date(2026, 9, 3)
+    assert _workspace_today("Africa/Cairo", now=reference) == date(2026, 9, 4)
+    assert _workspace_today("Invalid/Timezone", now=reference) == date(2026, 9, 3)
 
 
 def test_profitability_bounds_use_workspace_timezone() -> None:
