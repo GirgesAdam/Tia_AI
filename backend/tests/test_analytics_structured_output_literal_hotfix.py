@@ -1,9 +1,9 @@
-from app.agents.structured_output import canonicalize_gemini_json_schema
+from app.agents.structured_output import canonicalize_provider_json_schema
 from app.schemas.analytics_composable import AnalyticsComposePlan
 
 
 def test_composable_analytics_provider_schema_keeps_literal_discriminators() -> None:
-    schema = canonicalize_gemini_json_schema(AnalyticsComposePlan.model_json_schema())
+    schema = canonicalize_provider_json_schema(AnalyticsComposePlan.model_json_schema())
 
     business_kind = schema["properties"]["business_plan"]["properties"]["kind"]
     audience_kind = schema["properties"]["audience_plan"]["properties"]["kind"]
