@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
@@ -29,6 +30,15 @@ def _bad_request(detail: str) -> HTTPException:
 
 def _not_found(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+
+
+def _workspace_today(timezone_name: str, *, now: datetime | None = None) -> date:
+    reference = now or datetime.now(UTC)
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        timezone = ZoneInfo("UTC")
+    return reference.astimezone(timezone).date()
 
 
 @router.get("/expenses", response_model=list[ExpenseRead])
@@ -119,7 +129,7 @@ def profitability(
     end_date: date | None = None,
     start_date: date | None = None,
 ) -> ProfitabilityRead:
-    resolved_end = end_date or date.today()
+    resolved_end = end_date or _workspace_today(access.workspace.timezone)
     resolved_start = start_date or (resolved_end - timedelta(days=29))
     try:
         return profitability_summary(
