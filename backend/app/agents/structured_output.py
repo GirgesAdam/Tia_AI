@@ -21,9 +21,9 @@ class StructuredOutputSchemaCompatibilityError(RuntimeError):
     pass
 
 
-# Local Pydantic validation keywords that are intentionally not sent to the
-# provider. Tia always re-validates the returned payload using the original model.
-_GEMINI_LOCAL_ONLY_SCHEMA_KEYS = frozenset(
+# Validation keywords kept for Tia's local Pydantic validation rather than sent
+# to the model provider. This keeps generation schemas small and deterministic.
+_LOCAL_ONLY_SCHEMA_KEYS = frozenset(
     {
         "default",
         "examples",
@@ -38,14 +38,10 @@ _GEMINI_LOCAL_ONLY_SCHEMA_KEYS = frozenset(
 )
 
 
-def canonicalize_gemini_json_schema(
+def canonicalize_provider_json_schema(
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compile Pydantic JSON Schema to Tia's portable provider subset.
-
-    The subset was originally introduced for Gemini and remains intentionally
-    conservative so the same deterministic schema contract can be sent through
-    Gemini or OpenAI structured-output APIs without changing business semantics.
+    """Compile Pydantic JSON Schema to Tia's conservative provider subset.
 
     Transformations:
     - inline local `#/$defs/...` references;
@@ -54,8 +50,8 @@ def canonicalize_gemini_json_schema(
     - convert supported single-value `const` constraints to `enum`;
     - remove local-only validation keywords.
 
-    General unions are rejected rather than silently weakened. Tia's provider
-    schemas should use enums and nullable fields, not arbitrary unions.
+    General unions are rejected rather than silently weakened. Full business
+    validation always runs locally with the original Pydantic model.
     """
     root = deepcopy(schema)
     definitions = root.get("$defs", {})
@@ -117,7 +113,7 @@ def canonicalize_gemini_json_schema(
         base["type"] = type_values
 
         for key, value in node.items():
-            if key == "anyOf" or key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS or key == "$defs":
+            if key == "anyOf" or key in _LOCAL_ONLY_SCHEMA_KEYS or key == "$defs":
                 continue
             base[key] = walk(value, stack)
         return base
@@ -135,7 +131,7 @@ def canonicalize_gemini_json_schema(
             for key, sibling in value.items():
                 if key == "$ref":
                     continue
-                if key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS:
+                if key in _LOCAL_ONLY_SCHEMA_KEYS:
                     continue
                 resolved[key] = walk(sibling, stack)
             return resolved
@@ -153,7 +149,7 @@ def canonicalize_gemini_json_schema(
                 ):
                     cleaned["enum"] = [item]
                 continue
-            if key in _GEMINI_LOCAL_ONLY_SCHEMA_KEYS:
+            if key in _LOCAL_ONLY_SCHEMA_KEYS:
                 continue
             cleaned[key] = walk(item, stack)
         return cleaned
@@ -166,14 +162,10 @@ def canonicalize_gemini_json_schema(
     return result
 
 
-# Backward-compatible names used by existing tests/docs.
-sanitize_gemini_json_schema = canonicalize_gemini_json_schema
-
-
 @lru_cache(maxsize=32)
 def _cached_provider_schema(schema: type[BaseModel]) -> dict[str, Any]:
     """Cache deterministic Pydantic-to-provider schema compilation per process."""
-    return canonicalize_gemini_json_schema(schema.model_json_schema())
+    return canonicalize_provider_json_schema(schema.model_json_schema())
 
 
 def invoke_typed_structured_output(
