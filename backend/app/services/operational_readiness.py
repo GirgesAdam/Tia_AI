@@ -582,17 +582,24 @@ def build_workspace_operational_readiness(
         },
     )
 
-    gemini_configured = bool(settings.gemini_api_key)
+    provider_name = settings.llm_provider
+    provider_display_name = "OpenAI" if provider_name == "openai" else "Gemini"
+    provider_configured = (
+        bool(settings.openai_api_key)
+        if provider_name == "openai"
+        else bool(settings.gemini_api_key)
+    )
     _check(
         checks,
-        key="gemini_configuration",
-        severity="pass" if gemini_configured else "fail",
+        key="llm_provider_configuration",
+        severity="pass" if provider_configured else "fail",
         message=(
-            "Gemini API key is configured."
-            if gemini_configured
-            else "Gemini API key is not configured."
+            f"{provider_display_name} API key is configured."
+            if provider_configured
+            else f"{provider_display_name} API key is not configured."
         ),
-        value=gemini_configured,
+        value=provider_configured,
+        details={"provider": provider_name},
     )
 
     runtime_fallbacks = {
@@ -600,38 +607,63 @@ def build_workspace_operational_readiness(
         "router": (settings.gemini_router_model, settings.gemini_router_fallback_model),
         "flow": (settings.gemini_flow_model, settings.gemini_flow_fallback_model),
     }
-    runtime_fallback_ok = all(
-        bool(fallback and fallback != primary)
-        for primary, fallback in runtime_fallbacks.values()
-    )
+    if provider_name == "openai":
+        runtime_fallback_ok = True
+        runtime_failover_message = (
+            "OpenAI customer-agent roles use the configured single-model strategy; "
+            "provider retries and the per-model circuit breaker remain enabled."
+        )
+        runtime_strategy = "single_model"
+    else:
+        runtime_fallback_ok = all(
+            bool(fallback and fallback != primary)
+            for primary, fallback in runtime_fallbacks.values()
+        )
+        runtime_failover_message = (
+            "Customer-agent runtime 5xx failover is configured for agent, router, and flow roles."
+            if runtime_fallback_ok
+            else "One or more customer-agent runtime roles has no distinct fallback model configured."
+        )
+        runtime_strategy = "cross_model_failover"
     _check(
         checks,
         key="customer_agent_provider_failover",
         severity="pass" if runtime_fallback_ok else "warn",
-        message=(
-            "Customer-agent runtime 5xx failover is configured for agent, router, and flow roles."
-            if runtime_fallback_ok
-            else "One or more customer-agent runtime roles has no distinct fallback model configured."
-        ),
+        message=runtime_failover_message,
         value=runtime_fallback_ok,
         details={
-            role: {"primary": primary, "fallback": fallback}
-            for role, (primary, fallback) in runtime_fallbacks.items()
+            "provider": provider_name,
+            "strategy": runtime_strategy,
+            **{
+                role: {"primary": primary, "fallback": fallback}
+                for role, (primary, fallback) in runtime_fallbacks.items()
+            },
         },
     )
 
     fallback = settings.gemini_onboarding_fallback_model
-    fallback_ok = bool(fallback and fallback != settings.gemini_onboarding_model)
+    if provider_name == "openai":
+        fallback_ok = True
+        onboarding_failover_message = (
+            "OpenAI onboarding uses the configured single-model strategy with provider retries "
+            "and circuit-breaker protection."
+        )
+        onboarding_strategy = "single_model"
+    else:
+        fallback_ok = bool(fallback and fallback != settings.gemini_onboarding_model)
+        onboarding_failover_message = (
+            f"Onboarding failover configured: {settings.gemini_onboarding_model} → {fallback}."
+            if fallback_ok
+            else "AI onboarding has no distinct fallback model configured."
+        )
+        onboarding_strategy = "cross_model_failover"
     _check(
         checks,
         key="onboarding_provider_failover",
         severity="pass" if fallback_ok else "warn",
-        message=(
-            f"Onboarding failover configured: {settings.gemini_onboarding_model} → {fallback}."
-            if fallback_ok
-            else "AI onboarding has no distinct fallback model configured."
-        ),
+        message=onboarding_failover_message,
         value=fallback_ok,
+        details={"provider": provider_name, "strategy": onboarding_strategy},
     )
 
     pass_count = sum(c.severity == "pass" for c in checks)
@@ -648,7 +680,8 @@ def build_workspace_operational_readiness(
         warn_count=warn_count,
         fail_count=fail_count,
         provider={
-            "provider": settings.llm_provider,
+            "provider": provider_name,
+            "configured": provider_configured,
             "agent_model": settings.gemini_agent_model,
             "agent_fallback_model": settings.gemini_agent_fallback_model,
             "router_model": settings.gemini_router_model,
@@ -657,6 +690,8 @@ def build_workspace_operational_readiness(
             "flow_fallback_model": settings.gemini_flow_fallback_model,
             "onboarding_primary_model": settings.gemini_onboarding_model,
             "onboarding_fallback_model": fallback,
-            "onboarding_max_output_tokens": (settings.gemini_onboarding_max_output_tokens),
+            "onboarding_max_output_tokens": settings.gemini_onboarding_max_output_tokens,
+            "runtime_provider_strategy": runtime_strategy,
+            "onboarding_provider_strategy": onboarding_strategy,
         },
     )

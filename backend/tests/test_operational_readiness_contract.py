@@ -56,3 +56,13 @@ def test_readiness_checks_workspace_clinic_integration() -> None:
     assert 'key="clinic_integration"' in service
     assert "registered_clinic_adapter_keys()" in service
     assert 'clinic_integration.status == "active"' in service
+
+def test_provider_readiness_is_provider_aware() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
+
+    assert 'key="llm_provider_configuration"' in service
+    assert 'provider_name == "openai"' in service
+    assert "settings.openai_api_key" in service
+    assert 'runtime_strategy = "single_model"' in service
+    assert '"configured": provider_configured' in service
