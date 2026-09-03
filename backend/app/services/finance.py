@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.models.expense import Expense
 from app.models.payment_transaction import PaymentTransaction
-from app.schemas.finance import ExpenseCreate, ExpenseUpdate, ProfitabilityCurrencyRead, ProfitabilityRead
+from app.schemas.finance import (
+    ExpenseCreate,
+    ExpenseUpdate,
+    ProfitabilityCurrencyRead,
+    ProfitabilityRead,
+)
 
 
 class FinanceNotFound(ValueError):
