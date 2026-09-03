@@ -182,11 +182,11 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           <form method="GET" className="flex flex-wrap items-end gap-3">
             <label>
               <span className="mb-1.5 block text-xs font-bold text-slate-600">من</span>
-              <Input name="start_date" type="date" defaultValue={profitability.start_date} />
+              <Input name="start_date" type="date" max={profitability.end_date} defaultValue={profitability.start_date} />
             </label>
             <label>
               <span className="mb-1.5 block text-xs font-bold text-slate-600">إلى</span>
-              <Input name="end_date" type="date" defaultValue={profitability.end_date} />
+              <Input name="end_date" type="date" min={profitability.start_date} defaultValue={profitability.end_date} />
             </label>
             <Button type="submit" variant="outline"><CalendarRange size={16} />تطبيق الفترة</Button>
             <div className="mr-auto text-xs font-semibold text-[var(--muted)]">{expenses.length.toLocaleString("ar-EG")} مصروف في الفترة</div>
@@ -260,10 +260,18 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                           </div>
                         </form>
                       </details>
-                      <form action={deleteExpense} className="mt-2 flex justify-end">
-                        <input type="hidden" name="expense_id" value={expense.id} />
-                        <Button type="submit" size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50 hover:text-rose-800"><Trash2 size={14} />حذف</Button>
-                      </form>
+                      <details className="mt-2">
+                        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-800">
+                          <Trash2 size={14} /> حذف المصروف
+                        </summary>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3">
+                          <span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span>
+                          <form action={deleteExpense}>
+                            <input type="hidden" name="expense_id" value={expense.id} />
+                            <Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button>
+                          </form>
+                        </div>
+                      </details>
                     </div>
                   )}
                 </div>
