@@ -1,0 +1,87 @@
+name: Live Semantic Staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/core-product-hardening
+    paths:
+      - .github/workflows/live-semantic-staging.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-semantic-staging
+  cancel-in-progress: false
+
+jobs:
+  semantic:
+    name: Luna semantic regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "2"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
+      CORS_ORIGINS: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify required staging secrets are available
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing from the staging environment"; exit 1; }
+          test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing from the staging environment"; exit 1; }
+          test -n "$SUPABASE_URL" || { echo "SUPABASE_URL is missing from the staging environment"; exit 1; }
+
+      - name: Run live semantic matrix
+        run: |
+          python scripts/run_agent_e2e_matrix.py \
+            --workspace-slug tia \
+            --profile semantic \
+            --report artifacts/live-semantic-staging.json
+
+      - name: Upload semantic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-semantic-staging-report
+          path: backend/artifacts/live-semantic-staging.json
+          if-no-files-found: warn
+          retention-days: 7
