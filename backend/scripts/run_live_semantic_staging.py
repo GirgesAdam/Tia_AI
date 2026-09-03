@@ -14,6 +14,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import HumanMessage
@@ -64,6 +65,14 @@ def _fixture_expected(db: Session, workspace: Workspace, catalog: dict[str, obje
     if underarm is None:
         raise RuntimeError("Canonical underarm staging service is missing or inactive.")
 
+    english_underarm = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace.id,
+            Service.name == "Underarm Laser",
+            Service.is_active.is_(True),
+        )
+    )
+
     nasr = db.scalar(
         select(Branch).where(
             Branch.workspace_id == workspace.id,
@@ -97,6 +106,10 @@ def _fixture_expected(db: Session, workspace: Workspace, catalog: dict[str, obje
         for collection in ("services", "doctors", "branches")
         for value in _catalog_ids(catalog, collection)
     }
+    underarm_service_ids = {str(underarm.id)}
+    if english_underarm is not None:
+        underarm_service_ids.add(str(english_underarm.id))
+
     required = {
         "underarm_service_id": str(underarm.id),
         "ahmed_doctor_id": str(ahmed.id),
@@ -106,7 +119,41 @@ def _fixture_expected(db: Session, workspace: Workspace, catalog: dict[str, obje
     if missing:
         raise RuntimeError(f"Required canonical fixture IDs are absent from the agent catalog: {missing}")
 
-    return {**required, "allowed_ids": allowed_ids}
+    return {
+        **required,
+        "underarm_service_ids": underarm_service_ids,
+        "allowed_ids": allowed_ids,
+    }
+
+
+def _check_staging_case(
+    *,
+    case_name: str,
+    decision: Any,
+    expected: dict[str, object],
+    default_check: Callable[[Any, dict[str, Any]], tuple[bool, str]],
+) -> tuple[bool, str]:
+    # Staging contains two real active underarm offerings with different prices
+    # and histories. With no doctor constraint, selecting either exact offering
+    # or preserving ambiguity between only those offerings is valid grounding.
+    if case_name in {"service_underarm_dialect", "pricing"}:
+        acceptable_ids = {str(value) for value in expected["underarm_service_ids"]}
+        selected = getattr(decision.entity_hints, "service_id", None)
+        selected = str(selected) if selected else None
+        candidates = {
+            str(value)
+            for value in (decision.entity_hints.service_candidate_ids or [])
+        }
+        if selected is not None:
+            ok = selected in acceptable_ids
+        else:
+            ok = bool(candidates) and candidates.issubset(acceptable_ids)
+        return ok, (
+            f"service_id={selected} candidates={sorted(candidates)} "
+            f"acceptable={sorted(acceptable_ids)}"
+        )
+
+    return default_check(decision, expected)
 
 
 def main() -> int:
@@ -167,7 +214,12 @@ def main() -> int:
                         local_now=local_now,
                         clinic_catalog=catalog,
                     )
-                    ok, message = case.check(decision, expected)
+                    ok, message = _check_staging_case(
+                        case_name=case.name,
+                        decision=decision,
+                        expected=expected,
+                        default_check=case.check,
+                    )
                     _record(
                         report,
                         CheckResult(
