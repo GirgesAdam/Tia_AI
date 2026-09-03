@@ -172,5 +172,6 @@ def test_native_adapter_owns_appointment_read_query() -> None:
 
     assert "def get_patient_appointments(" in source
     assert "select(" in source
+    assert "Appointment.workspace_id == self.workspace.id" in source
     assert "Appointment.patient_id == patient_id" in source
     assert "Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES)" in source
