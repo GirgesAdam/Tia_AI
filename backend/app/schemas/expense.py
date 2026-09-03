@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -18,7 +18,7 @@ ExpenseCategory = Literal[
 
 
 class ExpenseCreate(BaseModel):
-    incurred_at: datetime
+    incurred_on: date
     category: ExpenseCategory
     description: str | None = Field(default=None, max_length=240)
     amount_minor: int = Field(gt=0)
@@ -39,7 +39,7 @@ class ExpenseCreate(BaseModel):
 
 
 class ExpenseUpdate(BaseModel):
-    incurred_at: datetime | None = None
+    incurred_on: date | None = None
     category: ExpenseCategory | None = None
     description: str | None = Field(default=None, max_length=240)
     amount_minor: int | None = Field(default=None, gt=0)
@@ -60,7 +60,7 @@ class ExpenseUpdate(BaseModel):
 
     @model_validator(mode="after")
     def required_fields_cannot_be_null(self) -> "ExpenseUpdate":
-        for field_name in ("incurred_at", "category", "amount_minor", "currency"):
+        for field_name in ("incurred_on", "category", "amount_minor", "currency"):
             if field_name in self.model_fields_set and getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} cannot be null.")
         return self
@@ -71,7 +71,7 @@ class ExpenseRead(BaseModel):
 
     id: UUID
     workspace_id: UUID
-    incurred_at: datetime
+    incurred_on: date
     category: ExpenseCategory
     description: str | None
     amount_minor: int
