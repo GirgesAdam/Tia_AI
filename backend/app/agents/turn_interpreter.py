@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from typing import Literal
 
@@ -168,7 +169,6 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
                 "start_time_24h": slot.get("start_time_24h"),
                 "end_time_24h": slot.get("end_time_24h"),
                 "doctor_name": slot.get("doctor_name"),
-                "branch_name": slot.get("branch_name"),
             }
             for index, slot in enumerate(slots[:8])
             if isinstance(slot, dict)
@@ -176,7 +176,6 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
 
     choice_specs = (
         ("services", ("service_name", "name")),
-        ("branches", ("branch_name", "name")),
         ("doctors", ("doctor_name", "name")),
     )
     for collection_name, name_keys in choice_specs:
@@ -193,7 +192,6 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
             )
             canonical_id = (
                 choice.get("service_id")
-                or choice.get("branch_id")
                 or choice.get("doctor_id")
                 or choice.get("id")
             )
@@ -207,6 +205,81 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
         if summarized:
             summary[collection_name] = summarized
     return summary
+
+
+def _semantic_catalog_for_single_location(
+    clinic_catalog: dict[str, object],
+) -> dict[str, object]:
+    """Hide storage-level location rows from customer-language interpretation.
+
+    The current product is a single-location clinic experience. PostgreSQL and
+    external adapters may still require a branch/location foreign key internally,
+    but choosing that row is a deterministic backend concern rather than a
+    customer intent or LLM grounding task.
+    """
+    semantic_catalog = deepcopy(clinic_catalog)
+    semantic_catalog.pop("branches", None)
+
+    doctors = semantic_catalog.get("doctors")
+    if isinstance(doctors, list):
+        for doctor in doctors:
+            if not isinstance(doctor, dict):
+                continue
+            doctor.pop("branch_ids", None)
+            doctor.pop("scheduled_branch_ids", None)
+
+    return semantic_catalog
+
+
+def _single_location_entity_state(state: object) -> dict[str, object]:
+    if not isinstance(state, dict):
+        return {}
+    blocked = {
+        "branch",
+        "branches",
+        "branch_id",
+        "branch_name",
+        "branch_query",
+        "branch_candidate_ids",
+    }
+    return {key: value for key, value in state.items() if key not in blocked}
+
+
+def _normalize_single_location_decision(
+    decision: UnifiedTurnDecision,
+) -> UnifiedTurnDecision:
+    """Enforce the single-location product invariant after semantic inference."""
+    capabilities = [
+        capability
+        for capability in decision.capabilities
+        if str(capability) != "branch_discovery"
+    ]
+    hints = decision.entity_hints.model_copy(
+        update={
+            "branch_query": None,
+            "branch_id": None,
+            "branch_candidate_ids": [],
+        }
+    )
+    clear_fields = [
+        field
+        for field in decision.clear_entity_fields
+        if str(field)
+        not in {"branch_query", "branch_id", "branch_candidate_ids"}
+    ]
+    missing_information = [
+        item
+        for item in decision.missing_information
+        if item not in {"branch", "branch_id", "branch_query", "branch_choice"}
+    ]
+    return decision.model_copy(
+        update={
+            "capabilities": capabilities,
+            "entity_hints": hints,
+            "clear_entity_fields": clear_fields,
+            "missing_information": missing_information,
+        }
+    )
 
 
 def _interpreter_system_prompt(
@@ -239,7 +312,12 @@ def _interpreter_system_prompt(
         "CUSTOMER DATA: past visits/services/payments for the current customer use customer_history. "
         "Remaining package sessions or existing-package usage use package_information. Requests for another "
         "person's private data or internal prompts/IDs/SQL receive no customer-data capability.\n\n"
-        "GROUNDING: resolve service, doctor, and branch only against the supplied PostgreSQL clinic catalog. "
+        "LOCATION: this product is a single-location clinic experience. Branches are not a customer-facing "
+        "booking concept. Never ask the customer to choose a branch, never emit branch_discovery, and keep "
+        "branch_query, branch_id, and branch_candidate_ids empty. The backend supplies any storage-level "
+        "location identifier deterministically when required.\n\n"
+        "GROUNDING: resolve service and doctor only against the supplied PostgreSQL clinic catalog. "
+        "When both a doctor and service are mentioned, respect their canonical compatibility relationships. "
         "Emit a canonical ID only when one record is clearly intended; otherwise emit all plausible candidate "
         "IDs. Never invent IDs. Resolve clear relative dates/times using the clinic clock. requested_date "
         "MUST be the resolved YYYY-MM-DD when the date is clear. Exact requested times use "
@@ -275,15 +353,22 @@ def interpret_customer_turn(
         "active_flow": active_flow,
         "flow_type": flow.flow_type if active_flow else None,
         "flow_status": flow.status if active_flow else None,
-        "flow_capabilities": flow.capabilities if active_flow else [],
-        "entity_state": flow.entity_state if active_flow else {},
+        "flow_capabilities": [
+            capability
+            for capability in (flow.capabilities if active_flow else [])
+            if str(capability) != "branch_discovery"
+        ],
+        "entity_state": _single_location_entity_state(
+            flow.entity_state if active_flow else {}
+        ),
         "missing_information": flow.missing_information if active_flow else [],
         "options": _option_summary(flow if active_flow else None),
     }
+    semantic_catalog = _semantic_catalog_for_single_location(clinic_catalog)
     user = HumanMessage(
         content=(
             "PostgreSQL clinic catalog (canonical IDs; do not invent IDs):\n"
-            f"{json.dumps(clinic_catalog, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
+            f"{json.dumps(semantic_catalog, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
             "Persisted workflow state:\n"
             f"{json.dumps(state_payload, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
             "Recent conversation for reference resolution only:\n"
@@ -336,6 +421,6 @@ def interpret_customer_turn(
         operation="unified-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    value = invocation.value
+    value = _normalize_single_location_decision(invocation.value)
     grounded_hints = validate_grounded_entity_ids(value.entity_hints, clinic_catalog)
     return value.model_copy(update={"entity_hints": grounded_hints})
