@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,11 +27,29 @@ class Settings(BaseSettings):
     supabase_publishable_key: str
     supabase_secret_key: str
 
-    llm_provider: Literal["gemini", "openai"] = "gemini"
+    # Tia uses OpenAI for all LLM generation. Luna is the normal low-cost model;
+    # GPT-5 mini is a separate affordable model used only for cross-model failover.
+    llm_provider: Literal["openai"] = "openai"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.6-luna"
+    openai_fallback_model: str | None = "gpt-5-mini"
+    openai_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "low"
+    openai_fallback_reasoning_effort: Literal[
+        "none", "low", "medium", "high"
+    ] = "low"
+    openai_onboarding_max_output_tokens: int = Field(
+        default=8192,
+        ge=2048,
+        le=65536,
+    )
+    openai_embedding_model: str = "text-embedding-3-small"
+
     llm_timeout_seconds: int = Field(default=60, ge=5, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=6)
     # Realtime turns are latency-sensitive. Keep provider retries bounded; the
-    # runtime error boundary decides whether a separate configured model may run.
+    # runtime error boundary decides whether the fallback model may run.
     llm_realtime_max_retries: int = Field(default=0, ge=0, le=2)
     llm_realtime_circuit_breaker_cooldown_seconds: int = Field(default=120, ge=0, le=900)
     llm_max_output_tokens: int = Field(default=2048, ge=256, le=8192)
@@ -73,63 +91,6 @@ class Settings(BaseSettings):
         le=24,
     )
 
-    # OpenAI. The public demo can select this provider without changing the
-    # deterministic agent/tool/database layers. Luna is the low-cost default.
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-5.6-luna"
-    openai_reasoning_effort: Literal[
-        "none", "low", "medium", "high", "xhigh", "max"
-    ] = "low"
-
-    # Gemini remains available for staging/rollback while the OpenAI path is
-    # validated. Existing field names are retained so the current orchestration
-    # call sites do not need a risky provider-wide rewrite in the demo patch.
-    gemini_api_key: str | None = None
-
-    gemini_realtime_interpreter_model: str = "gemini-3.5-flash-lite"
-    gemini_realtime_interpreter_fallback_model: str | None = "gemini-3.6-flash"
-    gemini_realtime_interpreter_emergency_model: str | None = "gemini-3.5-flash"
-    gemini_realtime_interpreter_thinking_level: Literal[
-        "minimal", "low", "medium", "high"
-    ] = "minimal"
-
-    gemini_realtime_composer_model: str = "gemini-3.5-flash-lite"
-    gemini_realtime_composer_fallback_model: str | None = "gemini-3.6-flash"
-    gemini_realtime_composer_thinking_level: Literal[
-        "minimal", "low", "medium", "high"
-    ] = "minimal"
-
-    gemini_agent_model: str = "gemini-3.6-flash"
-    gemini_agent_fallback_model: str | None = "gemini-3.5-flash"
-    gemini_agent_thinking_level: Literal["minimal", "low", "medium", "high"] = "low"
-
-    gemini_router_model: str = "gemini-3.6-flash"
-    gemini_router_fallback_model: str | None = "gemini-3.5-flash"
-    gemini_router_thinking_level: Literal["minimal", "low", "medium", "high"] = "low"
-
-    gemini_flow_model: str = "gemini-3.6-flash"
-    gemini_flow_fallback_model: str | None = "gemini-3.5-flash"
-    gemini_flow_thinking_level: Literal["minimal", "low", "medium", "high"] = "low"
-
-    gemini_onboarding_model: str = "gemini-3.7-flash"
-    gemini_onboarding_fallback_model: str | None = "gemini-3.6-flash"
-    gemini_onboarding_thinking_level: Literal["low", "medium", "high"] = "medium"
-    gemini_onboarding_max_output_tokens: int = Field(
-        default=8192,
-        ge=2048,
-        le=65536,
-    )
-
-    gemini_utility_model: str = "gemini-3.5-flash-lite"
-    gemini_utility_thinking_level: Literal[
-        "minimal",
-        "low",
-        "medium",
-        "high",
-    ] = "minimal"
-
-    gemini_embedding_model: str = "gemini-embedding-001"
-
     # Keep the environment value scalar so pydantic-settings never treats it as
     # a complex value and never attempts JSON decoding before app validation.
     # The public cors_origins property below normalizes plain, CSV, and JSON forms.
@@ -158,37 +119,6 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
-
-    @model_validator(mode="after")
-    def apply_openai_model_aliases(self) -> "Settings":
-        """Keep existing orchestration call sites provider-neutral at runtime.
-
-        The legacy field names are still referenced by turn/router/flow modules for
-        model labels and ordered failover. When OpenAI is selected, map every text
-        generation role to the configured OpenAI model and disable Gemini-specific
-        fallback chains. This prevents duplicate calls to the same Luna model and
-        reports the real model name in runtime diagnostics.
-        """
-        if self.llm_provider != "openai":
-            return self
-
-        model = self.openai_model.strip()
-        self.openai_model = model
-        self.gemini_realtime_interpreter_model = model
-        self.gemini_realtime_interpreter_fallback_model = None
-        self.gemini_realtime_interpreter_emergency_model = None
-        self.gemini_realtime_composer_model = model
-        self.gemini_realtime_composer_fallback_model = None
-        self.gemini_agent_model = model
-        self.gemini_agent_fallback_model = None
-        self.gemini_router_model = model
-        self.gemini_router_fallback_model = None
-        self.gemini_flow_model = model
-        self.gemini_flow_fallback_model = None
-        self.gemini_onboarding_model = model
-        self.gemini_onboarding_fallback_model = None
-        self.gemini_utility_model = model
-        return self
 
     @field_validator("database_url", "migration_database_url")
     @classmethod
@@ -225,14 +155,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "openai_api_key",
-        "gemini_api_key",
-        "gemini_realtime_interpreter_fallback_model",
-        "gemini_realtime_interpreter_emergency_model",
-        "gemini_realtime_composer_fallback_model",
-        "gemini_agent_fallback_model",
-        "gemini_router_fallback_model",
-        "gemini_flow_fallback_model",
-        "gemini_onboarding_fallback_model",
+        "openai_fallback_model",
         mode="before",
     )
     @classmethod
@@ -242,13 +165,108 @@ class Settings(BaseSettings):
             return value or None
         return value
 
-    @field_validator("openai_model")
+    @field_validator("openai_model", "openai_embedding_model")
     @classmethod
-    def validate_openai_model(cls, value: str) -> str:
+    def validate_required_model_name(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("OPENAI_MODEL cannot be empty.")
+            raise ValueError("OpenAI model names cannot be empty.")
         return normalized
+
+    # Compatibility aliases keep the existing orchestration call sites stable
+    # while the provider itself is now OpenAI-only. These all resolve to OpenAI
+    # model IDs and never select another provider.
+    @property
+    def gemini_realtime_interpreter_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_realtime_interpreter_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_realtime_interpreter_emergency_model(self) -> None:
+        return None
+
+    @property
+    def gemini_realtime_interpreter_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_realtime_composer_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_realtime_composer_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_realtime_composer_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_agent_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_agent_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_agent_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_router_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_router_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_router_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_flow_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_flow_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_flow_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_onboarding_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_onboarding_fallback_model(self) -> str | None:
+        return self.openai_fallback_model
+
+    @property
+    def gemini_onboarding_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_onboarding_max_output_tokens(self) -> int:
+        return self.openai_onboarding_max_output_tokens
+
+    @property
+    def gemini_utility_model(self) -> str:
+        return self.openai_model
+
+    @property
+    def gemini_utility_thinking_level(self) -> str:
+        return self.openai_reasoning_effort
+
+    @property
+    def gemini_embedding_model(self) -> str:
+        return self.openai_embedding_model
 
     @property
     def cors_origins(self) -> list[str]:
