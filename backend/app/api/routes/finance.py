@@ -81,6 +81,7 @@ def expense_update(
             db,
             workspace_id=access.workspace.id,
             expense_id=expense_id,
+            actor_user_id=access.user.id,
             payload=payload,
         )
         db.commit()
@@ -98,7 +99,12 @@ def expense_delete(
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     try:
-        delete_expense(db, workspace_id=access.workspace.id, expense_id=expense_id)
+        delete_expense(
+            db,
+            workspace_id=access.workspace.id,
+            expense_id=expense_id,
+            actor_user_id=access.user.id,
+        )
         db.commit()
     except FinanceNotFound as exc:
         db.rollback()
