@@ -23,160 +23,130 @@ jobs:
         run: |
           from pathlib import Path
 
-          # 1) Default rule + scheduling anchor.
+          def find_line(lines: list[str], needle: str, start: int = 0) -> int:
+              for index in range(start, len(lines)):
+                  if needle in lines[index]:
+                      return index
+              raise AssertionError(f"Missing marker: {needle}")
+
+          # 1) Default rule + cancelled_at scheduling anchor.
           path = Path("backend/app/core/automation_rules.py")
-          text = path.read_text(encoding="utf-8")
-          marker = '''    DefaultAutomationRule(
-              key="no_show_followup",
-              name="No-show recovery follow-up",'''
-          rule = '''    DefaultAutomationRule(
-              key="cancellation_recovery",
-              name="Cancellation recovery follow-up",
-              trigger_kind="after_cancelled",
-              offset_minutes=60,
-              channel="whatsapp",
-              template_name="tia_cancellation_recovery_ar",
-              template_language="ar",
-              max_lateness_minutes=1440,
-              enabled_by_default=False,
-          ),
-          DefaultAutomationRule(
-              key="no_show_followup",
-              name="No-show recovery follow-up",'''
-          assert marker in text and "key=\"cancellation_recovery\"" not in text
-          text = text.replace(marker, rule, 1)
-          signature = '''    completed_at: datetime | None,
-              no_show_at: datetime | None,
-          ) -> datetime | None:'''
-          replacement = '''    completed_at: datetime | None,
-              no_show_at: datetime | None,
-              cancelled_at: datetime | None = None,
-          ) -> datetime | None:'''
-          assert signature in text
-          text = text.replace(signature, replacement, 1)
-          anchor = '''    elif trigger_kind == "after_no_show":
-              anchor = no_show_at
-          else:'''
-          anchor_replacement = '''    elif trigger_kind == "after_no_show":
-              anchor = no_show_at
-          elif trigger_kind == "after_cancelled":
-              anchor = cancelled_at
-          else:'''
-          assert anchor in text
-          text = text.replace(anchor, anchor_replacement, 1)
-          path.write_text(text, encoding="utf-8")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          assert not any('key="cancellation_recovery"' in line for line in lines)
+          key_index = find_line(lines, 'key="no_show_followup"')
+          start_index = key_index - 1
+          base_indent = lines[start_index][: len(lines[start_index]) - len(lines[start_index].lstrip())]
+          inner = base_indent + "    "
+          block = [
+              f"{base_indent}DefaultAutomationRule(",
+              f'{inner}key="cancellation_recovery",',
+              f'{inner}name="Cancellation recovery follow-up",',
+              f'{inner}trigger_kind="after_cancelled",',
+              f"{inner}offset_minutes=60,",
+              f'{inner}channel="whatsapp",',
+              f'{inner}template_name="tia_cancellation_recovery_ar",',
+              f'{inner}template_language="ar",',
+              f"{inner}max_lateness_minutes=1440,",
+              f"{inner}enabled_by_default=False,",
+              f"{base_indent}),",
+          ]
+          lines[start_index:start_index] = block
+          no_show_param = find_line(lines, "no_show_at: datetime | None,")
+          param_indent = lines[no_show_param][: len(lines[no_show_param]) - len(lines[no_show_param].lstrip())]
+          lines.insert(no_show_param + 1, f"{param_indent}cancelled_at: datetime | None = None,")
+          anchor_index = find_line(lines, 'elif trigger_kind == "after_no_show":')
+          anchor_indent = lines[anchor_index][: len(lines[anchor_index]) - len(lines[anchor_index].lstrip())]
+          body_indent = anchor_indent + "    "
+          assert "anchor = no_show_at" in lines[anchor_index + 1]
+          lines[anchor_index + 2:anchor_index + 2] = [
+              f'{anchor_indent}elif trigger_kind == "after_cancelled":',
+              f"{body_indent}anchor = cancelled_at",
+          ]
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-          # 2) Persisted trigger kind constraint.
+          # 2) Persisted trigger-kind constraint.
           path = Path("backend/app/models/automation_rule.py")
-          text = path.read_text(encoding="utf-8")
-          tuple_old = '''    "after_completed",
-              "after_no_show",
-          )'''
-          tuple_new = '''    "after_completed",
-              "after_no_show",
-              "after_cancelled",
-          )'''
-          assert tuple_old in text
-          text = text.replace(tuple_old, tuple_new, 1)
-          check_old = '''            "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show')",'''
-          check_new = '''            "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled')",'''
-          assert check_old in text
-          text = text.replace(check_old, check_new, 1)
+          lines = path.read_text(encoding="utf-8").splitlines()
+          trigger_tuple = find_line(lines, '"after_no_show",')
+          indent = lines[trigger_tuple][: len(lines[trigger_tuple]) - len(lines[trigger_tuple].lstrip())]
+          lines.insert(trigger_tuple + 1, f'{indent}"after_cancelled",')
+          text = "\n".join(lines) + "\n"
+          old_check = "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show')"
+          new_check = "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled')"
+          assert old_check in text and "after_cancelled')" not in text
+          text = text.replace(old_check, new_check, 1)
           path.write_text(text, encoding="utf-8")
 
-          # 3) Planner, eligibility, copy and template variables.
+          # 3) Planner and execution contract: reuse the existing appointment-rule engine.
           path = Path("backend/app/services/automations.py")
-          text = path.read_text(encoding="utf-8")
-          eligible_old = '''    if rule.trigger_kind == "after_no_show":
-              return appointment.status == "no_show" and appointment.no_show_at is not None
-          return False'''
-          eligible_new = '''    if rule.trigger_kind == "after_no_show":
-              return appointment.status == "no_show" and appointment.no_show_at is not None
-          if rule.trigger_kind == "after_cancelled":
-              return appointment.status == "cancelled" and appointment.cancelled_at is not None
-          return False'''
-          assert eligible_old in text
-          text = text.replace(eligible_old, eligible_new, 1)
+          lines = path.read_text(encoding="utf-8").splitlines()
 
-          candidates_old = '''    if rule.trigger_kind == "after_no_show":
-              oldest = now - timedelta(days=7)
-              return list(
-                  db.scalars(
-                      select(Appointment).where(
-                          Appointment.workspace_id == workspace_id,
-                          Appointment.status == "no_show",
-                          Appointment.no_show_at.is_not(None),
-                          Appointment.no_show_at >= oldest,
-                      )
-                  )
-              )
-          return []'''
-          candidates_new = '''    if rule.trigger_kind == "after_no_show":
-              oldest = now - timedelta(days=7)
-              return list(
-                  db.scalars(
-                      select(Appointment).where(
-                          Appointment.workspace_id == workspace_id,
-                          Appointment.status == "no_show",
-                          Appointment.no_show_at.is_not(None),
-                          Appointment.no_show_at >= oldest,
-                      )
-                  )
-              )
-          if rule.trigger_kind == "after_cancelled":
-              oldest = now - timedelta(days=7)
-              return list(
-                  db.scalars(
-                      select(Appointment).where(
-                          Appointment.workspace_id == workspace_id,
-                          Appointment.status == "cancelled",
-                          Appointment.cancelled_at.is_not(None),
-                          Appointment.cancelled_at >= oldest,
-                      )
-                  )
-              )
-          return []'''
-          assert candidates_old in text
-          text = text.replace(candidates_old, candidates_new, 1)
+          eligible_start = find_line(lines, "def _eligible_for_rule")
+          eligible_no_show = find_line(lines, 'if rule.trigger_kind == "after_no_show":', eligible_start)
+          return_index = eligible_no_show + 1
+          assert 'appointment.status == "no_show"' in lines[return_index]
+          indent = lines[eligible_no_show][: len(lines[eligible_no_show]) - len(lines[eligible_no_show].lstrip())]
+          body = indent + "    "
+          lines[return_index + 1:return_index + 1] = [
+              f'{indent}if rule.trigger_kind == "after_cancelled":',
+              f'{body}return appointment.status == "cancelled" and appointment.cancelled_at is not None',
+          ]
 
-          schedule_old = '''                completed_at=appointment.completed_at,
-                      no_show_at=appointment.no_show_at,
-                  )'''
-          schedule_new = '''                completed_at=appointment.completed_at,
-                      no_show_at=appointment.no_show_at,
-                      cancelled_at=appointment.cancelled_at,
-                  )'''
-          assert schedule_old in text
-          text = text.replace(schedule_old, schedule_new, 1)
+          candidate_start = find_line(lines, "def _candidate_appointments")
+          candidate_no_show = find_line(lines, 'if rule.trigger_kind == "after_no_show":', candidate_start)
+          candidate_return = find_line(lines, "return []", candidate_no_show)
+          indent = lines[candidate_no_show][: len(lines[candidate_no_show]) - len(lines[candidate_no_show].lstrip())]
+          i1 = indent + "    "
+          i2 = i1 + "    "
+          i3 = i2 + "    "
+          i4 = i3 + "    "
+          cancellation_candidate = [
+              f'{indent}if rule.trigger_kind == "after_cancelled":',
+              f"{i1}oldest = now - timedelta(days=7)",
+              f"{i1}return list(",
+              f"{i2}db.scalars(",
+              f"{i3}select(Appointment).where(",
+              f"{i4}Appointment.workspace_id == workspace_id,",
+              f'{i4}Appointment.status == "cancelled",',
+              f"{i4}Appointment.cancelled_at.is_not(None),",
+              f"{i4}Appointment.cancelled_at >= oldest,",
+              f"{i3})",
+              f"{i2})",
+              f"{i1})",
+          ]
+          lines[candidate_return:candidate_return] = cancellation_candidate
 
-          copy_marker = '''    if rule_key == "no_show_followup":
-              return (
-                  f"أهلًا {data['patient_name']}، لاحظت إن ميعاد {data['service_name']} فات. "'''
-          copy_replacement = '''    if rule_key == "cancellation_recovery":
-              return (
-                  f"أهلًا {data['patient_name']}، حبيت أساعدك بعد إلغاء موعد {data['service_name']} "
-                  f"يوم {data['date']} الساعة {data['time']}. "
-                  "لو حابة نرتب ميعاد جديد ابعتيلي هنا وأنا أساعدك."
-              )
-          if rule_key == "no_show_followup":
-              return (
-                  f"أهلًا {data['patient_name']}، لاحظت إن ميعاد {data['service_name']} فات. "'''
-          assert copy_marker in text
-          text = text.replace(copy_marker, copy_replacement, 1)
+          schedule_start = find_line(lines, "def plan_automation_jobs")
+          no_show_call = find_line(lines, "no_show_at=appointment.no_show_at,", schedule_start)
+          call_indent = lines[no_show_call][: len(lines[no_show_call]) - len(lines[no_show_call].lstrip())]
+          lines.insert(no_show_call + 1, f"{call_indent}cancelled_at=appointment.cancelled_at,")
 
-          params_old = '''    if rule_key == "appointment_reminder_6h":
-              return [patient_name, service_name, date, time]
-          if rule_key == "post_visit_followup":'''
-          params_new = '''    if rule_key == "appointment_reminder_6h":
-              return [patient_name, service_name, date, time]
-          if rule_key == "cancellation_recovery":
-              return [patient_name, service_name, date, time]
-          if rule_key == "post_visit_followup":'''
-          assert params_old in text
-          text = text.replace(params_old, params_new, 1)
-          path.write_text(text, encoding="utf-8")
+          fallback_start = find_line(lines, "def _fallback_text")
+          no_show_copy = find_line(lines, 'if rule_key == "no_show_followup":', fallback_start)
+          indent = lines[no_show_copy][: len(lines[no_show_copy]) - len(lines[no_show_copy].lstrip())]
+          body = indent + "    "
+          body2 = body + "    "
+          copy_block = [
+              f'{indent}if rule_key == "cancellation_recovery":',
+              f"{body}return (",
+              f'{body2}f"أهلًا {{data[\'patient_name\']}}، حبيت أساعدك بعد إلغاء موعد {{data[\'service_name\']}} "',
+              f'{body2}f"يوم {{data[\'date\']}} الساعة {{data[\'time\']}}. "',
+              f'{body2}"لو حابة نرتب ميعاد جديد ابعتيلي هنا وأنا أساعدك."',
+              f"{body})",
+          ]
+          lines[no_show_copy:no_show_copy] = copy_block
 
-          # 4) Admin UI: visible, optional, configurable timing.
+          params_start = find_line(lines, "def _appointment_template_body_parameters")
+          post_params = find_line(lines, 'if rule_key == "post_visit_followup":', params_start)
+          indent = lines[post_params][: len(lines[post_params]) - len(lines[post_params].lstrip())]
+          body = indent + "    "
+          lines[post_params:post_params] = [
+              f'{indent}if rule_key == "cancellation_recovery":',
+              f"{body}return [patient_name, service_name, date, time]",
+          ]
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          # 4) Admin UI: optional toggle + timing using the existing form.
           path = Path("frontend/src/app/(dashboard)/automations/page.tsx")
           text = path.read_text(encoding="utf-8")
           assert '  no_show_followup: "متابعة عدم الحضور",' in text
@@ -197,45 +167,53 @@ jobs:
               '  "post_visit_followup",\n  "cancellation_recovery",\n  "no_show_followup",',
               1,
           )
-          timing_old = 'const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "no_show_followup"]);'
-          timing_new = 'const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "no_show_followup"]);'
-          assert timing_old in text
-          text = text.replace(timing_old, timing_new, 1)
-          label_old = '  if (rule.trigger_kind === "after_no_show") return "أرسل بعد عدم الحضور بـ";'
-          label_new = '  if (rule.trigger_kind === "after_no_show") return "أرسل بعد عدم الحضور بـ";\n  if (rule.trigger_kind === "after_cancelled") return "أرسل بعد إلغاء الموعد بـ";'
-          assert label_old in text
-          text = text.replace(label_old, label_new, 1)
+          old_timing = 'const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "no_show_followup"]);'
+          new_timing = 'const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "no_show_followup"]);'
+          assert old_timing in text
+          text = text.replace(old_timing, new_timing, 1)
+          old_label = '  if (rule.trigger_kind === "after_no_show") return "أرسل بعد عدم الحضور بـ";'
+          new_label = old_label + '\n  if (rule.trigger_kind === "after_cancelled") return "أرسل بعد إلغاء الموعد بـ";'
+          assert old_label in text
+          text = text.replace(old_label, new_label, 1)
           path.write_text(text, encoding="utf-8")
 
-          # 5) Migration + readiness head.
-          migration = Path("backend/alembic/versions/0054_cancellation_recovery_trigger.py")
-          migration.write_text('''"""Allow cancellation recovery automation rules.\n\nRevision ID: 0054_cancellation_recovery_trigger\nRevises: 0053_public_table_rls_completion\nCreate Date: 2026-09-04\n"""\n\nfrom collections.abc import Sequence\n\nfrom alembic import op\n\nrevision: str = "0054_cancellation_recovery_trigger"\ndown_revision: str | Sequence[str] | None = "0053_public_table_rls_completion"\nbranch_labels: str | Sequence[str] | None = None\ndepends_on: str | Sequence[str] | None = None\n\n\ndef _replace_trigger_constraint(values: str) -> None:\n    op.drop_constraint(\n        "automation_rule_trigger_kind_valid",\n        "automation_rules",\n        type_="check",\n    )\n    op.create_check_constraint(\n        "automation_rule_trigger_kind_valid",\n        "automation_rules",\n        f"trigger_kind IN ({values})",\n    )\n\n\ndef upgrade() -> None:\n    _replace_trigger_constraint(\n        "'appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled'"\n    )\n\n\ndef downgrade() -> None:\n    _replace_trigger_constraint(\n        "'appointment_created', 'before_appointment', 'after_completed', 'after_no_show'"\n    )\n''', encoding="utf-8")
+          # 5) Small schema migration: only widen the existing check constraint.
+          Path("backend/alembic/versions/0054_cancellation_recovery_trigger.py").write_text(
+              '''"""Allow cancellation recovery automation rules.\n\nRevision ID: 0054_cancellation_recovery_trigger\nRevises: 0053_public_table_rls_completion\nCreate Date: 2026-09-04\n"""\n\nfrom collections.abc import Sequence\n\nfrom alembic import op\n\nrevision: str = "0054_cancellation_recovery_trigger"\ndown_revision: str | Sequence[str] | None = "0053_public_table_rls_completion"\nbranch_labels: str | Sequence[str] | None = None\ndepends_on: str | Sequence[str] | None = None\n\n\ndef _replace_trigger_constraint(values: str) -> None:\n    op.drop_constraint(\n        "automation_rule_trigger_kind_valid",\n        "automation_rules",\n        type_="check",\n    )\n    op.create_check_constraint(\n        "automation_rule_trigger_kind_valid",\n        "automation_rules",\n        f"trigger_kind IN ({values})",\n    )\n\n\ndef upgrade() -> None:\n    _replace_trigger_constraint(\n        "'appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled'"\n    )\n\n\ndef downgrade() -> None:\n    _replace_trigger_constraint(\n        "'appointment_created', 'before_appointment', 'after_completed', 'after_no_show'"\n    )\n''',
+              encoding="utf-8",
+          )
 
           readiness = Path("backend/app/services/operational_readiness.py")
           text = readiness.read_text(encoding="utf-8")
           assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in text
-          text = text.replace(
-              'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"',
-              'EXPECTED_MIGRATION_HEAD = "0054_cancellation_recovery_trigger"',
-              1,
+          readiness.write_text(
+              text.replace(
+                  'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"',
+                  'EXPECTED_MIGRATION_HEAD = "0054_cancellation_recovery_trigger"',
+                  1,
+              ),
+              encoding="utf-8",
           )
-          readiness.write_text(text, encoding="utf-8")
 
           existing_test = Path("backend/tests/test_automation_operations_phase54.py")
           text = existing_test.read_text(encoding="utf-8")
           assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in text
-          text = text.replace(
-              'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"',
-              'EXPECTED_MIGRATION_HEAD = "0054_cancellation_recovery_trigger"',
-              1,
+          existing_test.write_text(
+              text.replace(
+                  'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"',
+                  'EXPECTED_MIGRATION_HEAD = "0054_cancellation_recovery_trigger"',
+                  1,
+              ),
+              encoding="utf-8",
           )
-          existing_test.write_text(text, encoding="utf-8")
 
           # 6) Focused contract tests.
-          test = Path("backend/tests/test_cancellation_recovery_automation.py")
-          test.write_text('''from datetime import UTC, datetime\nfrom pathlib import Path\n\nfrom app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for\nfrom app.services.automations import _appointment_template_body_parameters\n\n\ndef _root() -> Path:\n    return Path(__file__).resolve().parents[2]\n\n\ndef test_cancellation_recovery_is_optional_and_uses_cancelled_at() -> None:\n    rules = {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}\n    rule = rules["cancellation_recovery"]\n    assert rule.enabled_by_default is False\n    assert rule.trigger_kind == "after_cancelled"\n    assert rule.offset_minutes == 60\n    cancelled_at = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)\n    when = scheduled_for(\n        trigger_kind=rule.trigger_kind,\n        offset_minutes=rule.offset_minutes,\n        appointment_created_at=cancelled_at,\n        appointment_start_at=cancelled_at,\n        completed_at=None,\n        no_show_at=None,\n        cancelled_at=cancelled_at,\n    )\n    assert when == datetime(2026, 9, 4, 13, 0, tzinfo=UTC)\n\n\ndef test_cancellation_recovery_uses_existing_appointment_engine_without_new_state_machine() -> None:\n    service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert 'rule.trigger_kind == "after_cancelled"' in service\n    assert 'Appointment.status == "cancelled"' in service\n    assert "Appointment.cancelled_at >= oldest" in service\n    assert "cancellation_recovery_state" not in service\n    assert "CancellationRecovery" not in service\n\n\ndef test_cancellation_recovery_template_contract_is_four_simple_variables() -> None:\n    params = _appointment_template_body_parameters(\n        "cancellation_recovery",\n        {\n            "patient_name": "سارة",\n            "service_name": "ليزر",\n            "date": "04/09/2026",\n            "time": "18:00",\n            "branch_name": "العيادة",\n        },\n    )\n    assert params == ["سارة", "ليزر", "04/09/2026", "18:00"]\n\n\ndef test_cancellation_recovery_is_admin_visible_and_timing_configurable() -> None:\n    page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")\n    assert 'cancellation_recovery: "استرجاع الحجوزات الملغاة"' in page\n    assert '"cancellation_recovery"' in page\n    assert 'rule.trigger_kind === "after_cancelled"' in page\n\n\ndef test_migration_only_extends_automation_trigger_constraint() -> None:\n    migration = (_root() / "backend/alembic/versions/0054_cancellation_recovery_trigger.py").read_text(encoding="utf-8")\n    assert 'down_revision: str | Sequence[str] | None = "0053_public_table_rls_completion"' in migration\n    assert "automation_rule_trigger_kind_valid" in migration\n    assert "after_cancelled" in migration\n    assert "create_table" not in migration\n    assert "add_column" not in migration\n''', encoding="utf-8")
+          Path("backend/tests/test_cancellation_recovery_automation.py").write_text(
+              '''from datetime import UTC, datetime\nfrom pathlib import Path\n\nfrom app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for\nfrom app.services.automations import _appointment_template_body_parameters\n\n\ndef _root() -> Path:\n    return Path(__file__).resolve().parents[2]\n\n\ndef test_cancellation_recovery_is_optional_and_uses_cancelled_at() -> None:\n    rules = {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}\n    rule = rules["cancellation_recovery"]\n    assert rule.enabled_by_default is False\n    assert rule.trigger_kind == "after_cancelled"\n    assert rule.offset_minutes == 60\n    cancelled_at = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)\n    when = scheduled_for(\n        trigger_kind=rule.trigger_kind,\n        offset_minutes=rule.offset_minutes,\n        appointment_created_at=cancelled_at,\n        appointment_start_at=cancelled_at,\n        completed_at=None,\n        no_show_at=None,\n        cancelled_at=cancelled_at,\n    )\n    assert when == datetime(2026, 9, 4, 13, 0, tzinfo=UTC)\n\n\ndef test_cancellation_recovery_reuses_existing_appointment_engine() -> None:\n    service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert 'rule.trigger_kind == "after_cancelled"' in service\n    assert 'Appointment.status == "cancelled"' in service\n    assert "Appointment.cancelled_at >= oldest" in service\n    assert "CancellationRecovery" not in service\n    assert "cancellation_recovery_state" not in service\n\n\ndef test_cancellation_recovery_template_contract_is_four_simple_variables() -> None:\n    params = _appointment_template_body_parameters(\n        "cancellation_recovery",\n        {\n            "patient_name": "سارة",\n            "service_name": "ليزر",\n            "date": "04/09/2026",\n            "time": "18:00",\n            "branch_name": "العيادة",\n        },\n    )\n    assert params == ["سارة", "ليزر", "04/09/2026", "18:00"]\n\n\ndef test_cancellation_recovery_is_admin_visible_and_timing_configurable() -> None:\n    page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")\n    assert 'cancellation_recovery: "استرجاع الحجوزات الملغاة"' in page\n    assert '"cancellation_recovery"' in page\n    assert 'rule.trigger_kind === "after_cancelled"' in page\n\n\ndef test_migration_only_extends_automation_trigger_constraint() -> None:\n    migration = (_root() / "backend/alembic/versions/0054_cancellation_recovery_trigger.py").read_text(encoding="utf-8")\n    assert 'down_revision: str | Sequence[str] | None = "0053_public_table_rls_completion"' in migration\n    assert "automation_rule_trigger_kind_valid" in migration\n    assert "after_cancelled" in migration\n    assert "create_table" not in migration\n    assert "add_column" not in migration\n''',
+              encoding="utf-8",
+          )
 
-          # 7) Keep runtime docs concise and explicit.
+          # 7) Runtime docs stay concise.
           docs = Path("n8n/AUTOMATIONS_SETUP.md")
           text = docs.read_text(encoding="utf-8")
           if "## Cancellation recovery" not in text:
