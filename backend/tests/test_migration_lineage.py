@@ -1,15 +1,20 @@
-from pathlib import Path
-
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+import os
+import subprocess
+import sys
 
 
 EXPECTED_HEAD = "0056_merge_automation_expenses"
 
 
 def test_alembic_has_one_current_head() -> None:
-    backend = Path(__file__).resolve().parents[1]
-    config = Config(str(backend / "alembic.ini"))
-    script = ScriptDirectory.from_config(config)
+    backend = os.path.dirname(os.path.dirname(__file__))
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        cwd=backend,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-    assert script.get_heads() == [EXPECTED_HEAD]
+    assert heads == [f"{EXPECTED_HEAD} (head)"]
