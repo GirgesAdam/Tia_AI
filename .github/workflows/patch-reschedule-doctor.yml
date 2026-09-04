@@ -1,0 +1,88 @@
+name: Patch reschedule doctor target
+
+on:
+  push:
+    branches: [feat/core-product-hardening]
+    paths: [.github/workflows/patch-reschedule-doctor.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+      - name: Patch grounded reschedule doctor target
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          tools = Path('backend/app/agents/tools/clinic_tools.py')
+          text = tools.read_text(encoding='utf-8')
+          old = '''    def get_reschedule_options(
+              booking_date: str,
+              service_id: str = "",
+              service_search: str = "",
+              requested_start_time: str = "",
+              not_before_time: str = "",
+              not_after_time: str = "",
+          ) -> str:'''
+          new = '''    def get_reschedule_options(
+              booking_date: str,
+              service_id: str = "",
+              doctor_id: str = "",
+              service_search: str = "",
+              requested_start_time: str = "",
+              not_before_time: str = "",
+              not_after_time: str = "",
+          ) -> str:'''
+          if old not in text:
+              raise SystemExit('reschedule signature not found')
+          text = text.replace(old, new, 1)
+          old = '''        inputs = {
+              "booking_date": booking_date,
+              "service_id": service_id,
+              "service_search": service_search,'''
+          new = '''        inputs = {
+              "booking_date": booking_date,
+              "service_id": service_id,
+              "doctor_id": doctor_id or None,
+              "service_search": service_search,'''
+          if old not in text:
+              raise SystemExit('reschedule inputs block not found')
+          text = text.replace(old, new, 1)
+          old = '''                doctor_id=current.doctor_id,
+                  requested_start=requested_start,'''
+          new = '''                doctor_id=doctor_id or current.doctor_id,
+                  requested_start=requested_start,'''
+          if old not in text:
+              raise SystemExit('reschedule availability doctor target not found')
+          text = text.replace(old, new, 1)
+          tools.write_text(text, encoding='utf-8')
+
+          chat = Path('backend/app/services/agent_chat.py')
+          text = chat.read_text(encoding='utf-8')
+          old = '''        if grounded_mode:
+              reschedule_arguments["service_id"] = service_id
+          else:'''
+          new = '''        if grounded_mode:
+              reschedule_arguments["service_id"] = service_id
+              reschedule_arguments["doctor_id"] = doctor_id
+          else:'''
+          if old not in text:
+              raise SystemExit('grounded reschedule args block not found')
+          text = text.replace(old, new, 1)
+          chat.write_text(text, encoding='utf-8')
+          PY
+      - name: Remove patch workflow and commit
+        run: |
+          rm .github/workflows/patch-reschedule-doctor.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app .github/workflows/patch-reschedule-doctor.yml
+          git diff --cached --check
+          git commit -m "fix(agent): support doctor changes while rescheduling"
+          git push origin HEAD:feat/core-product-hardening
