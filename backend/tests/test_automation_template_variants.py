@@ -12,13 +12,13 @@ from app.services.automations import (
 def _rule(*, key: str = "appointment_reminder_6h") -> SimpleNamespace:
     return SimpleNamespace(
         key=key,
-        template_name="tia_reminder_6h_01",
+        template_name="tia_reminder_01",
         template_language="ar",
         config_json={
             "template_variants": [
-                {"name": "tia_reminder_6h_02", "language_code": "ar"},
-                {"name": "tia_reminder_6h_03", "language_code": "ar"},
-                {"name": "tia_reminder_6h_02", "language_code": "ar"},
+                {"name": "tia_reminder_02", "language_code": "ar"},
+                {"name": "tia_reminder_03", "language_code": "ar"},
+                {"name": "tia_reminder_02", "language_code": "ar"},
             ]
         },
     )
@@ -26,9 +26,9 @@ def _rule(*, key: str = "appointment_reminder_6h") -> SimpleNamespace:
 
 def test_template_pool_deduplicates_primary_and_variants() -> None:
     assert _rule_template_candidates(_rule()) == [
-        ("tia_reminder_6h_01", "ar"),
-        ("tia_reminder_6h_02", "ar"),
-        ("tia_reminder_6h_03", "ar"),
+        ("tia_reminder_01", "ar"),
+        ("tia_reminder_02", "ar"),
+        ("tia_reminder_03", "ar"),
     ]
 
 
@@ -63,21 +63,21 @@ def test_template_variants_keep_same_variable_contract() -> None:
             "date": "25/08/2026",
         },
     )
-    assert reminder == ["سارة", "ليزر", "18:00", "التجمع"]
+    assert reminder == ["سارة", "ليزر", "25/08/2026", "18:00"]
     assert post_visit == ["سارة", "ليزر", "25/08/2026"]
 
 
 def test_rule_update_accepts_multiple_template_names_with_shared_language() -> None:
     payload = AutomationRuleUpdate(
-        template_name="tia_reminder_6h_01",
+        template_name="tia_reminder_01",
         template_language="ar",
         template_variants=[
-            {"name": " tia_reminder_6h_02 ", "language_code": " ar "},
-            {"name": "tia_reminder_6h_03", "language_code": "ar"},
+            {"name": " tia_reminder_02 ", "language_code": " ar "},
+            {"name": "tia_reminder_03", "language_code": "ar"},
         ],
     )
     assert [item.name for item in payload.template_variants or []] == [
-        "tia_reminder_6h_02",
-        "tia_reminder_6h_03",
+        "tia_reminder_02",
+        "tia_reminder_03",
     ]
     assert all(item.language_code == "ar" for item in payload.template_variants or [])
