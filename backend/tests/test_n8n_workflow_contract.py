@@ -37,6 +37,16 @@ def test_gmail_worker_reports_success_and_retryable_failure() -> None:
     assert "thread_id" in raw
 
 
+def test_gmail_provider_send_is_not_blindly_retried_by_n8n() -> None:
+    path = _root() / "n8n" / "workflows" / "tia_gmail_outbox_worker.json"
+    workflow = json.loads(path.read_text(encoding="utf-8"))
+    by_name = {node["name"]: node for node in workflow["nodes"]}
+    send = by_name["Gmail Send Message"]
+    assert send.get("retryOnFail") is not True
+    assert "maxTries" not in send
+    assert "waitBetweenTries" not in send
+
+
 def test_whatsapp_workflows_have_provider_result_and_status_callback_paths() -> None:
     root = _root() / "n8n" / "workflows"
     inbound = (root / "tia_whatsapp_inbound_status.json").read_text(encoding="utf-8")
@@ -89,11 +99,12 @@ def test_whatsapp_provider_send_is_single_attempt_and_preserves_real_error() -> 
 
 def test_runtime_workers_support_a_hosted_backend_url() -> None:
     root = _root() / "n8n" / "workflows"
-    for name in ("tia_automation_scheduler.json", "tia_whatsapp_outbox_worker.json"):
+    for name in WORKFLOW_NAMES:
         raw = (root / name).read_text(encoding="utf-8")
         assert "$env.TIA_API_BASE_URL" in raw
         # Local Docker remains a fallback, not the only backend address.
         assert "|| 'http://host.docker.internal:8000'" in raw
+        assert "https://YOUR_TIA_BACKEND_DOMAIN" not in raw
 
 
 def test_automation_scheduler_execute_url_is_a_real_expression() -> None:
