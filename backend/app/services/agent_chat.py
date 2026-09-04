@@ -2247,7 +2247,14 @@ def _run_after_inbound(
                         tool_context=tool_context,
                         run_id=run_id,
                     )
-                if prefetch_direct is None:
+                # The deterministic availability renderer is intentionally narrow.
+                # The semantic interpreter may identify a compound read such as
+                # pricing + availability; in that case let the grounded composer
+                # combine all verified facts instead of dropping part of the ask.
+                availability_only_request = set(policy.capabilities).issubset(
+                    {"availability_discovery", "appointment_creation"}
+                )
+                if prefetch_direct is None and availability_only_request:
                     verified_reply = _verified_booking_slots_reply(
                         payload,
                         booking_authorized="appointment_creation" in set(policy.capabilities),

@@ -28,7 +28,10 @@ from app.agents.semantic_router import (
     SemanticEntityHints,
     _require_all_schema_fields,
 )
-from app.agents.structured_output import invoke_typed_structured_output
+from app.agents.structured_output import (
+    StructuredOutputError,
+    invoke_typed_structured_output,
+)
 from app.core.config import settings
 from app.models.conversation_flow_state import ConversationFlowState
 
@@ -415,32 +418,38 @@ def interpret_customer_turn(
     emergency_name = settings.gemini_realtime_interpreter_emergency_model
     primary_model = build_realtime_interpreter_model()
 
+    def invoke_semantic_structured(model) -> UnifiedTurnDecision:
+        # Provider-side JSON Schema is still the contract. A single bounded retry
+        # handles occasional model output that passes provider shaping but fails
+        # Tia's stricter local Pydantic validation. There is no text parsing or
+        # lexical intent fallback here.
+        try:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=UnifiedTurnDecision,
+                messages=[system, user],
+            )
+        except StructuredOutputError:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=UnifiedTurnDecision,
+                messages=[system, user],
+            )
+
     def invoke_primary() -> UnifiedTurnDecision:
-        return invoke_typed_structured_output(
-            model=primary_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(primary_model)
 
     def invoke_fallback() -> UnifiedTurnDecision:
         fallback_model = build_realtime_interpreter_fallback_model()
         if fallback_model is None:
             raise RuntimeError("Unified turn interpreter fallback model is not configured.")
-        return invoke_typed_structured_output(
-            model=fallback_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(fallback_model)
 
     def invoke_emergency() -> UnifiedTurnDecision:
         emergency_model = build_realtime_interpreter_emergency_model()
         if emergency_model is None:
             raise RuntimeError("Unified turn interpreter emergency model is not configured.")
-        return invoke_typed_structured_output(
-            model=emergency_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(emergency_model)
 
     model_calls = [(primary_name, invoke_primary)]
     if fallback_name and fallback_name != primary_name:
