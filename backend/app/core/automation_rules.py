@@ -36,7 +36,7 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         trigger_kind="before_appointment",
         offset_minutes=-360,
         channel="whatsapp",
-        template_name="tia_appointment_reminder_6h_ar",
+        template_name="tia_appointment_reminder_ar",
         template_language="ar",
         max_lateness_minutes=30,
         enabled_by_default=True,
@@ -50,7 +50,7 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         template_name="tia_post_visit_followup_ar",
         template_language="ar",
         max_lateness_minutes=1440,
-        enabled_by_default=True,
+        enabled_by_default=False,
     ),
     DefaultAutomationRule(
         key="no_show_followup",
