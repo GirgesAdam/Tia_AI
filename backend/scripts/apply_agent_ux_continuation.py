@@ -27,6 +27,44 @@ def patch_turn_interpreter() -> None:
     if old_flow_rule in content:
         content = content.replace(old_flow_rule, new_flow_rule, 1)
 
+    old_import = "from app.agents.structured_output import invoke_typed_structured_output\n"
+    new_import = (
+        "from app.agents.structured_output import (\n"
+        "    StructuredOutputError,\n"
+        "    invoke_typed_structured_output,\n"
+        ")\n"
+    )
+    if "StructuredOutputError" not in content:
+        if old_import not in content:
+            raise RuntimeError("turn interpreter structured-output import anchor not found")
+        content = content.replace(old_import, new_import, 1)
+
+    retry_marker = "def invoke_semantic_structured(model) -> UnifiedTurnDecision:"
+    if retry_marker not in content:
+        old_primary = '''    def invoke_primary() -> UnifiedTurnDecision:\n        return invoke_typed_structured_output(\n            model=primary_model,\n            schema=UnifiedTurnDecision,\n            messages=[system, user],\n        )\n'''
+        new_primary = '''    def invoke_semantic_structured(model) -> UnifiedTurnDecision:\n        # Provider-side JSON Schema is still the contract. A single bounded retry\n        # handles occasional model output that passes provider shaping but fails\n        # Tia's stricter local Pydantic validation. There is no text parsing or\n        # lexical intent fallback here.\n        try:\n            return invoke_typed_structured_output(\n                model=model,\n                schema=UnifiedTurnDecision,\n                messages=[system, user],\n            )\n        except StructuredOutputError:\n            return invoke_typed_structured_output(\n                model=model,\n                schema=UnifiedTurnDecision,\n                messages=[system, user],\n            )\n\n    def invoke_primary() -> UnifiedTurnDecision:\n        return invoke_semantic_structured(primary_model)\n'''
+        if old_primary not in content:
+            raise RuntimeError("turn interpreter primary invocation anchor not found")
+        content = content.replace(old_primary, new_primary, 1)
+
+        old_fallback = '''        return invoke_typed_structured_output(\n            model=fallback_model,\n            schema=UnifiedTurnDecision,\n            messages=[system, user],\n        )\n'''
+        if old_fallback not in content:
+            raise RuntimeError("turn interpreter fallback invocation anchor not found")
+        content = content.replace(
+            old_fallback,
+            "        return invoke_semantic_structured(fallback_model)\n",
+            1,
+        )
+
+        old_emergency = '''        return invoke_typed_structured_output(\n            model=emergency_model,\n            schema=UnifiedTurnDecision,\n            messages=[system, user],\n        )\n'''
+        if old_emergency not in content:
+            raise RuntimeError("turn interpreter emergency invocation anchor not found")
+        content = content.replace(
+            old_emergency,
+            "        return invoke_semantic_structured(emergency_model)\n",
+            1,
+        )
+
     _write(path, content)
 
 
@@ -60,6 +98,21 @@ def patch_grounded_response() -> None:
     _write(path, content)
 
 
+def patch_agent_chat() -> None:
+    path = "backend/app/services/agent_chat.py"
+    content = _read(path)
+    marker = "availability_only_request = set(policy.capabilities).issubset"
+    if marker in content:
+        return
+
+    old = '''                if prefetch_direct is None:\n                    verified_reply = _verified_booking_slots_reply(\n                        payload,\n                        booking_authorized="appointment_creation" in set(policy.capabilities),\n                    )\n'''
+    new = '''                # The deterministic availability renderer is intentionally narrow.\n                # The semantic interpreter may identify a compound read such as\n                # pricing + availability; in that case let the grounded composer\n                # combine all verified facts instead of dropping part of the ask.\n                availability_only_request = set(policy.capabilities).issubset(\n                    {"availability_discovery", "appointment_creation"}\n                )\n                if prefetch_direct is None and availability_only_request:\n                    verified_reply = _verified_booking_slots_reply(\n                        payload,\n                        booking_authorized="appointment_creation" in set(policy.capabilities),\n                    )\n'''
+    if old not in content:
+        raise RuntimeError("agent chat verified availability anchor not found")
+    content = content.replace(old, new, 1)
+    _write(path, content)
+
+
 def patch_live_runner() -> None:
     path = "backend/scripts/run_live_agent_ux_review.py"
     content = _read(path)
@@ -71,15 +124,17 @@ def patch_live_runner() -> None:
 
     old_checks = '''        if name == "doctor_discovery":\n            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""\n            availability_answered = "متاح" in second_reply and any(token in second_reply for token in ("يوم", "من ", "الساعة"))\n            checks.append(f"closest_doctor_availability_answered={availability_answered}")\n            scenario_ok = scenario_ok and availability_answered\n'''
     new_checks = '''        if name == "availability_after_six":\n            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""\n            stale_lower_bound_absent = "من 6 م" not in second_reply\n            checks.append(f"new_time_constraint_replaced_old_bound={stale_lower_bound_absent}")\n            scenario_ok = scenario_ok and stale_lower_bound_absent\n        if name == "doctor_discovery":\n            first_reply = (result.turns[0].assistant or "") if result.turns else ""\n            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""\n            doctor_names_grounded = "مش ظاهرة" not in first_reply and "غير ظاهرة" not in first_reply\n            availability_answered = "متاح" in second_reply and any(token in second_reply for token in ("يوم", "من ", "الساعة"))\n            checks.append(f"doctor_names_grounded={doctor_names_grounded}")\n            checks.append(f"closest_doctor_availability_answered={availability_answered}")\n            scenario_ok = scenario_ok and doctor_names_grounded and availability_answered\n'''
-    if old_checks not in content:
+    if old_checks in content:
+        content = content.replace(old_checks, new_checks, 1)
+    elif "doctor_names_grounded=" not in content:
         raise RuntimeError("live runner doctor check anchor not found")
-    content = content.replace(old_checks, new_checks, 1)
 
     old_service = '''        if name == "service_change_mid_flow":\n            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""\n            service_switch_ok = "بوت" in second_reply and "جنيه" in second_reply\n            checks.append(f"service_switch_acknowledged={service_switch_ok}")\n            scenario_ok = scenario_ok and service_switch_ok\n'''
     new_service = '''        if name == "service_change_mid_flow":\n            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""\n            service_switch_ok = "بوت" in second_reply and "جنيه" in second_reply\n            money_values = {\n                match.group(1).replace(",", "")\n                for match in re.finditer(r"([0-9][0-9,]*)\\s*(?:جنيه|EGP)", second_reply, re.I)\n            }\n            coherent_price = len(money_values) <= 1\n            checks.append(f"service_switch_acknowledged={service_switch_ok}")\n            checks.append(f"single_coherent_booking_price={coherent_price}")\n            scenario_ok = scenario_ok and service_switch_ok and coherent_price\n'''
-    if old_service not in content:
+    if old_service in content:
+        content = content.replace(old_service, new_service, 1)
+    elif "single_coherent_booking_price=" not in content:
         raise RuntimeError("live runner service price anchor not found")
-    content = content.replace(old_service, new_service, 1)
 
     _write(path, content)
 
@@ -88,6 +143,7 @@ def main() -> None:
     patch_turn_interpreter()
     patch_clinic_grounding()
     patch_grounded_response()
+    patch_agent_chat()
     patch_live_runner()
     print("Agent UX continuation patch applied.")
 
