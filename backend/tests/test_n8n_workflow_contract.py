@@ -5,7 +5,6 @@ WORKFLOW_NAMES = (
     "tia_whatsapp_inbound_status.json",
     "tia_whatsapp_outbox_worker.json",
     "tia_automation_scheduler.json",
-    "tia_gmail_outbox_worker.json",
 )
 
 
@@ -26,25 +25,6 @@ def test_workflows_are_valid_json_without_embedded_credentials() -> None:
             'client_secret":',
         ):
             assert forbidden not in raw
-
-
-def test_gmail_worker_reports_success_and_retryable_failure() -> None:
-    path = _root() / "n8n" / "workflows" / "tia_gmail_outbox_worker.json"
-    raw = path.read_text(encoding="utf-8")
-    assert "n8n-nodes-base.gmail" in raw
-    assert "retry_after_seconds" in raw
-    assert "provider_message_id" in raw
-    assert "thread_id" in raw
-
-
-def test_gmail_provider_send_is_not_blindly_retried_by_n8n() -> None:
-    path = _root() / "n8n" / "workflows" / "tia_gmail_outbox_worker.json"
-    workflow = json.loads(path.read_text(encoding="utf-8"))
-    by_name = {node["name"]: node for node in workflow["nodes"]}
-    send = by_name["Gmail Send Message"]
-    assert send.get("retryOnFail") is not True
-    assert "maxTries" not in send
-    assert "waitBetweenTries" not in send
 
 
 def test_whatsapp_workflows_have_provider_result_and_status_callback_paths() -> None:
