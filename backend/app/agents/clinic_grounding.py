@@ -350,6 +350,8 @@ def grounded_catalog_facts(
     # no customer wording is inspected and no lexical intent rule exists here.
     if (
         "doctor_discovery" in capability_set
+        and "availability_discovery" not in capability_set
+        and "appointment_creation" not in capability_set
         and selected_doctor_id is None
         and not doctor_candidate_ids
         and selected_service_id

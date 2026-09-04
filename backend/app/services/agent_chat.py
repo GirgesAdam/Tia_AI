@@ -2271,7 +2271,7 @@ def _run_after_inbound(
             and flow.is_active
             and flow.flow_type == "appointment_reschedule"
             and flow_turn is not None
-            and flow_turn.action == "select_option"
+            and flow_turn.action in {"modify", "select_option"}
             and not turn_local_side_read
         ):
             payload = prefetched_results.get("get_reschedule_options")
