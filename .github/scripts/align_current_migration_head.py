@@ -28,7 +28,7 @@ for path in sorted((ROOT / "backend/tests").rglob("*.py")):
     path.write_text(text.replace(OLD_HEAD, NEW_HEAD), encoding="utf-8")
     updated_tests += occurrences
 
-if updated_tests != 17:
-    raise AssertionError(f"expected 17 stale migration-head assertions, updated {updated_tests}")
+if updated_tests != 20:
+    raise AssertionError(f"expected 20 stale migration-head assertions, updated {updated_tests}")
 
 print(f"current migration head aligned; updated {updated_tests} stale test assertions")
