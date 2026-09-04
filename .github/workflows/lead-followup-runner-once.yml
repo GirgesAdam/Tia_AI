@@ -1,0 +1,129 @@
+name: Lead follow-up runner once
+
+on:
+  push:
+    branches: [feat/core-product-hardening]
+    paths:
+      - .github/workflows/lead-followup-runner-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+          fetch-depth: 0
+
+      - name: Extract and apply lead follow-up patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('.github/workflows/lead-followup-once.yml')
+          lines = source_path.read_text(encoding='utf-8').splitlines()
+          marker = next(i for i, line in enumerate(lines) if 'name: Add optional lead not-booked follow-up' in line)
+          start = next(i for i in range(marker + 1, len(lines)) if lines[i].strip() == 'run: |') + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == '- uses: actions/setup-python@v5')
+          body = []
+          for line in lines[start:end]:
+              body.append(line[10:] if line.startswith('          ') else line)
+          script = '\n'.join(body) + '\n'
+          compile(script, '<lead-followup-patch>', 'exec')
+          exec(compile(script, '<lead-followup-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+
+      - name: Add duplicate follow-up guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/automations.py')
+          text = path.read_text(encoding='utf-8')
+          if '_competing_active_lead_followup(' not in text:
+              marker = '\ndef _system_lead_followup_ineligible_reason(\n'
+              assert marker in text
+              helper = '''\n\ndef _competing_active_lead_followup(\n    db: Session,\n    *,\n    task: CRMTask,\n) -> CRMTask | None:\n    if task.lead_id is None:\n        return None\n    return db.scalar(\n        select(CRMTask)\n        .where(\n            CRMTask.workspace_id == task.workspace_id,\n            CRMTask.lead_id == task.lead_id,\n            CRMTask.id != task.id,\n            CRMTask.task_type == "follow_up",\n            CRMTask.status.in_(("pending", "in_progress")),\n        )\n        .order_by(CRMTask.due_at, CRMTask.created_at)\n        .limit(1)\n    )\n'''
+              text = text.replace(marker, helper + marker, 1)
+
+              eligible = '    if lead.status not in LEAD_FOLLOWUP_ELIGIBLE_STATUSES:\n        return "lead_no_longer_eligible"\n    return None\n'
+              replacement = '    if lead.status not in LEAD_FOLLOWUP_ELIGIBLE_STATUSES:\n        return "lead_no_longer_eligible"\n    if _competing_active_lead_followup(db, task=task) is not None:\n        return "lead_followup_superseded_by_existing_task"\n    return None\n'
+              assert eligible in text
+              text = text.replace(eligible, replacement, 1)
+
+              create_marker = '        create_crm_task(\n            db,\n            workspace_id=workspace_id,\n            patient_id=lead.patient_id,\n'
+              guard = '''        competing = db.scalar(\n            select(CRMTask.id)\n            .where(\n                CRMTask.workspace_id == workspace_id,\n                CRMTask.lead_id == lead.id,\n                CRMTask.task_type == "follow_up",\n                CRMTask.status.in_(("pending", "in_progress")),\n            )\n            .limit(1)\n        )\n        if competing is not None:\n            continue\n\n'''
+              assert create_marker in text
+              text = text.replace(create_marker, guard + create_marker, 1)
+              path.write_text(text, encoding='utf-8')
+
+          test_path = Path('backend/tests/test_lead_followup_automation.py')
+          source = test_path.read_text(encoding='utf-8')
+          if 'lead_followup_superseded_by_existing_task' not in source:
+              needle = '    assert \'"lead_followup_rule_disabled"\' in service\n'
+              assert needle in source
+              source = source.replace(
+                  needle,
+                  needle + '    assert \'"lead_followup_superseded_by_existing_task"\' in service\n    assert "_competing_active_lead_followup(" in service\n',
+                  1,
+              )
+              test_path.write_text(source, encoding='utf-8')
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Backend quality gate
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+          MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+          SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+          ENVIRONMENT: test
+          DEBUG: "false"
+          DOCS_ENABLED: "false"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          ruff check app tests alembic
+          python -m compileall -q app alembic tests
+          python -m pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend quality gate
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+          TIA_API_URL: http://127.0.0.1:8000
+        run: |
+          npm ci
+          npm run lint
+          npx next typegen
+          npm run typecheck
+          npm run build
+
+      - name: Commit tested lead follow-up
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app backend/alembic/versions/0055_lead_followup.py backend/tests 'frontend/src/app/(dashboard)/automations/page.tsx' n8n/AUTOMATIONS_SETUP.md
+          git diff --cached --check
+          git commit -m "feat: add optional lead not-booked follow-up"
+          git push origin HEAD:feat/core-product-hardening
