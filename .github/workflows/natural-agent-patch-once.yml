@@ -38,7 +38,9 @@ jobs:
 
       - name: Lint
         working-directory: backend
-        run: ruff check app tests scripts/apply_natural_agent_patch_once.py
+        run: |
+          ruff check --fix app tests scripts/apply_natural_agent_patch_once.py
+          ruff check app tests scripts/apply_natural_agent_patch_once.py
 
       - name: Focused natural UX tests
         working-directory: backend
@@ -68,5 +70,3 @@ jobs:
           fi
           git commit -m "fix: make customer booking conversations natural"
           git push origin HEAD:feat/core-product-hardening
-
-# Trigger after workflow registration.
