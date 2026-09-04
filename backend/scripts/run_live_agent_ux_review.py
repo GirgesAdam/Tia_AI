@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Temporary live UX review for the real customer agent.
 
-Twenty short two-turn conversations run against the real LLM + PostgreSQL adapter.
+Twenty-one short two-turn conversations run against the real LLM + PostgreSQL adapter.
 Every conversation gets its own outer transaction and is rolled back. No WhatsApp
 or n8n delivery is invoked.
 """
@@ -295,7 +295,17 @@ def _case_messages(name: str, db: Session, workspace: Workspace, patient: Patien
             lambda: (((db.scalar(select(func.count(Appointment.id)).where(Appointment.workspace_id == workspace.id, Appointment.patient_id == patient.id)) or 0) > before_count), "appointment_created"),
         )
     if name == "unavailable_exact_time":
-        return f"عايز {service_name} مع {doctor_name} يوم {date_text} الساعة 02:00", "مش هاحجز دلوقتي، قولي بس أقرب وقت متاح", lambda: (True, "read_only")
+        return (
+            f"عايز أحجز {service_name} مع {doctor_name} يوم {date_text} الساعة 02:00",
+            "لو الوقت ده مش متاح متحجزش بداله، قولي بس أقرب وقت متاح",
+            lambda: (
+                (db.scalar(select(func.count(Appointment.id)).where(
+                    Appointment.workspace_id == workspace.id,
+                    Appointment.patient_id == patient.id,
+                )) or 0) == before_count,
+                "no_silent_time_substitution",
+            ),
+        )
     if name == "availability_after_six":
         return f"عايز {service_name} يوم {date_text} بعد الساعة 6 بالليل", "طب ولو قبل 6 إيه المتاح؟", lambda: (True, "read_only")
     if name == "availability_window":
@@ -305,7 +315,7 @@ def _case_messages(name: str, db: Session, workspace: Workspace, patient: Patien
     if name == "mixed_language":
         return f"عايز book {service_name} with {doctor_name} on {date_text}", "show me the available times but don't book yet", lambda: (True, "read_only")
     if name == "service_change_mid_flow":
-        return f"عايز أحجز {service_name} يوم {date_text}", "لا غيرت رأيي، عايز بوتوكس بدل الليزر ومتحجزش حاجة دلوقتي", lambda: (((db.scalar(select(func.count(Appointment.id)).where(Appointment.workspace_id == workspace.id, Appointment.patient_id == patient.id)) or 0) == before_count), "no_stale_booking")
+        return f"عايز أحجز {service_name} يوم {date_text}", "لا غيرت رأيي، عايز بوتوكس بدل الليزر. بكام ومواعيده إيه؟ ومتحجزش حاجة دلوقتي", lambda: (((db.scalar(select(func.count(Appointment.id)).where(Appointment.workspace_id == workspace.id, Appointment.patient_id == patient.id)) or 0) == before_count), "no_stale_booking")
     raise KeyError(name)
 
 
@@ -389,7 +399,7 @@ def _execute_case(engine, slug: str, name: str) -> Result:
         checks.append(scenario_text)
 
         replies = "\n".join(turn.assistant or "" for turn in result.turns)
-        if name in {"general_availability_ranges", "doctor_availability_ranges", "book_from_window", "unavailable_exact_time", "availability_after_six", "availability_window", "mixed_language"}:
+        if name in {"general_availability_ranges", "doctor_availability_ranges", "book_from_window", "unavailable_exact_time", "availability_after_six", "availability_window", "mixed_language", "service_change_mid_flow"}:
             natural = ("من " in replies and (" لـ" in replies or " ل" in replies)) or "مفيش مواعيد" in replies or "مش متاح" in replies
             dense = sum(replies.count(f":{minute:02d}") for minute in (0, 15, 30, 45)) >= 5
             checks.append(f"natural_windows={natural and not dense}")
@@ -425,6 +435,16 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             )
             checks.append(f"no_false_medical_handoff={no_false_medical_handoff}")
             scenario_ok = scenario_ok and no_false_medical_handoff
+        if name == "service_change_mid_flow":
+            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
+            service_switch_ok = "بوت" in second_reply and "جنيه" in second_reply
+            checks.append(f"service_switch_acknowledged={service_switch_ok}")
+            scenario_ok = scenario_ok and service_switch_ok
+        if name == "doctor_discovery":
+            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
+            availability_answered = "متاح" in second_reply and any(token in second_reply for token in ("يوم", "من ", "الساعة"))
+            checks.append(f"closest_doctor_availability_answered={availability_answered}")
+            scenario_ok = scenario_ok and availability_answered
         if name == "package_refund":
             all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
             lowered_replies = replies.casefold()

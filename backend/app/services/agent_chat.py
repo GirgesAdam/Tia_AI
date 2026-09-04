@@ -1223,20 +1223,18 @@ def _verified_booking_slots_reply(
         booking_authorized=booking_authorized,
     )
 
-def _exact_booking_selection_index(
+def _exact_action_selection_index(
     *,
     decision: SemanticCapabilityDecision,
     payload: dict[str, object],
+    required_capability: str,
 ) -> int | None:
-    """Return one verified slot index for an explicit exact-time booking request.
+    """Return one verified slot index for one semantically authorized exact-time action.
 
-    This is deliberately structural, not lexical: the interpreter has already
-    classified the newest turn as appointment creation and extracted an exact
-    date/time. If exactly one adapter-verified slot matches that clock time, no
-    second confirmation turn is needed. Ambiguous or multi-option requests keep
-    the normal option-selection flow.
+    The interpreter owns intent; Python only verifies that the exact structured
+    clock time maps to exactly one adapter slot before a write can execute.
     """
-    if "appointment_creation" not in set(decision.capabilities):
+    if required_capability not in set(decision.capabilities):
         return None
     requested_date = decision.entity_hints.requested_date
     requested_time = decision.entity_hints.requested_start_time
@@ -1276,12 +1274,12 @@ def _exact_booking_selection_index(
     return matches[0] if len(matches) == 1 else None
 
 
-def _exact_booking_flow_turn(
+def _exact_action_flow_turn(
     decision: SemanticCapabilityDecision,
     *,
     selection_index: int,
 ) -> FlowTurnDecision:
-    """Convert an already-structured exact booking request into a slot choice."""
+    """Convert an already-structured exact appointment action into a verified slot choice."""
     return FlowTurnDecision(
         action="select_option",
         capabilities=list(decision.capabilities),
@@ -1296,7 +1294,7 @@ def _exact_booking_flow_turn(
         recommended_handoff_priority=decision.recommended_handoff_priority,
         confidence=decision.confidence,
         reason=(
-            "The current turn explicitly requests appointment creation at an exact "
+            "The current turn semantically authorizes an appointment action at an exact "
             "date/time and exactly one verified adapter slot matches it."
         ),
     )
@@ -2226,9 +2224,10 @@ def _run_after_inbound(
         if flow is not None and flow.is_active and flow.flow_type == "booking":
             payload = prefetched_results.get("get_booking_options")
             if isinstance(payload, dict):
-                selection_index = _exact_booking_selection_index(
+                selection_index = _exact_action_selection_index(
                     decision=semantic_decision,
                     payload=payload,
+                    required_capability="appointment_creation",
                 )
                 if selection_index is not None and not turn_local_side_read:
                     flow = _sync_flow_from_verified_prefetch(
@@ -2240,7 +2239,7 @@ def _run_after_inbound(
                     prefetch_direct = _structured_flow_write(
                         db=db,
                         flow=flow,
-                        turn=_exact_booking_flow_turn(
+                        turn=_exact_action_flow_turn(
                             semantic_decision,
                             selection_index=selection_index,
                         ),
@@ -2258,6 +2257,41 @@ def _run_after_inbound(
                             verified_reply,
                             "deterministic:verified-get_booking_options",
                         )
+
+        if (
+            prefetch_direct is None
+            and flow is not None
+            and flow.is_active
+            and flow.flow_type == "appointment_reschedule"
+            and flow_turn is not None
+            and flow_turn.action == "select_option"
+            and not turn_local_side_read
+        ):
+            payload = prefetched_results.get("get_reschedule_options")
+            if isinstance(payload, dict):
+                selection_index = _exact_action_selection_index(
+                    decision=semantic_decision,
+                    payload=payload,
+                    required_capability="appointment_reschedule",
+                )
+                if selection_index is not None:
+                    flow = _sync_flow_from_verified_prefetch(
+                        db=db,
+                        flow=flow,
+                        prefetched_results=prefetched_results,
+                        run_id=run_id,
+                    )
+                    prefetch_direct = _structured_flow_write(
+                        db=db,
+                        flow=flow,
+                        turn=_exact_action_flow_turn(
+                            semantic_decision,
+                            selection_index=selection_index,
+                        ),
+                        policy=policy,
+                        tool_context=tool_context,
+                        run_id=run_id,
+                    )
 
         if (
             prefetch_direct is None
