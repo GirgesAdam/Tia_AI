@@ -43,7 +43,10 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         if start is None or end is None or end <= start:
             continue
         doctor_id = str(slot.get("doctor_id") or "")
-        doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        doctor_name = (
+            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
+            or "الدكتور المتاح"
+        )
         grouped[(doctor_id, doctor_name)].append((start, end))
 
     windows: list[dict[str, Any]] = []
@@ -96,7 +99,10 @@ def format_availability_windows_reply(
     for window in windows:
         if not isinstance(window, dict):
             continue
-        doctor = str(window.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        doctor = (
+            str(window.get("doctor_name") or "الدكتور المتاح").strip()
+            or "الدكتور المتاح"
+        )
         by_doctor[doctor].append(window)
 
     lines: list[str] = []
@@ -142,6 +148,8 @@ _LOCATION_KEYS = {
     "branch_name",
     "branch_query",
     "branch_candidate_ids",
+    "branch_ids",
+    "scheduled_branch_ids",
     "preferred_branch_id",
     "primary_branch_id",
 }
