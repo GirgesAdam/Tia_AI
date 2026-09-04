@@ -1,0 +1,79 @@
+name: Live Agent Production Risks
+
+on:
+  push:
+    branches:
+      - feat/core-product-hardening
+    paths:
+      - .github/workflows/live-agent-production-risks.yml
+      - backend/scripts/run_live_agent_production_risks.py
+      - backend/app/agents/**
+      - backend/app/services/agent_chat.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-agent-production-risks
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: Transcript-only clinic risk review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_live_agent_unused
+      SUPABASE_SECRET_KEY: sb_secret_live_agent_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "2"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+          test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+      - name: Run only new high-risk conversations
+        run: |
+          python -m scripts.run_live_agent_production_risks \
+            --workspace-slug tia \
+            --report artifacts/live-agent-production-risks.json
+      - name: Upload transcript report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-production-risks-report
+          path: backend/artifacts/live-agent-production-risks.json
+          if-no-files-found: warn
+          retention-days: 7
