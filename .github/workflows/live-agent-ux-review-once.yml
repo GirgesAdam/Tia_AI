@@ -65,6 +65,8 @@ jobs:
         run: |
           python -m py_compile scripts/run_live_agent_ux_review.py
           python -m py_compile app/agents/turn_interpreter.py
+          python -m py_compile app/agents/clinic_grounding.py
+          python -m py_compile app/agents/grounded_response.py
           python -m py_compile app/services/agent_chat.py
       - name: Commit continuation patch
         working-directory: .
@@ -75,8 +77,13 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/app/agents/turn_interpreter.py backend/app/services/agent_chat.py backend/scripts/run_live_agent_ux_review.py
-          git commit -m "fix(agent): continue natural UX hardening [skip ci]"
+          git add \
+            backend/app/agents/turn_interpreter.py \
+            backend/app/agents/clinic_grounding.py \
+            backend/app/agents/grounded_response.py \
+            backend/app/services/agent_chat.py \
+            backend/scripts/run_live_agent_ux_review.py
+          git commit -m "fix(agent): ground semantic UX behavior [skip ci]"
           git push origin HEAD:feat/core-product-hardening
       - name: Run twenty-one live conversations
         id: review
