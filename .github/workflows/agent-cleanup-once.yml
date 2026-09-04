@@ -38,6 +38,15 @@ jobs:
           python -m py_compile app/agents/flow_interpreter.py
           python -m py_compile app/services/agent_chat.py
           python -m py_compile scripts/run_live_agent_ux_review.py
+      - name: Format changed runtime imports
+        run: |
+          ruff check --fix \
+            app/agents/turn_models.py \
+            app/agents/turn_interpreter.py \
+            app/agents/semantic_router.py \
+            app/agents/flow_interpreter.py \
+            app/services/agent_chat.py \
+            tests/test_unified_turn_interpreter_architecture.py
       - name: Ruff changed runtime
         run: |
           ruff check \
@@ -46,7 +55,6 @@ jobs:
             app/agents/semantic_router.py \
             app/agents/flow_interpreter.py \
             app/services/agent_chat.py \
-            scripts/run_live_agent_ux_review.py \
             tests/test_unified_turn_interpreter_architecture.py
       - name: Focused no-LLM regression tests
         run: |
