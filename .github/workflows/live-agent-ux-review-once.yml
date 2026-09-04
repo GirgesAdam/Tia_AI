@@ -89,12 +89,14 @@ jobs:
             backend/scripts/run_live_agent_ux_review.py
           git commit -m "fix(agent): ground semantic UX behavior [skip ci]"
           git push origin HEAD:feat/core-product-hardening
-      - name: Run twenty-one live conversations
+      - name: Run focused live conversations
         id: review
         continue-on-error: true
         run: |
           python -m scripts.run_live_agent_ux_review \
             --workspace-slug tia \
+            --case service_change_mid_flow \
+            --case booked_slot_same_doctor \
             --report artifacts/live-agent-ux-review.json
       - name: Upload report
         if: always()
@@ -109,4 +111,4 @@ jobs:
         working-directory: .
         run: exit 1
 
-# semantic follow-up rerun
+# focused unresolved-case rerun
