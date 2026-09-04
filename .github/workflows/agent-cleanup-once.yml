@@ -57,6 +57,8 @@ jobs:
             app/services/agent_chat.py \
             tests/test_unified_turn_interpreter_architecture.py
       - name: Focused no-LLM regression tests
+        env:
+          PYTHONPATH: .
         run: |
           pytest -q \
             tests/test_unified_turn_interpreter_architecture.py \
