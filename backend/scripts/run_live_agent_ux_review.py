@@ -438,13 +438,27 @@ def _execute_case(engine, slug: str, name: str) -> Result:
         if name == "service_change_mid_flow":
             second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
             service_switch_ok = "بوت" in second_reply and "جنيه" in second_reply
+            money_values = {
+                match.group(1).replace(",", "")
+                for match in re.finditer(r"([0-9][0-9,]*)\s*(?:جنيه|EGP)", second_reply, re.I)
+            }
+            coherent_price = len(money_values) <= 1
             checks.append(f"service_switch_acknowledged={service_switch_ok}")
-            scenario_ok = scenario_ok and service_switch_ok
-        if name == "doctor_discovery":
+            checks.append(f"single_coherent_booking_price={coherent_price}")
+            scenario_ok = scenario_ok and service_switch_ok and coherent_price
+        if name == "availability_after_six":
             second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
+            stale_lower_bound_absent = "من 6 م" not in second_reply
+            checks.append(f"new_time_constraint_replaced_old_bound={stale_lower_bound_absent}")
+            scenario_ok = scenario_ok and stale_lower_bound_absent
+        if name == "doctor_discovery":
+            first_reply = (result.turns[0].assistant or "") if result.turns else ""
+            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
+            doctor_names_grounded = "مش ظاهرة" not in first_reply and "غير ظاهرة" not in first_reply
             availability_answered = "متاح" in second_reply and any(token in second_reply for token in ("يوم", "من ", "الساعة"))
+            checks.append(f"doctor_names_grounded={doctor_names_grounded}")
             checks.append(f"closest_doctor_availability_answered={availability_answered}")
-            scenario_ok = scenario_ok and availability_answered
+            scenario_ok = scenario_ok and doctor_names_grounded and availability_answered
         if name == "package_refund":
             all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
             lowered_replies = replies.casefold()

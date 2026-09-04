@@ -344,6 +344,25 @@ def grounded_catalog_facts(
     selected_doctor_id = getattr(entity_hints, "doctor_id", None)
     doctor_candidate_ids = list(getattr(entity_hints, "doctor_candidate_ids", []) or [])
 
+    # service_relationship_doctor_discovery: the semantic interpreter decides that
+    # the customer is asking for doctors and grounds the service. Python then
+    # materializes the canonical service -> doctor relationship from the catalog;
+    # no customer wording is inspected and no lexical intent rule exists here.
+    if (
+        "doctor_discovery" in capability_set
+        and selected_doctor_id is None
+        and not doctor_candidate_ids
+        and selected_service_id
+    ):
+        service_row = _catalog_row_by_id(catalog, "services", selected_service_id)
+        known_doctor_ids = _catalog_ids(catalog, "doctors")
+        if service_row is not None:
+            doctor_candidate_ids = [
+                str(value)
+                for value in (service_row.get("doctor_ids") or [])
+                if str(value) in known_doctor_ids
+            ]
+
     if capability_set.intersection({"service_information", "pricing", "availability_discovery", "appointment_creation"}):
         service_ids = [selected_service_id] if selected_service_id else service_candidate_ids
         if service_ids:
