@@ -23,46 +23,55 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           service_path = Path("backend/app/services/automations.py")
           source = service_path.read_text(encoding="utf-8")
 
-          old_reminder = '''    if rule_key == "appointment_reminder_6h":
-              return (
-                  f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-                  f"النهارده الساعة {data['time']} في {data['branch_name']}، فاضل حوالي 6 ساعات. "
-                  "مستنيينك 💛"
-              )'''
-          new_reminder = '''    if rule_key == "appointment_reminder_6h":
-              return (
-                  f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-                  f"يوم {data['date']} الساعة {data['time']}. "
-                  "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
-              )'''
-          assert source.count(old_reminder) == 1, "reminder copy changed unexpectedly"
-          source = source.replace(old_reminder, new_reminder, 1)
+          reminder_pattern = re.compile(
+              r'    if rule_key == "appointment_reminder_6h":\n'
+              r'        return \(\n'
+              r'.*?'
+              r'        \)\n'
+              r'    # Legacy rules',
+              re.S,
+          )
+          reminder_replacement = (
+              '    if rule_key == "appointment_reminder_6h":\n'
+              '        return (\n'
+              '            f"أهلًا {data[\'patient_name\']} 👋 بفكرك بموعدك لـ{data[\'service_name\']} "\n'
+              '            f"يوم {data[\'date\']} الساعة {data[\'time\']}. "\n'
+              '            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."\n'
+              '        )\n'
+              '    # Legacy rules'
+          )
+          source, reminder_count = reminder_pattern.subn(reminder_replacement, source, count=1)
+          assert reminder_count == 1, "reminder block changed unexpectedly"
 
-          old_post = '''    if rule_key == "post_visit_followup":
-              return (
-                  f"إزيك {data['patient_name']}؟ حبيت أطمن عليكي بعد {data['service_name']} "
-                  f"اللي كانت يوم {data['date']}. كل حاجة تمام؟"
-              )'''
-          new_post = '''    if rule_key == "post_visit_followup":
-              return (
-                  f"إزيك {data['patient_name']}؟ حبيت أطمن عليكي بعد {data['service_name']} "
-                  f"اللي كانت يوم {data['date']}. كل حاجة تمام؟ "
-                  "لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، "
-                  "ويسعدنا نعرف تقييمك للجلسة."
-              )'''
-          assert source.count(old_post) == 1, "post-visit copy changed unexpectedly"
-          source = source.replace(old_post, new_post, 1)
+          post_pattern = re.compile(
+              r'    if rule_key == "post_visit_followup":\n'
+              r'        return \(\n'
+              r'.*?'
+              r'        \)\n'
+              r'    if rule_key == "no_show_followup":',
+              re.S,
+          )
+          post_replacement = (
+              '    if rule_key == "post_visit_followup":\n'
+              '        return (\n'
+              '            f"إزيك {data[\'patient_name\']}؟ حبيت أطمن عليكي بعد {data[\'service_name\']} "\n'
+              '            f"اللي كانت يوم {data[\'date\']}. كل حاجة تمام؟ "\n'
+              '            "لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، "\n'
+              '            "ويسعدنا نعرف تقييمك للجلسة."\n'
+              '        )\n'
+              '    if rule_key == "no_show_followup":'
+          )
+          source, post_count = post_pattern.subn(post_replacement, source, count=1)
+          assert post_count == 1, "post-visit block changed unexpectedly"
 
-          old_params = '''    if rule_key == "appointment_reminder_6h":
-              return [patient_name, service_name, time, branch_name]'''
-          new_params = '''    if rule_key == "appointment_reminder_6h":
-              return [patient_name, service_name, date, time]'''
+          old_params = "return [patient_name, service_name, time, branch_name]"
           assert source.count(old_params) == 1, "reminder template variables changed unexpectedly"
-          source = source.replace(old_params, new_params, 1)
+          source = source.replace(old_params, "return [patient_name, service_name, date, time]", 1)
           service_path.write_text(source, encoding="utf-8")
 
           actions_path = Path("frontend/src/app/(dashboard)/automations/actions.ts")
@@ -75,10 +84,12 @@ jobs:
 
           docs_path = Path("n8n/AUTOMATIONS_SETUP.md")
           docs = docs_path.read_text(encoding="utf-8")
-          docs = docs.replace(
-              "- appointment reminder: customer name, service, appointment time, clinic name.",
-              "- appointment reminder: customer name, service, appointment date, appointment time.",
-          )
+          old_contract = "- appointment reminder: customer name, service, appointment time, clinic name."
+          if old_contract in docs:
+              docs = docs.replace(
+                  old_contract,
+                  "- appointment reminder: customer name, service, appointment date, appointment time.",
+              )
           docs_path.write_text(docs, encoding="utf-8")
 
       - name: Set up Python
