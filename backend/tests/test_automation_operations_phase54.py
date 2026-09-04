@@ -71,7 +71,7 @@ def test_retry_and_cancel_routes_require_workspace_admin() -> None:
     assert "get_workspace_admin" in cancel
 
 
-def test_automation_dashboard_has_health_attention_and_safe_actions() -> None:
+def test_automation_dashboard_has_health_attention_safe_actions_and_product_whitelist() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
     actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(encoding="utf-8")
 
@@ -81,10 +81,11 @@ def test_automation_dashboard_has_health_attention_and_safe_actions() -> None:
     assert "dispatch_status" in page
     assert "retryAutomationJob" in page
     assert "cancelAutomationJob" in page
-    assert "legacyRuleKeys" in page
+    assert "visibleProductRuleKeys" in page
+    assert '"no_show_followup"' in page
+    assert "saveAutomationTiming" in page
     assert '/automations/jobs/${id}/retry' in actions
     assert '/automations/jobs/${id}/cancel' in actions
-
 
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
@@ -99,8 +100,10 @@ def test_reminder_and_post_visit_fallback_copy_match_current_template_contract()
     reminder = service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split('if rule_key == "appointment_reminder_24h":', 1)[0]
     post = service.split('if rule_key == "post_visit_followup":', 1)[1].split('if rule_key == "no_show_followup":', 1)[0]
     assert "بموعدك لـ" in reminder
+    assert "فاضل حوالي 6 ساعات" not in reminder
     assert "إن عندك جلسة" not in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post
-    assert "بعد جلسة" not in post
+    assert "تحجزي الجلسة الجاية" in post
+    assert "تقييمك للجلسة" in post
     assert "بموعدك لـ{{2}}" in setup
     assert "بعد {{2}}" in setup
