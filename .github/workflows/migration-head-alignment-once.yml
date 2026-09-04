@@ -43,7 +43,7 @@ jobs:
           pip install -r requirements.txt
           ruff check app tests alembic
           python -m compileall -q app alembic tests
-          python -m alembic heads
+          test "$(python -m alembic heads)" = "0056_merge_automation_expenses (head)"
           python -m pytest -q
 
       - name: Commit tested migration alignment
@@ -56,4 +56,4 @@ jobs:
           git commit -m "fix: align readiness with merged migration head"
           git push origin HEAD:feat/core-product-hardening
 
-# rerun after lint-clean lineage guard
+# final rerun after moving lineage guard to CI
