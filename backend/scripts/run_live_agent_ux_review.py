@@ -296,14 +296,14 @@ def _case_messages(name: str, db: Session, workspace: Workspace, patient: Patien
         )
     if name == "unavailable_exact_time":
         return (
-            f"عايز أحجز {service_name} مع {doctor_name} يوم {date_text} الساعة 02:00",
-            "لو الوقت ده مش متاح متحجزش بداله، قولي بس أقرب وقت متاح",
+            f"عايز أحجز {service_name} مع {doctor_name} يوم {date_text} الساعة 14:07",
+            "لو 14:07 مش متاح متحجزش وقت قريب منه، قولي بس أقرب وقت متاح",
             lambda: (
                 (db.scalar(select(func.count(Appointment.id)).where(
                     Appointment.workspace_id == workspace.id,
                     Appointment.patient_id == patient.id,
                 )) or 0) == before_count,
-                "no_silent_time_substitution",
+                "no_silent_exact_minute_rounding",
             ),
         )
     if name == "availability_after_six":
