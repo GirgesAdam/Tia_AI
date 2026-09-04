@@ -139,6 +139,18 @@ def _cancel_pending_job_dispatch(
     return True
 
 
+REPLANNABLE_CANCELLATION_REASONS = {
+    "rule_disabled",
+    "rule_disabled_by_admin",
+    "rule_disabled_or_appointment_no_longer_eligible",
+}
+
+
+def _cancelled_job_can_be_replanned(job: AutomationJob) -> bool:
+    reason = str((job.result_json or {}).get("reason") or "")
+    return job.status == "cancelled" and reason in REPLANNABLE_CANCELLATION_REASONS
+
+
 def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
         return appointment.status in {"pending", "confirmed"}
@@ -241,13 +253,17 @@ def plan_automation_jobs(
                 )
             )
             if existing is not None:
-                if existing.status in {"queued", "failed"}:
+                renewable_cancel = _cancelled_job_can_be_replanned(existing)
+                if existing.status in {"queued", "failed"} or renewable_cancel:
                     existing.status = "queued"
                     existing.scheduled_for = when
                     existing.next_attempt_at = None
                     existing.locked_at = None
                     existing.completed_at = None
                     existing.last_error = None
+                    if renewable_cancel:
+                        existing.message_id = None
+                        existing.dispatch_id = None
                     existing.result_json = {}
                 elif existing.status == "dispatched" and existing.scheduled_for != when:
                     if _cancel_pending_job_dispatch(
@@ -264,8 +280,8 @@ def plan_automation_jobs(
                         existing.message_id = None
                         existing.dispatch_id = None
                         existing.result_json = {"reason": "rescheduled_before_provider_send"}
-                # Cancelled jobs are terminal. In particular, an admin cancellation
-                # must never be silently resurrected by the next planner tick.
+                # Manual job cancellations stay terminal. Lifecycle cancellations
+                # are renewable only when the rule/appointment becomes eligible again.
                 continue
 
             db.add(

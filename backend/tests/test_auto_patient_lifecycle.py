@@ -112,8 +112,11 @@ def test_customer_reply_after_proactive_message_still_uses_normal_agent_runtime(
     assert "return_to_ai(conversation, now=now)" in channels
 
 
-def test_reenabled_lifecycle_rule_can_revive_a_cancelled_due_job() -> None:
+def test_reenabled_lifecycle_rule_can_revive_only_lifecycle_cancelled_jobs() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
-    assert 'existing.status in {"queued", "failed", "cancelled"}' in service
-    assert 'existing.status = "queued"' in service
-    assert "existing.completed_at = None" in service
+    assert "REPLANNABLE_CANCELLATION_REASONS" in service
+    assert '"rule_disabled_by_admin"' in service
+    assert '"rule_disabled_or_appointment_no_longer_eligible"' in service
+    assert "_cancelled_job_can_be_replanned(existing)" in service
+    assert "existing.message_id = None" in service
+    assert "existing.dispatch_id = None" in service

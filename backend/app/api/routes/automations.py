@@ -134,12 +134,16 @@ def update_rule(
             )
         )
         for pending_job_id in cancellable_job_ids:
-            cancel_automation_job(
+            cancelled_job, _ = cancel_automation_job(
                 db,
                 workspace_id=access.workspace.id,
                 job_id=pending_job_id,
                 actor_user_id=access.user.id,
             )
+            cancelled_job.result_json = {
+                **(cancelled_job.result_json or {}),
+                "reason": "rule_disabled_by_admin",
+            }
 
     if changed_fields:
         record_activity_event(

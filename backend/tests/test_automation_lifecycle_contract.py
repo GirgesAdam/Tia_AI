@@ -6,12 +6,13 @@ def _source() -> str:
     return (root / "app/services/automations.py").read_text(encoding="utf-8")
 
 
-def test_cancelled_jobs_are_not_reactivated_by_planner() -> None:
+def test_manual_cancellations_stay_terminal_but_lifecycle_cancellations_can_replan() -> None:
     source = _source()
+    assert "REPLANNABLE_CANCELLATION_REASONS" in source
     planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]
-    assert 'existing.status in {"queued", "failed"}' in planner
-    assert 'existing.status in {"queued", "failed", "cancelled"}' not in planner
-    assert "Cancelled jobs are terminal" in planner
+    assert "renewable_cancel = _cancelled_job_can_be_replanned(existing)" in planner
+    assert 'existing.status in {"queued", "failed"} or renewable_cancel' in planner
+    assert "Manual job cancellations stay terminal" in planner
 
 
 def test_planner_cancels_only_safely_queued_stale_deliveries() -> None:

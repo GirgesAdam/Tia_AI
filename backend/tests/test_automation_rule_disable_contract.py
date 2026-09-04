@@ -21,3 +21,9 @@ def test_rule_disable_does_not_claim_processing_or_already_sent_dispatches() -> 
     update = source.split("def update_rule(", 1)[1].split("@router.get(\"/overview\"", 1)[0]
     assert 'MessageDispatch.status == "processing"' not in update
     assert 'MessageDispatch.status == "sent"' not in update
+
+
+def test_rule_disable_marks_cancellation_as_lifecycle_renewable_not_manual_job_cancel() -> None:
+    source = _route_source()
+    update = source.split("def update_rule(", 1)[1].split("@router.get(\"/overview\"", 1)[0]
+    assert '"reason": "rule_disabled_by_admin"' in update
