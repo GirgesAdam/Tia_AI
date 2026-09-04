@@ -1,0 +1,81 @@
+name: Live Agent UX Review Once
+
+on:
+  push:
+    branches:
+      - feat/core-product-hardening
+    paths:
+      - .github/workflows/live-agent-ux-review-once.yml
+      - backend/scripts/run_live_agent_ux_review.py
+
+permissions:
+  contents: read
+
+jobs:
+  ux-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_live_ux_unused
+      SUPABASE_SECRET_KEY: sb_secret_live_ux_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
+      DEMO_MODE: "false"
+      DEMO_ALLOW_EXTERNAL_DISPATCH: "false"
+      CORS_ORIGINS: ""
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify required secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$DATABASE_URL"
+      - name: Compile UX runner
+        run: python -m py_compile scripts/run_live_agent_ux_review.py
+      - name: Run twenty live conversations
+        id: review
+        continue-on-error: true
+        run: |
+          python -m scripts.run_live_agent_ux_review \
+            --workspace-slug tia \
+            --report artifacts/live-agent-ux-review.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-ux-review
+          path: backend/artifacts/live-agent-ux-review.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Fail if review found issues
+        if: steps.review.outcome == 'failure'
+        working-directory: .
+        run: exit 1
