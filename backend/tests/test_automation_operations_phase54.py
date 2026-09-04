@@ -82,7 +82,8 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
     assert "retryAutomationJob" in page
     assert "cancelAutomationJob" in page
     assert "visibleProductRuleKeys" in page
-    assert '"no_show_followup"' in page
+    assert '"cancellation_recovery"' in page
+    assert '"no_show_followup"' not in page
     assert "saveAutomationTiming" in page
     assert '/automations/jobs/${id}/retry' in actions
     assert '/automations/jobs/${id}/cancel' in actions

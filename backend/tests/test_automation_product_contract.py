@@ -16,7 +16,6 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
         "post_visit_followup",
         "cancellation_recovery",
         "lead_not_booked_followup",
-        "no_show_followup",
     }
 
     reminder = rules["appointment_reminder_6h"]
@@ -30,7 +29,6 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
     assert rules["post_visit_followup"].enabled_by_default is False
     assert rules["cancellation_recovery"].enabled_by_default is False
     assert rules["lead_not_booked_followup"].enabled_by_default is False
-    assert rules["no_show_followup"].enabled_by_default is False
 
 
 def test_rule_timing_is_data_not_a_separate_rule_per_delay() -> None:
@@ -75,7 +73,9 @@ def test_admin_ui_keeps_optional_rules_and_timing_simple() -> None:
         encoding="utf-8"
     )
 
-    assert '"no_show_followup"' in page
+    assert '"cancellation_recovery"' in page
+    assert '"lead_not_booked_followup"' in page
+    assert '"no_show_followup"' not in page
     assert "saveAutomationTiming" in page
     assert 'name="timing_value"' in page
     assert 'name="timing_unit"' in page

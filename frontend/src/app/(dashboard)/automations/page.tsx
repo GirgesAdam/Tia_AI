@@ -19,7 +19,6 @@ const names: Record<string, string> = {
   post_visit_followup: "متابعة بعد الزيارة",
   cancellation_recovery: "استرجاع الحجوزات الملغاة",
   lead_not_booked_followup: "متابعة العميل اللي ماحجزش",
-  no_show_followup: "متابعة عدم الحضور",
 };
 
 const descriptions: Record<string, string> = {
@@ -28,7 +27,6 @@ const descriptions: Record<string, string> = {
   post_visit_followup: "رسالة واحدة للاطمئنان، عرض المساعدة أو حجز الجلسة التالية، وطلب التقييم.",
   cancellation_recovery: "اختياري: تتواصل مع العميل بعد إلغاء الموعد وتعرض عليه ترتيب موعد جديد.",
   lead_not_booked_followup: "اختياري: تتابع العميل المهتم لو لسه ماحجزش وتساعده يكمل الحجز.",
-  no_show_followup: "اختياري: تتواصل مع العميل بعد عدم الحضور لعرض إعادة الحجز.",
 };
 
 const visibleProductRuleKeys = new Set([
@@ -37,10 +35,9 @@ const visibleProductRuleKeys = new Set([
   "post_visit_followup",
   "cancellation_recovery",
   "lead_not_booked_followup",
-  "no_show_followup",
 ]);
 
-const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "lead_not_booked_followup", "no_show_followup"]);
+const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "lead_not_booked_followup"]);
 
 function attentionLabel(job: AutomationJob): string | null {
   if (job.attention_reason === "execution_failed") return "لم تكتمل العملية تلقائيًا";

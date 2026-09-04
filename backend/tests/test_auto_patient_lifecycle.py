@@ -16,7 +16,7 @@ def test_patient_lifecycle_keeps_only_essential_rule_enabled_by_default() -> Non
     assert "appointment_reminder_2h" not in rules
     assert rules["post_visit_followup"].enabled_by_default is False
     assert rules["booking_confirmation"].enabled_by_default is False
-    assert rules["no_show_followup"].enabled_by_default is False
+    assert "no_show_followup" not in rules
 
 
 def test_default_offsets_are_starting_values_and_anchor_to_real_events() -> None:

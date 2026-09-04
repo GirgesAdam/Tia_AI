@@ -47,6 +47,7 @@ AUTOMATION_JOB_STALE_MINUTES = 10
 LEAD_FOLLOWUP_RULE_KEY = "lead_not_booked_followup"
 LEAD_FOLLOWUP_DEDUPE_PREFIX = "automation:lead-not-booked:"
 LEAD_FOLLOWUP_ELIGIBLE_STATUSES = frozenset({"new", "contacted", "qualified"})
+RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,13 @@ def ensure_default_rules(
             select(AutomationRule).where(AutomationRule.workspace_id == workspace_id)
         )
     }
-    created = False
+    changed = False
+    for retired_key in RETIRED_AUTOMATION_RULE_KEYS:
+        retired = existing.get(retired_key)
+        if retired is not None and retired.enabled:
+            retired.enabled = False
+            changed = True
+
     for definition in DEFAULT_AUTOMATION_RULES:
         if definition.key in existing:
             continue
@@ -109,8 +116,8 @@ def ensure_default_rules(
         )
         db.add(row)
         existing[row.key] = row
-        created = True
-    if created:
+        changed = True
+    if changed:
         if commit:
             db.commit()
         else:
@@ -165,7 +172,10 @@ def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
     if rule.trigger_kind == "after_no_show":
         return appointment.status == "no_show" and appointment.no_show_at is not None
     if rule.trigger_kind == "after_cancelled":
-        return appointment.status == "cancelled" and appointment.cancelled_at is not None
+        return (
+            (appointment.status == "cancelled" and appointment.cancelled_at is not None)
+            or (appointment.status == "no_show" and appointment.no_show_at is not None)
+        )
     return False
 
 
@@ -218,9 +228,18 @@ def _candidate_appointments(
             db.scalars(
                 select(Appointment).where(
                     Appointment.workspace_id == workspace_id,
-                    Appointment.status == "cancelled",
-                    Appointment.cancelled_at.is_not(None),
-                    Appointment.cancelled_at >= oldest,
+                    or_(
+                        and_(
+                            Appointment.status == "cancelled",
+                            Appointment.cancelled_at.is_not(None),
+                            Appointment.cancelled_at >= oldest,
+                        ),
+                        and_(
+                            Appointment.status == "no_show",
+                            Appointment.no_show_at.is_not(None),
+                            Appointment.no_show_at >= oldest,
+                        ),
+                    ),
                 )
             )
         )
@@ -549,7 +568,7 @@ def plan_automation_jobs(
                 appointment_start_at=appointment.start_at,
                 completed_at=appointment.completed_at,
                 no_show_at=appointment.no_show_at,
-                cancelled_at=appointment.cancelled_at,
+                cancelled_at=appointment.cancelled_at or appointment.no_show_at,
             )
             if when is None:
                 continue
@@ -1726,6 +1745,7 @@ def automation_operations_overview(
             .where(
                 AutomationRule.workspace_id == workspace_id,
                 AutomationRule.enabled.is_(True),
+                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS),
             )
         )
         or 0

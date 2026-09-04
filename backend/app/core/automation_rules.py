@@ -74,17 +74,6 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         max_lateness_minutes=1440,
         enabled_by_default=False,
     ),
-    DefaultAutomationRule(
-        key="no_show_followup",
-        name="No-show recovery follow-up",
-        trigger_kind="after_no_show",
-        offset_minutes=30,
-        channel="whatsapp",
-        template_name="tia_no_show_followup_ar",
-        template_language="ar",
-        max_lateness_minutes=720,
-        enabled_by_default=False,
-    ),
 )
 
 
