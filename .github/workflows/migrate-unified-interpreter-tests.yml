@@ -1,0 +1,142 @@
+name: Migrate stale interpreter tests
+
+on:
+  push:
+    branches: [feat/core-product-hardening]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Update tests to unified interpreter
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          replacements = {
+              Path('backend/tests/test_cohort_campaign_messaging_phase69.py'): [
+                  ('app/agents/semantic_router.py', 'app/agents/turn_models.py'),
+              ],
+              Path('backend/tests/test_followup_tasks_core.py'): [
+                  ('backend/app/agents/semantic_router.py', 'backend/app/agents/turn_models.py'),
+              ],
+              Path('backend/tests/test_historical_data_ai_retrieval_phase66.py'): [
+                  ('app/agents/semantic_router.py', 'app/agents/turn_models.py'),
+              ],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'missing expected text in {path}: {old}')
+                  text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8')
+
+          path = Path('backend/tests/test_realtime_recovery.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'from app.agents import flow_interpreter, semantic_router',
+              'from app.agents import turn_interpreter',
+          )
+
+          clock_block = re.compile(
+              r'def test_semantic_router_receives_clinic_local_clock\(monkeypatch\) -> None:.*?\n\ndef test_verified_booking_tool_fallback_formats_slots_without_internal_ids',
+              re.S,
+          )
+          clock_replacement = '''def test_unified_turn_interpreter_receives_clinic_local_clock() -> None:
+              local_now = datetime.fromisoformat("2026-08-19T18:30:00+03:00")
+              prompt = turn_interpreter._interpreter_system_prompt(
+                  timezone_name="Africa/Cairo",
+                  local_now=local_now,
+                  active_flow=False,
+              )
+
+              assert "Africa/Cairo" in prompt
+              assert "2026-08-19T18:30:00+03:00" in prompt
+              assert "Resolve clear relative dates/times" in prompt
+              assert "requested_start_time" in prompt
+
+
+          def test_unified_active_flow_prompt_receives_clinic_local_clock() -> None:
+              local_now = datetime.fromisoformat("2026-08-19T18:30:00+03:00")
+              prompt = turn_interpreter._interpreter_system_prompt(
+                  timezone_name="Africa/Cairo",
+                  local_now=local_now,
+                  active_flow=True,
+              )
+
+              assert "Africa/Cairo" in prompt
+              assert "2026-08-19T18:30:00+03:00" in prompt
+              assert "Active workflow present: true" in prompt
+
+
+          def test_verified_booking_tool_fallback_formats_slots_without_internal_ids'''
+          text, count = clock_block.subn(clock_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('failed to replace stale clock tests')
+
+          choices_block = re.compile(
+              r'def test_flow_interpreter_exposes_service_choices_for_follow_up_selection\(monkeypatch\) -> None:.*?\n\ndef test_prerequisite_service_index_selection_updates_semantic_state_without_write',
+              re.S,
+          )
+          choices_replacement = '''def test_unified_interpreter_exposes_service_choices_for_follow_up_selection() -> None:
+              flow = SimpleNamespace(
+                  option_snapshot={
+                      "ok": True,
+                      "needs_service_choice": True,
+                      "services": [
+                          {
+                              "service_id": "11111111-1111-4111-8111-111111111111",
+                              "service_name": "ليزر إزالة الشعر",
+                          },
+                          {
+                              "service_id": "22222222-2222-4222-8222-222222222222",
+                              "service_name": "ليزر إزالة الشعر — Demo",
+                          },
+                      ],
+                  },
+              )
+
+              summary = turn_interpreter._option_summary(flow)
+
+              assert summary["services"] == [
+                  {
+                      "index": 1,
+                      "id": "11111111-1111-4111-8111-111111111111",
+                      "name": "ليزر إزالة الشعر",
+                  },
+                  {
+                      "index": 2,
+                      "id": "22222222-2222-4222-8222-222222222222",
+                      "name": "ليزر إزالة الشعر — Demo",
+                  },
+              ]
+
+
+          def test_prerequisite_service_index_selection_updates_semantic_state_without_write'''
+          text, count = choices_block.subn(choices_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('failed to replace stale service-choice test')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Remove migration workflow and commit
+        run: |
+          rm .github/workflows/migrate-unified-interpreter-tests.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/tests .github/workflows/migrate-unified-interpreter-tests.yml
+          git diff --cached --check
+          git commit -m "test(agent): migrate legacy interpreter coverage"
+          git push origin HEAD:feat/core-product-hardening
