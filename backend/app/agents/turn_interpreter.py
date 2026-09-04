@@ -9,15 +9,20 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.clinic_grounding import validate_grounded_entity_ids
-from app.agents.flow_interpreter import ClearableFlowEntity, FlowTurnDecision
 from app.agents.llm_runtime import invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_interpreter_emergency_model,
     build_realtime_interpreter_fallback_model,
     build_realtime_interpreter_model,
 )
-from app.agents.semantic_router import (
+from app.agents.structured_output import (
+    StructuredOutputError,
+    invoke_typed_structured_output,
+)
+from app.agents.turn_models import (
+    ClearableFlowEntity,
     FlowSignal,
+    FlowTurnDecision,
     HandoffCategory,
     PackageIntent,
     Priority,
@@ -27,10 +32,6 @@ from app.agents.semantic_router import (
     SemanticDomain,
     SemanticEntityHints,
     _require_all_schema_fields,
-)
-from app.agents.structured_output import (
-    StructuredOutputError,
-    invoke_typed_structured_output,
 )
 from app.core.config import settings
 from app.models.conversation_flow_state import ConversationFlowState

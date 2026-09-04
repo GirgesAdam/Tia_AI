@@ -23,7 +23,6 @@ from app.agents.clinic_grounding import (
     choice_snapshot_from_grounded_facts,
     grounded_catalog_facts,
 )
-from app.agents.flow_interpreter import FlowTurnDecision, interpret_active_flow_turn
 from app.agents.grounded_response import compose_grounded_customer_reply
 from app.agents.llm_runtime import LLMProviderError
 from app.agents.response_guard import sanitize_customer_reply
@@ -35,13 +34,10 @@ from app.agents.semantic_actions import (
     reschedule_tool_args,
     select_slot_from_structured_selection,
 )
-from app.agents.semantic_router import (
-    SemanticCapabilityDecision,
-    route_customer_message,
-)
 from app.agents.tia_customer_agent import run_tia_customer_agent
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.agents.turn_interpreter import interpret_customer_turn
+from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
 from app.core.config import settings
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
@@ -1916,73 +1912,49 @@ def _run_after_inbound(
     )
     timezone_name, local_now = _workspace_clock(workspace)
     flow_turn: FlowTurnDecision | None = None
-    grounded_mode = settings.agent_unified_turn_interpreter_enabled
+    grounded_mode = True
     catalog_started = perf_counter()
-    clinic_catalog = build_clinic_catalog(db, workspace) if grounded_mode else {}
-    if grounded_mode:
-        logger.info(
-            "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
-            run_id,
-            len(clinic_catalog.get("services", [])),
-            len(clinic_catalog.get("branches", [])),
-            len(clinic_catalog.get("doctors", [])),
-            int((perf_counter() - catalog_started) * 1000),
-        )
+    clinic_catalog = build_clinic_catalog(db, workspace)
+    logger.info(
+        "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
+        run_id,
+        len(clinic_catalog.get("services", [])),
+        len(clinic_catalog.get("branches", [])),
+        len(clinic_catalog.get("doctors", [])),
+        int((perf_counter() - catalog_started) * 1000),
+    )
     semantic_started = perf_counter()
-    if grounded_mode:
-        unified_turn = interpret_customer_turn(
-            flow=flow,
-            history=history,
-            timezone_name=timezone_name,
-            local_now=local_now,
-            clinic_catalog=clinic_catalog,
-        )
-        semantic_decision = _package_intent_non_booking(unified_turn.as_semantic_decision())
-        semantic_decision = _with_implicit_primary_branch(
-            semantic_decision, workspace=workspace, clinic_catalog=clinic_catalog,
-        )
-        if flow is not None:
-            flow_turn = unified_turn.as_flow_turn_decision().model_copy(update={
+    unified_turn = interpret_customer_turn(
+        flow=flow,
+        history=history,
+        timezone_name=timezone_name,
+        local_now=local_now,
+        clinic_catalog=clinic_catalog,
+    )
+    semantic_decision = _package_intent_non_booking(unified_turn.as_semantic_decision())
+    semantic_decision = _with_implicit_primary_branch(
+        semantic_decision,
+        workspace=workspace,
+        clinic_catalog=clinic_catalog,
+    )
+    if flow is not None:
+        flow_turn = unified_turn.as_flow_turn_decision().model_copy(
+            update={
                 "capabilities": list(semantic_decision.capabilities),
                 "package_intent": semantic_decision.package_intent,
                 "entity_hints": semantic_decision.entity_hints,
-            })
-            turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
-            inherited_capabilities = (
-                _persistent_flow_capabilities(flow.flow_type, flow.capabilities)
-                if flow_turn.action != "interrupt" and not turn_local_side_read
-                else []
-            )
-        else:
-            turn_local_side_read = False
-            inherited_capabilities = []
-        semantic_stage = "unified-turn-interpreter"
-    elif flow is not None:
-        flow_turn = interpret_active_flow_turn(
-            flow=flow,
-            history=history,
-            timezone_name=timezone_name,
-            local_now=local_now,
+            }
         )
-        semantic_decision = _package_intent_non_booking(_flow_turn_as_capability_decision(flow_turn))
-        flow_turn = flow_turn.model_copy(update={
-            "capabilities": list(semantic_decision.capabilities),
-            "package_intent": semantic_decision.package_intent,
-        })
         turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
         inherited_capabilities = (
             _persistent_flow_capabilities(flow.flow_type, flow.capabilities)
             if flow_turn.action != "interrupt" and not turn_local_side_read
             else []
         )
-        semantic_stage = "flow-interpreter"
     else:
         turn_local_side_read = False
-        semantic_decision = _package_intent_non_booking(route_customer_message(
-            history=history, timezone_name=timezone_name, local_now=local_now,
-        ))
         inherited_capabilities = []
-        semantic_stage = "semantic-router"
+    semantic_stage = "unified-turn-interpreter"
     logger.info(
         "Tia turn run_id=%s stage=%s duration_ms=%s capabilities=%s risks=%s",
         run_id,

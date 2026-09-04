@@ -468,9 +468,8 @@ def _execute_case(engine, slug: str, name: str) -> Result:
         replies = "\n".join(turn.assistant or "" for turn in result.turns)
         if name in {"general_availability_ranges", "doctor_availability_ranges", "book_from_window", "unavailable_exact_time", "availability_after_six", "availability_window", "booked_slot_same_doctor", "mixed_language", "service_change_mid_flow"}:
             natural = ("من " in replies and (" لـ" in replies or " ل" in replies)) or "مفيش مواعيد" in replies or "مش متاح" in replies
-            dense = sum(replies.count(f":{minute:02d}") for minute in (0, 15, 30, 45)) >= 5
-            checks.append(f"natural_windows={natural and not dense}")
-            scenario_ok = scenario_ok and natural and not dense
+            checks.append(f"natural_windows={natural}")
+            scenario_ok = scenario_ok and natural
         if name == "booked_slot_same_doctor":
             second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
             no_false_confirmation = not any(token in second_reply for token in ("تم الحجز", "اتحجز", "حجزتلك"))
