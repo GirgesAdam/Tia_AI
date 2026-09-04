@@ -15,7 +15,7 @@ of a workflow builder:
 
 - `booking_confirmation` — optional booking confirmation.
 - `appointment_reminder_6h` — appointment reminder. The historical key is kept
-  for database compatibility, but the admin now controls the timing.
+  for database compatibility, but the admin controls the timing.
 - `post_visit_followup` — optional post-visit message that checks in, offers help
   or the next booking, and asks for feedback in one message.
 - `no_show_followup` — optional no-show recovery message.
@@ -77,18 +77,42 @@ Current default template names:
 - `tia_post_visit_followup_ar`
 - `tia_no_show_followup_ar`
 
-Template variable contracts:
+The WhatsApp outbox sends the exact number of positional body parameters required
+by the selected template. Current variable contracts are:
 
-- appointment reminder: customer name, service, appointment time, clinic name.
-- post-visit follow-up: customer name, service, session date.
-- booking/no-show templates retain the existing appointment variable contract.
+- appointment reminder — **4 parameters**: customer name, service, appointment
+  date, appointment time.
+- post-visit follow-up — **3 parameters**: customer name, service, session date.
+- booking/no-show templates retain their existing appointment variable contract.
 
 The reminder copy must stay timing-neutral because the admin controls when it is
-sent. Do not hardcode "6 hours" in the approved Meta template.
+sent. Do not hardcode "6 hours" or any other delay inside the approved template.
+It also does not need a branch placeholder in the current single-location patient
+experience.
 
-Recommended post-visit intent is one concise message: check how the visit went,
-offer help or the next booking, and invite feedback. Do not split these into
-multiple automatic messages.
+Recommended natural Arabic copy:
+
+- `tia_appointment_reminder_ar`: `أهلًا {{1}} 👋 بفكرك بموعدك لـ{{2}} يوم {{3}} الساعة {{4}}. لو محتاجة تعدّلي الموعد ابعتيلي هنا.`
+- `tia_post_visit_followup_ar`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟ لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، ويسعدنا نعرف تقييمك للجلسة.`
+
+The post-visit intent is intentionally one concise message: check how the visit
+went, offer help or the next booking, and invite feedback. Do not split these
+into multiple automatic messages.
+
+### AI CRM follow-ups and the 24-hour WhatsApp window
+
+Existing AI CRM follow-ups use free-form text only while WhatsApp's 24-hour
+customer-service window is open. Outside that window, Tia does not try to bypass
+Meta policy with free-form text.
+
+For an existing CRM follow-up that needs proactive delivery outside the window,
+configure a Meta-approved template on the WhatsApp channel connection under
+`config.ai_followup_template`. If that approved template is not configured, the
+existing CRM follow-up path falls back to a human CRM task rather than attempting
+a provider-rejected send.
+
+This is transport safety for the existing CRM runtime; it is not a new admin task
+automation feature.
 
 ## WhatsApp outbox worker
 
