@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8000/api/v1/automations/adapter/tick",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/automations/adapter/tick' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -62,7 +62,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://host.docker.internal:8000/api/v1/automations/adapter/jobs/' + $json.job_id + '/execute' }}",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/automations/adapter/jobs/' + $json.job_id + '/execute' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -84,7 +84,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8000/api/v1/automations/adapter/clinic-sync/tick",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/automations/adapter/clinic-sync/tick' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
