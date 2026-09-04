@@ -2258,7 +2258,7 @@ def _run_after_inbound(
         if (
             prefetch_direct is None
             and "package_refund_quote" not in policy.capabilities
-            and str(semantic_decision.package_intent) in {"purchase", "inquire"}
+            and str(semantic_decision.package_intent) == "purchase"
         ):
             package_intent_reply = _verified_package_intent_reply(
                 intent=str(semantic_decision.package_intent),

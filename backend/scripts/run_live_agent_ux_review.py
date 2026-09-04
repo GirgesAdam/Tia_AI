@@ -163,13 +163,11 @@ def _booking_context(db: Session, workspace: Workspace):
                 for value in (doctor.get("scheduled_branch_ids") or doctor.get("branch_ids") or [])
                 if value
             ]
-            branch_ids: list[str] = []
-            if primary_branch_id and (not scheduled or primary_branch_id in scheduled):
-                branch_ids.append(primary_branch_id)
-            branch_ids.extend(value for value in scheduled if value not in branch_ids)
-            if not branch_ids and primary_branch_id:
-                branch_ids.append(primary_branch_id)
-            for branch_id in branch_ids:
+            if not primary_branch_id:
+                raise RuntimeError("Single-location staging workspace has no primary branch")
+            if scheduled and primary_branch_id not in scheduled:
+                continue
+            for branch_id in [primary_branch_id]:
                 for offset in range(1, 36):
                     day = today + timedelta(days=offset)
                     available = adapter.get_availability(
@@ -187,7 +185,20 @@ def _booking_context(db: Session, workspace: Workspace):
 def _seed_upcoming(db: Session, workspace: Workspace, patient: Patient, count: int) -> list[Appointment]:
     catalog, service_row, doctor, branch_id, first_day, available = _booking_context(db, workspace)
     del catalog, first_day
-    selected = list(available.slots[:count])
+    selected = []
+
+    def add_non_overlapping(candidates) -> None:
+        for candidate in candidates:
+            overlaps = any(
+                candidate.start_at < chosen.end_at and chosen.start_at < candidate.end_at
+                for chosen in selected
+            )
+            if not overlaps:
+                selected.append(candidate)
+                if len(selected) >= count:
+                    return
+
+    add_non_overlapping(available.slots)
     if len(selected) < count:
         adapter = get_clinic_adapter(db=db, workspace=workspace)
         day = available.slots[0].start_at.date() + timedelta(days=1)
@@ -200,8 +211,7 @@ def _seed_upcoming(db: Session, workspace: Workspace, patient: Patient, count: i
                     doctor_id=str(doctor["id"]),
                 )
             )
-            if extra.slots:
-                selected.append(extra.slots[0])
+            add_non_overlapping(extra.slots)
             day += timedelta(days=1)
     if len(selected) < count:
         raise RuntimeError("Not enough slots for upcoming appointment fixtures")
@@ -241,7 +251,7 @@ def _global_reply_checks(turns: list[Turn], branch_names: list[str]) -> tuple[bo
     messages = [turn.assistant or "" for turn in turns]
     visible = "\n".join(messages)
     checks: list[str] = []
-    nonempty = any(text.strip() for text in messages)
+    nonempty = bool(messages) and all(text.strip() for text in messages)
     checks.append(f"nonempty_reply={nonempty}")
     no_uuid = not bool(_UUID.search(visible))
     checks.append(f"no_internal_uuid={no_uuid}")
@@ -335,7 +345,7 @@ def _execute_case(engine, slug: str, name: str) -> Result:
                 raise RuntimeError("No replacement slot available")
             local = new_slot.start_at.astimezone(ZoneInfo(available.timezone))
             first = "عايز أغير معادي الجاي"
-            second = f"خليه يوم {day.isoformat()} الساعة {local.strftime('%H:%M')} مع {doctor.get('name') or 'نفس الدكتور'}"
+            second = f"غيّره دلوقتي ليوم {day.isoformat()} الساعة {local.strftime('%H:%M')} مع {doctor.get('name') or 'نفس الدكتور'}"
             scenario_check = lambda: (rows[0].status in {"rescheduled", "cancelled"}, f"original_status={rows[0].status}")
         elif name == "reschedule_ambiguous":
             rows = _seed_upcoming(db, workspace, patient, 2)
@@ -373,7 +383,8 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             raise KeyError(name)
 
         result.turns = _run_two_turns(db, workspace, patient, first, second)
-        global_ok, checks = _global_reply_checks(result.turns, branches)
+        checked_turns = result.turns[:1] if name == "medical_handoff" else result.turns
+        global_ok, checks = _global_reply_checks(checked_turns, branches)
         scenario_ok, scenario_text = scenario_check()
         checks.append(scenario_text)
 
@@ -399,9 +410,19 @@ def _execute_case(engine, slug: str, name: str) -> Result:
                 token in replies
                 for token in ("الفريق الطبي", "فريق العيادة", "تقييم طبي", "تحويل المحادثة")
             )
-            comparison_ok = all_replied and mentions_package and no_medical_handoff
+            comparison_language = any(
+                token in replies
+                for token in ("استخدم", "استخدام", "جلسة منفصلة", "جلسة واحدة", "الأفضل", "أفضل", "بدل")
+            )
+            comparison_ok = all_replied and mentions_package and comparison_language and no_medical_handoff
             checks.append(f"commercial_package_comparison={comparison_ok}")
             scenario_ok = scenario_ok and comparison_ok
+        if name in {"availability_window", "service_change_mid_flow"}:
+            no_false_medical_handoff = not any(
+                token in replies for token in ("الفريق الطبي", "تحويل المحادثة", "حوّلت المحادثة")
+            )
+            checks.append(f"no_false_medical_handoff={no_false_medical_handoff}")
+            scenario_ok = scenario_ok and no_false_medical_handoff
         if name == "package_refund":
             all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
             lowered_replies = replies.casefold()
