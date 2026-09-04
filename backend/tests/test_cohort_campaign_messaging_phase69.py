@@ -259,7 +259,7 @@ def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_s
 
 def test_customer_opt_out_is_semantic_tool_not_keyword_router() -> None:
     root = Path(__file__).resolve().parents[1]
-    router = (root / "app/agents/semantic_router.py").read_text(encoding="utf-8")
+    router = (root / "app/agents/turn_models.py").read_text(encoding="utf-8")
     policy = (root / "app/agents/capability_policy.py").read_text(encoding="utf-8")
     tools = (root / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
     prompt = (root / "app/agents/prompts/customer_service.py").read_text(encoding="utf-8")

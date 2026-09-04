@@ -184,7 +184,7 @@ def test_historical_analytics_uses_full_history_and_repeat_patients() -> None:
 def test_customer_history_is_read_only_semantic_capability() -> None:
     root = Path(__file__).resolve().parents[1]
     policy = (root / "app/agents/capability_policy.py").read_text(encoding="utf-8")
-    router = (root / "app/agents/semantic_router.py").read_text(encoding="utf-8")
+    router = (root / "app/agents/turn_models.py").read_text(encoding="utf-8")
     customer_agent = (root / "app/agents/tia_customer_agent.py").read_text(encoding="utf-8")
     assert '"customer_history": frozenset({"get_customer_history"})' in policy
     assert '"customer_history"' in router
