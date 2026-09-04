@@ -18,8 +18,16 @@ Import these three workflows:
 - `tia_whatsapp_outbox_worker.json`
 - `tia_automation_scheduler.json`
 
-Replace `https://YOUR_TIA_BACKEND_DOMAIN` with the public HTTPS FastAPI URL in
-every Tia HTTP Request node.
+Set this environment variable on the n8n runtime:
+
+```text
+TIA_API_BASE_URL=https://YOUR_PUBLIC_TIA_BACKEND_DOMAIN
+```
+
+Use the public HTTPS FastAPI origin only, with no trailing slash. All active Tia
+HTTP Request nodes read this value at runtime. For local Docker development the
+workflow JSON keeps `http://host.docker.internal:8000` as a fallback, so no URL
+editing is required when switching between local and hosted environments.
 
 ## Credentials kept in n8n
 
@@ -104,10 +112,10 @@ stored on the durable schedule and retried with bounded exponential backoff.
 
 ## Retry policy
 
-n8n HTTP/transport nodes use bounded node retries. Tia remains responsible for
-business retries, outbox reclaim, sync leases, checkpoints, and scheduler
-backoff. n8n must never calculate a new sync cursor or decide to skip a failed
-record.
+n8n may retry idempotent Tia HTTP requests, but provider send nodes must not be
+blindly retried. Tia remains responsible for business retries, outbox reclaim,
+sync leases, checkpoints, and scheduler backoff. This avoids duplicate WhatsApp
+or email sends when a provider response is ambiguous.
 
 ## Staging vs real runtime
 
@@ -117,11 +125,12 @@ check.
 
 ## First live test order
 
-1. Import/publish the automation scheduler and confirm a real worker heartbeat.
-2. Provision/import WhatsApp and send a staging WhatsApp text from a phone you control.
-3. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks.
-4. Enable one approved automation rule and verify a real reminder end-to-end.
-5. Configure an external clinic connector, run one manual sync, and verify its checkpoint.
-6. Enable scheduled sync and verify a later scheduler tick advances or confirms the checkpoint without duplicates.
+1. Deploy the backend and set `TIA_API_BASE_URL` in n8n.
+2. Import/publish the automation scheduler and confirm a real worker heartbeat.
+3. Provision/import WhatsApp and send a staging WhatsApp text from a phone you control.
+4. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks.
+5. Enable one approved automation rule and verify a real reminder end-to-end.
+6. Configure an external clinic connector, run one manual sync, and verify its checkpoint.
+7. Enable scheduled sync and verify a later scheduler tick advances or confirms the checkpoint without duplicates.
 
 Do not use real patient contact data for the first live tests.
