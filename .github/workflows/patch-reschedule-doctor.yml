@@ -22,67 +22,46 @@ jobs:
 
           tools = Path('backend/app/agents/tools/clinic_tools.py')
           text = tools.read_text(encoding='utf-8')
-          old = '''    def get_reschedule_options(
-              booking_date: str,
-              service_id: str = "",
-              service_search: str = "",
-              requested_start_time: str = "",
-              not_before_time: str = "",
-              not_after_time: str = "",
-          ) -> str:'''
-          new = '''    def get_reschedule_options(
-              booking_date: str,
-              service_id: str = "",
-              doctor_id: str = "",
-              service_search: str = "",
-              requested_start_time: str = "",
-              not_before_time: str = "",
-              not_after_time: str = "",
-          ) -> str:'''
-          if old not in text:
-              raise SystemExit('reschedule signature not found')
-          text = text.replace(old, new, 1)
-          old = '''        inputs = {
-              "booking_date": booking_date,
-              "service_id": service_id,
-              "service_search": service_search,'''
-          new = '''        inputs = {
-              "booking_date": booking_date,
-              "service_id": service_id,
-              "doctor_id": doctor_id or None,
-              "service_search": service_search,'''
-          if old not in text:
-              raise SystemExit('reschedule inputs block not found')
-          text = text.replace(old, new, 1)
-          old = '''                doctor_id=current.doctor_id,
-                  requested_start=requested_start,'''
-          new = '''                doctor_id=doctor_id or current.doctor_id,
-                  requested_start=requested_start,'''
-          if old not in text:
-              raise SystemExit('reschedule availability doctor target not found')
-          text = text.replace(old, new, 1)
+          marker = '        service_id: str = "",\n        service_search: str = "",\n        requested_start_time: str = "",'
+          replacement = '        service_id: str = "",\n        doctor_id: str = "",\n        service_search: str = "",\n        requested_start_time: str = "",'
+          if marker not in text:
+              raise SystemExit('reschedule signature marker not found')
+          text = text.replace(marker, replacement, 1)
+
+          marker = '            "service_id": service_id,\n            "service_search": service_search,\n            "requested_start_time": requested_start_time,'
+          replacement = '            "service_id": service_id,\n            "doctor_id": doctor_id or None,\n            "service_search": service_search,\n            "requested_start_time": requested_start_time,'
+          if marker not in text:
+              raise SystemExit('reschedule inputs marker not found')
+          text = text.replace(marker, replacement, 1)
+
+          marker = '                doctor_id=current.doctor_id,\n                requested_start=requested_start,'
+          replacement = '                doctor_id=doctor_id or current.doctor_id,\n                requested_start=requested_start,'
+          if marker not in text:
+              raise SystemExit('reschedule doctor target marker not found')
+          text = text.replace(marker, replacement, 1)
           tools.write_text(text, encoding='utf-8')
 
           chat = Path('backend/app/services/agent_chat.py')
           text = chat.read_text(encoding='utf-8')
-          old = '''        if grounded_mode:
-              reschedule_arguments["service_id"] = service_id
-          else:'''
-          new = '''        if grounded_mode:
-              reschedule_arguments["service_id"] = service_id
-              reschedule_arguments["doctor_id"] = doctor_id
-          else:'''
-          if old not in text:
-              raise SystemExit('grounded reschedule args block not found')
-          text = text.replace(old, new, 1)
+          marker = '        if grounded_mode:\n            reschedule_arguments["service_id"] = service_id\n        else:'
+          replacement = '        if grounded_mode:\n            reschedule_arguments["service_id"] = service_id\n            reschedule_arguments["doctor_id"] = doctor_id\n        else:'
+          if marker not in text:
+              raise SystemExit('grounded reschedule args marker not found')
+          text = text.replace(marker, replacement, 1)
           chat.write_text(text, encoding='utf-8')
+
+          test = Path('backend/tests/test_reschedule_doctor_change_contract.py')
+          test.write_text('''from pathlib import Path\n\n\ndef test_grounded_reschedule_propagates_requested_doctor() -> None:\n    backend = Path(__file__).resolve().parent.parent\n    tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")\n    chat = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")\n\n    assert "doctor_id: str = \\\"\\\"" in tools\n    assert "doctor_id=doctor_id or current.doctor_id" in tools\n    assert "reschedule_arguments[\\\"doctor_id\\\"] = doctor_id" in chat\n''', encoding='utf-8')
           PY
+      - name: Run focused contract test
+        working-directory: backend
+        run: python -m pytest tests/test_reschedule_doctor_change_contract.py -q
       - name: Remove patch workflow and commit
         run: |
           rm .github/workflows/patch-reschedule-doctor.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/app .github/workflows/patch-reschedule-doctor.yml
+          git add backend/app backend/tests/test_reschedule_doctor_change_contract.py .github/workflows/patch-reschedule-doctor.yml
           git diff --cached --check
           git commit -m "fix(agent): support doctor changes while rescheduling"
           git push origin HEAD:feat/core-product-hardening
