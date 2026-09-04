@@ -83,3 +83,25 @@ def test_manual_live_review_is_transcript_first_and_never_runs_all_cases_by_defa
     assert 'default_names' not in source
     assert '"PASS"' not in source
     assert '"FAIL"' not in source
+
+
+def test_demo_chat_uses_the_exact_production_agent_endpoint_and_service() -> None:
+    """Demo may change auth/data limits, never the customer Agent implementation."""
+    repo = Path(__file__).resolve().parents[2]
+    demo_action = (
+        repo
+        / "frontend"
+        / "src"
+        / "app"
+        / "(dashboard)"
+        / "agent-demo"
+        / "actions.ts"
+    ).read_text(encoding="utf-8")
+    production_route = (
+        repo / "backend" / "app" / "api" / "routes" / "agent.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'tiaRequest<AgentChatResponse>("/agent/chat"' in demo_action
+    assert "from app.services.agent_chat import AgentChatError, run_agent_chat" in production_route
+    assert "return run_agent_chat(" in production_route
+    assert "/demo/agent" not in demo_action
