@@ -132,47 +132,57 @@ def _package_patient(db: Session, workspace: Workspace) -> tuple[Patient, Patien
 
 
 def _booking_context(db: Session, workspace: Workspace):
+    """Pick a real bookable service/doctor from the staging catalog.
+
+    The live review must adapt to the clinic data instead of depending on a demo-only
+    service slug. Location IDs remain internal fixtures and are never shown to the customer.
+    """
     catalog = build_clinic_catalog(db, workspace)
-    services = [row for row in catalog.get("services", []) if isinstance(row, dict)]
-    service = next((row for row in services if row.get("slug") == "laser-hair-removal-underarm"), None)
-    if service is None:
-        raise RuntimeError("Canonical underarm service missing")
-    service_id = str(service["id"])
-    branch_id = str(workspace.primary_branch_id or "")
-    doctors = [row for row in catalog.get("doctors", []) if isinstance(row, dict)]
-    doctor = next(
-        (
-            row
-            for row in doctors
-            if service_id in {str(v) for v in (row.get("service_ids") or [])}
-            and (not branch_id or branch_id in {str(v) for v in (row.get("scheduled_branch_ids") or row.get("branch_ids") or [])})
-        ),
-        None,
-    )
-    if doctor is None:
-        raise RuntimeError("No compatible doctor for underarm service")
-    if not branch_id:
-        branch_values = doctor.get("scheduled_branch_ids") or doctor.get("branch_ids") or []
-        if not branch_values:
-            raise RuntimeError("No internal booking location")
-        branch_id = str(branch_values[0])
+    services = [row for row in catalog.get("services", []) if isinstance(row, dict) and row.get("id")]
+    doctors = [row for row in catalog.get("doctors", []) if isinstance(row, dict) and row.get("id")]
+    if not services:
+        raise RuntimeError("No services available in staging catalog")
+    if not doctors:
+        raise RuntimeError("No doctors available in staging catalog")
+
     adapter = get_clinic_adapter(db=db, workspace=workspace)
     adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
     today = datetime.now(UTC).date()
-    for offset in range(1, 36):
-        day = today + timedelta(days=offset)
-        available = adapter.get_availability(
-            AvailabilityRequest(
-                branch_id=branch_id,
-                service_id=service_id,
-                booking_date=day,
-                doctor_id=str(doctor["id"]),
-            )
-        )
-        if available.slots:
-            return catalog, service, doctor, branch_id, day, available
-    raise RuntimeError("No future availability in 35 days")
+    primary_branch_id = str(workspace.primary_branch_id or "")
 
+    for service in services:
+        service_id = str(service["id"])
+        compatible_doctors = [
+            doctor
+            for doctor in doctors
+            if service_id in {str(value) for value in (doctor.get("service_ids") or [])}
+        ]
+        for doctor in compatible_doctors:
+            scheduled = [
+                str(value)
+                for value in (doctor.get("scheduled_branch_ids") or doctor.get("branch_ids") or [])
+                if value
+            ]
+            branch_ids: list[str] = []
+            if primary_branch_id and (not scheduled or primary_branch_id in scheduled):
+                branch_ids.append(primary_branch_id)
+            branch_ids.extend(value for value in scheduled if value not in branch_ids)
+            if not branch_ids and primary_branch_id:
+                branch_ids.append(primary_branch_id)
+            for branch_id in branch_ids:
+                for offset in range(1, 36):
+                    day = today + timedelta(days=offset)
+                    available = adapter.get_availability(
+                        AvailabilityRequest(
+                            branch_id=branch_id,
+                            service_id=service_id,
+                            booking_date=day,
+                            doctor_id=str(doctor["id"]),
+                        )
+                    )
+                    if available.slots:
+                        return catalog, service, doctor, branch_id, day, available
+    raise RuntimeError("No bookable service with future availability in 35 days")
 
 def _seed_upcoming(db: Session, workspace: Workspace, patient: Patient, count: int) -> list[Appointment]:
     catalog, service_row, doctor, branch_id, first_day, available = _booking_context(db, workspace)
@@ -381,6 +391,25 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             medical_ok = any(token in replies for token in ("الفريق الطبي", "فريق العيادة", "تقييم", "طبي"))
             checks.append(f"medical_handoff={medical_ok}")
             scenario_ok = scenario_ok and medical_ok
+        if name == "package_compare":
+            all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
+            lowered_replies = replies.casefold()
+            mentions_package = "باكدج" in replies or "package" in lowered_replies
+            no_medical_handoff = not any(
+                token in replies
+                for token in ("الفريق الطبي", "فريق العيادة", "تقييم طبي", "تحويل المحادثة")
+            )
+            comparison_ok = all_replied and mentions_package and no_medical_handoff
+            checks.append(f"commercial_package_comparison={comparison_ok}")
+            scenario_ok = scenario_ok and comparison_ok
+        if name == "package_refund":
+            all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
+            lowered_replies = replies.casefold()
+            refund_language = any(token in replies for token in ("يرجع", "استرداد", "هترجع")) or "refund" in lowered_replies
+            money_language = "جنيه" in replies or "egp" in lowered_replies
+            refund_ok = all_replied and refund_language and money_language
+            checks.append(f"refund_amount_answered={refund_ok}")
+            scenario_ok = scenario_ok and refund_ok
 
         result.checks = checks
         result.status = "PASS" if global_ok and scenario_ok else "FAIL"
@@ -402,6 +431,7 @@ def main() -> int:
         "availability_window", "cancel_unique", "cancel_ambiguous", "reschedule_unique",
         "reschedule_ambiguous", "list_appointments", "doctor_discovery", "package_remaining",
         "package_compare", "package_refund", "history", "medical_handoff", "privacy", "mixed_language",
+        "service_change_mid_flow",
     ]
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     started = datetime.now(UTC).isoformat()
