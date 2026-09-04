@@ -97,21 +97,26 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
         working-directory: backend
-        run: pip install -r requirements-dev.txt
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
       - name: Backend quality gate
         working-directory: backend
         env:
+          DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+          MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
           SUPABASE_URL: https://example.supabase.co
           SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
           SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+          ENVIRONMENT: test
+          DEBUG: "false"
+          DOCS_ENABLED: "false"
         run: |
           ruff check app tests alembic
-          python -m compileall -q app tests
+          python -m compileall -q app alembic tests
           python -m pytest -q
 
       - name: Set up Node
