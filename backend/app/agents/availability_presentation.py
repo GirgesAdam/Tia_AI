@@ -14,6 +14,19 @@ def _parse_dt(value: object) -> datetime | None:
         return None
 
 
+def _display_date(value: object) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(f"{value}T00:00:00")
+        except ValueError:
+            return str(value)
+    return parsed.strftime("%d/%m/%Y")
+
+
 def _clock_ar(value: datetime) -> str:
     hour = value.hour
     minute = value.minute
@@ -81,6 +94,90 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     return windows
 
 
+def _requested_time(output: dict[str, Any]) -> str:
+    requested = str(output.get("requested_start_time") or "").strip()
+    if requested:
+        return requested
+    window = output.get("requested_time_window")
+    if not isinstance(window, dict):
+        return ""
+    lower = str(window.get("not_before_time") or "").strip()
+    upper = str(window.get("not_after_time") or "").strip()
+    return lower if lower and lower == upper else ""
+
+
+def _closing(*, reschedule: bool, booking_authorized: bool, ranges: bool) -> str:
+    if reschedule:
+        return (
+            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أغيّر الموعد."
+            if ranges
+            else "اختار الميعاد اللي يناسبك عشان أغيّره."
+        )
+    if booking_authorized:
+        return (
+            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أحجزه."
+            if ranges
+            else "اختار الميعاد اللي يناسبك عشان أحجزه."
+        )
+    return (
+        "لو حابب تحجز، قولي الوقت اللي يناسبك جوه الفترات دي."
+        if ranges
+        else "لو حابب تحجز، قولي الميعاد اللي يناسبك."
+    )
+
+
+def _legacy_slot_reply(
+    output: dict[str, Any],
+    slots: list[object],
+    *,
+    reschedule: bool,
+    booking_authorized: bool,
+) -> str | None:
+    """Keep old persisted/fake tool payloads useful without exposing branch data.
+
+    Real current availability payloads contain full interval timestamps and are
+    rendered as continuous windows. This path exists only for older/minimal
+    payloads that contain verified start times but not enough data to reconstruct
+    the continuous interval safely.
+    """
+    by_doctor: dict[str, list[str]] = defaultdict(list)
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        start = str(slot.get("start_time_24h") or "").strip()
+        if not start:
+            continue
+        doctor = (
+            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
+            or "الدكتور المتاح"
+        )
+        if start not in by_doctor[doctor]:
+            by_doctor[doctor].append(start)
+
+    lines: list[str] = []
+    for doctor, starts in list(by_doctor.items())[:4]:
+        if starts:
+            lines.append(f"{doctor}: " + "، ".join(starts[:4]))
+    if not lines:
+        return None
+
+    date_text = _display_date(output.get("date"))
+    when = f" يوم {date_text}" if date_text else ""
+    if output.get("requested_time_unavailable"):
+        requested = _requested_time(output)
+        requested_text = f" {requested}" if requested else ""
+        intro = f"ميعاد{requested_text}{when} مش متاح. دي أقرب المواعيد المتاحة:"
+    else:
+        intro = (
+            f"دي المواعيد البديلة المتاحة{when}:"
+            if reschedule
+            else f"دي أقرب المواعيد المتاحة{when}:"
+        )
+    return "\n".join(
+        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=False)]
+    )
+
+
 def format_availability_windows_reply(
     output: dict[str, Any],
     *,
@@ -89,11 +186,34 @@ def format_availability_windows_reply(
 ) -> str | None:
     if output.get("ok") is False:
         return None
+
+    raw_slots = output.get("slots")
+    slots = raw_slots if isinstance(raw_slots, list) else []
     windows = output.get("availability_windows")
     if not isinstance(windows, list) or not windows:
-        windows = availability_windows_from_slots(output.get("slots"))
+        windows = availability_windows_from_slots(slots)
+
     if not windows:
-        return None
+        if slots:
+            return _legacy_slot_reply(
+                output,
+                slots,
+                reschedule=reschedule,
+                booking_authorized=booking_authorized,
+            )
+
+        date_text = _display_date(output.get("date"))
+        when = f" يوم {date_text}" if date_text else ""
+        requested_window = output.get("requested_time_window")
+        has_requested_window = isinstance(requested_window, dict) and any(
+            requested_window.get(key) for key in ("not_before_time", "not_after_time")
+        )
+        if has_requested_window or output.get("requested_time_unavailable"):
+            return (
+                f"مفيش مواعيد متاحة في الوقت المطلوب{when}. "
+                "ممكن أشوفلك وقت تاني في نفس اليوم لو تحب."
+            )
+        return f"مفيش مواعيد متاحة{when}. ممكن أشوفلك يوم تاني لو تحب."
 
     by_doctor: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for window in windows:
@@ -120,25 +240,24 @@ def format_availability_windows_reply(
         lines.append(f"{doctor} متاح {joined}.")
 
     if not lines:
-        return None
-
-    date_text = str(output.get("date") or "").strip()
-    intro = f"المتاح يوم {date_text}:" if date_text else "المتاح:"
-    if output.get("requested_time_unavailable"):
-        requested = str(output.get("requested_start_time") or "").strip()
-        intro = (
-            f"ميعاد {requested} مش متاح. أقرب فترات متاحة:"
-            if requested
-            else "الميعاد المطلوب مش متاح. أقرب فترات متاحة:"
+        return _legacy_slot_reply(
+            output,
+            slots,
+            reschedule=reschedule,
+            booking_authorized=booking_authorized,
         )
 
-    if reschedule:
-        closing = "قولي الوقت اللي يناسبك جوه الفترات دي عشان أغيّر الموعد."
-    elif booking_authorized:
-        closing = "قولي الوقت اللي يناسبك جوه الفترات دي عشان أحجزه."
-    else:
-        closing = "لو حابب تحجز، قولي الوقت اللي يناسبك جوه الفترات دي."
-    return intro + "\n" + "\n".join(lines) + "\n" + closing
+    date_text = _display_date(output.get("date"))
+    intro = f"المتاح يوم {date_text}:" if date_text else "المتاح:"
+    if output.get("requested_time_unavailable"):
+        requested = _requested_time(output)
+        requested_text = f" {requested}" if requested else ""
+        when = f" يوم {date_text}" if date_text else ""
+        intro = f"ميعاد{requested_text}{when} مش متاح. أقرب فترات متاحة:"
+
+    return "\n".join(
+        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=True)]
+    )
 
 
 _LOCATION_KEYS = {
