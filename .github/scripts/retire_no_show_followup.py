@@ -83,6 +83,31 @@ for test_name in ("test_automation_engine.py", "test_automation_product_contract
     source = source.replace('    assert rules["no_show_followup"].enabled_by_default is False\n', "")
     test_path.write_text(source, encoding="utf-8")
 
+# Existing lifecycle/dashboard contracts intentionally change with this product decision.
+path = "backend/tests/test_auto_patient_lifecycle.py"
+text = load(path)
+text = text.replace(
+    '    assert rules["no_show_followup"].enabled_by_default is False\n',
+    '    assert "no_show_followup" not in rules\n',
+)
+save(path, text)
+
+path = "backend/tests/test_automation_operations_phase54.py"
+text = load(path)
+text = text.replace(
+    '    assert \'"no_show_followup"\' in page\n',
+    '    assert \'"cancellation_recovery"\' in page\n    assert \'"no_show_followup"\' not in page\n',
+)
+save(path, text)
+
+path = "backend/tests/test_automation_product_contract.py"
+text = load(path)
+text = text.replace(
+    '    assert \'"no_show_followup"\' in page\n',
+    '    assert \'"cancellation_recovery"\' in page\n    assert \'"lead_not_booked_followup"\' in page\n    assert \'"no_show_followup"\' not in page\n',
+)
+save(path, text)
+
 
 (ROOT / "backend/tests/test_no_show_cancellation_recovery.py").write_text(
     '''from pathlib import Path\n\nfrom app.core.automation_rules import DEFAULT_AUTOMATION_RULES\n\n\ndef test_no_show_has_no_separate_product_automation_rule() -> None:\n    keys = {rule.key for rule in DEFAULT_AUTOMATION_RULES}\n    assert "cancellation_recovery" in keys\n    assert "no_show_followup" not in keys\n\n\ndef test_cancellation_recovery_covers_no_show_and_retires_legacy_rule() -> None:\n    root = Path(__file__).resolve().parents[2]\n    service = (root / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert 'RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})' in service\n    assert 'appointment.status == "no_show" and appointment.no_show_at is not None' in service\n    assert "appointment.cancelled_at or appointment.no_show_at" in service\n    assert "AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS)" in service\n\n\ndef test_admin_ui_does_not_offer_duplicate_no_show_followup() -> None:\n    root = Path(__file__).resolve().parents[2]\n    page = (root / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")\n    assert 'cancellation_recovery: "استرجاع الحجوزات الملغاة"' in page\n    assert "no_show_followup" not in page\n''',
