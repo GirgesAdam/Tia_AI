@@ -56,4 +56,4 @@ jobs:
           git commit -m "fix: align readiness with merged migration head"
           git push origin HEAD:feat/core-product-hardening
 
-# rerun with all stale migration-head contract tests included
+# rerun with verified 20 stale head assertions
