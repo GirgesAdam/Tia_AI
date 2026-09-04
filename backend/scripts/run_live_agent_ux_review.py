@@ -58,6 +58,7 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-slug", default="tia")
     parser.add_argument("--report", default="artifacts/live-agent-ux-review.json")
+    parser.add_argument("--case", dest="cases", action="append", default=None)
     return parser.parse_args()
 
 
@@ -131,7 +132,12 @@ def _package_patient(db: Session, workspace: Workspace) -> tuple[Patient, Patien
     return None
 
 
-def _booking_context(db: Session, workspace: Workspace):
+def _booking_context(
+    db: Session,
+    workspace: Workspace,
+    *,
+    exclude_service_id: str | None = None,
+):
     """Pick a real bookable service/doctor from the staging catalog.
 
     The live review must adapt to the clinic data instead of depending on a demo-only
@@ -152,6 +158,8 @@ def _booking_context(db: Session, workspace: Workspace):
 
     for service in services:
         service_id = str(service["id"])
+        if exclude_service_id and service_id == str(exclude_service_id):
+            continue
         compatible_doctors = [
             doctor
             for doctor in doctors
@@ -312,10 +320,69 @@ def _case_messages(name: str, db: Session, workspace: Workspace, patient: Patien
         return f"عايز {service_name} يوم {date_text} من 6 لـ8 بالليل", "ولو مفيش وريني أقرب فترة", lambda: (True, "read_only")
     if name == "doctor_discovery":
         return f"مين الدكاترة اللي بيعملوا {service_name}؟", "مين منهم متاح قريب؟", lambda: (True, "read_only")
+    if name == "booked_slot_same_doctor":
+        other_patient = db.scalar(
+            select(Patient)
+            .where(
+                Patient.workspace_id == workspace.id,
+                Patient.status != "blocked",
+                Patient.id != patient.id,
+            )
+            .order_by(Patient.created_at.asc())
+            .limit(1)
+        )
+        if other_patient is None:
+            raise RuntimeError("No second active patient available for occupied-slot fixture")
+        busy_slot = available.slots[len(available.slots) // 2]
+        busy_local = busy_slot.start_at.astimezone(local_tz)
+        busy = Appointment(
+            workspace_id=workspace.id,
+            patient_id=other_patient.id,
+            branch_id=UUID(str(busy_slot.branch_id)),
+            doctor_id=UUID(str(busy_slot.doctor_id)),
+            service_id=UUID(str(busy_slot.service_id)),
+            status="confirmed",
+            source="staff",
+            start_at=busy_slot.start_at,
+            end_at=busy_slot.end_at,
+            busy_start_at=busy_slot.start_at,
+            busy_end_at=busy_slot.end_at,
+            duration_minutes=busy_slot.duration_minutes,
+            price_minor=busy_slot.price_minor,
+            currency=busy_slot.currency,
+            payment_status="unpaid",
+            payment_method="unknown",
+            billing_context="standard",
+            confirmed_at=datetime.now(UTC),
+        )
+        db.add(busy)
+        db.flush()
+        return (
+            f"مواعيد {service_name} مع {doctor_name} يوم {date_text} إيه؟",
+            f"تمام احجزلي مع نفس الدكتور يوم {date_text} الساعة {busy_local.strftime('%H:%M')}",
+            lambda: (
+                busy.status == "confirmed"
+                and (db.scalar(select(func.count(Appointment.id)).where(
+                    Appointment.workspace_id == workspace.id,
+                    Appointment.patient_id == patient.id,
+                )) or 0) == before_count,
+                "occupied_slot_preserved_and_not_double_booked",
+            ),
+        )
     if name == "mixed_language":
         return f"عايز book {service_name} with {doctor_name} on {date_text}", "show me the available times but don't book yet", lambda: (True, "read_only")
     if name == "service_change_mid_flow":
-        return f"عايز أحجز {service_name} يوم {date_text}", "لا غيرت رأيي، عايز بوتوكس بدل الليزر. بكام ومواعيده إيه؟ ومتحجزش حاجة دلوقتي", lambda: (((db.scalar(select(func.count(Appointment.id)).where(Appointment.workspace_id == workspace.id, Appointment.patient_id == patient.id)) or 0) == before_count), "no_stale_booking")
+        _, alternate_service, _, _, alternate_day, _ = _booking_context(
+            db,
+            workspace,
+            exclude_service_id=str(service["id"]),
+        )
+        alternate_name = str(alternate_service.get("name") or "الخدمة التانية")
+        return (
+            f"عايز أحجز {service_name} يوم {date_text}",
+            f"لا غيرت رأيي، عايز {alternate_name} بدل الخدمة الأولى. بكام ومواعيده يوم {alternate_day.isoformat()}؟ ومتحجزش حاجة دلوقتي",
+            lambda: (((db.scalar(select(func.count(Appointment.id)).where(Appointment.workspace_id == workspace.id, Appointment.patient_id == patient.id)) or 0) == before_count), "no_stale_booking"),
+        )
     raise KeyError(name)
 
 
@@ -336,7 +403,7 @@ def _execute_case(engine, slug: str, name: str) -> Result:
         if name in {
             "price_duration", "general_availability_ranges", "doctor_availability_ranges",
             "book_from_window", "unavailable_exact_time", "availability_after_six",
-            "availability_window", "doctor_discovery", "mixed_language", "service_change_mid_flow",
+            "availability_window", "doctor_discovery", "booked_slot_same_doctor", "mixed_language", "service_change_mid_flow",
         }:
             first, second, scenario_check = _case_messages(name, db, workspace, patient)
         elif name == "cancel_unique":
@@ -399,11 +466,16 @@ def _execute_case(engine, slug: str, name: str) -> Result:
         checks.append(scenario_text)
 
         replies = "\n".join(turn.assistant or "" for turn in result.turns)
-        if name in {"general_availability_ranges", "doctor_availability_ranges", "book_from_window", "unavailable_exact_time", "availability_after_six", "availability_window", "mixed_language", "service_change_mid_flow"}:
+        if name in {"general_availability_ranges", "doctor_availability_ranges", "book_from_window", "unavailable_exact_time", "availability_after_six", "availability_window", "booked_slot_same_doctor", "mixed_language", "service_change_mid_flow"}:
             natural = ("من " in replies and (" لـ" in replies or " ل" in replies)) or "مفيش مواعيد" in replies or "مش متاح" in replies
             dense = sum(replies.count(f":{minute:02d}") for minute in (0, 15, 30, 45)) >= 5
             checks.append(f"natural_windows={natural and not dense}")
             scenario_ok = scenario_ok and natural and not dense
+        if name == "booked_slot_same_doctor":
+            second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
+            no_false_confirmation = not any(token in second_reply for token in ("تم الحجز", "اتحجز", "حجزتلك"))
+            checks.append(f"no_false_busy_slot_confirmation={no_false_confirmation}")
+            scenario_ok = scenario_ok and no_false_confirmation
         if name == "privacy":
             privacy_ok = any(token in replies for token in ("خصوص", "مينفع", "مش مسموح", "ماقدرش", "مقدرش", "بيانات"))
             checks.append(f"privacy_boundary={privacy_ok}")
@@ -437,15 +509,15 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             scenario_ok = scenario_ok and no_false_medical_handoff
         if name == "service_change_mid_flow":
             second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
-            service_switch_ok = "بوت" in second_reply and "جنيه" in second_reply
+            compound_read_answered = "جنيه" in second_reply and ("من " in second_reply or "متاح" in second_reply)
             money_values = {
                 match.group(1).replace(",", "")
                 for match in re.finditer(r"([0-9][0-9,]*)\s*(?:جنيه|EGP)", second_reply, re.I)
             }
             coherent_price = len(money_values) <= 1
-            checks.append(f"service_switch_acknowledged={service_switch_ok}")
+            checks.append(f"service_switch_read_answered={compound_read_answered}")
             checks.append(f"single_coherent_booking_price={coherent_price}")
-            scenario_ok = scenario_ok and service_switch_ok and coherent_price
+            scenario_ok = scenario_ok and compound_read_answered and coherent_price
         if name == "availability_after_six":
             second_reply = (result.turns[1].assistant or "") if len(result.turns) > 1 else ""
             stale_lower_bound_absent = "من 6 م" not in second_reply
@@ -482,14 +554,15 @@ def _execute_case(engine, slug: str, name: str) -> Result:
 
 def main() -> int:
     args = _args()
-    names = [
+    default_names = [
         "price_duration", "general_availability_ranges", "doctor_availability_ranges",
         "book_from_window", "unavailable_exact_time", "availability_after_six",
         "availability_window", "cancel_unique", "cancel_ambiguous", "reschedule_unique",
-        "reschedule_ambiguous", "list_appointments", "doctor_discovery", "package_remaining",
-        "package_compare", "package_refund", "history", "medical_handoff", "privacy", "mixed_language",
-        "service_change_mid_flow",
+        "reschedule_ambiguous", "list_appointments", "doctor_discovery", "booked_slot_same_doctor",
+        "package_remaining", "package_compare", "package_refund", "history", "medical_handoff",
+        "privacy", "mixed_language", "service_change_mid_flow",
     ]
+    names = args.cases or default_names
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     started = datetime.now(UTC).isoformat()
     results: list[Result] = []
