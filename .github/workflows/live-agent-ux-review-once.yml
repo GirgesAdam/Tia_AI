@@ -8,6 +8,7 @@ on:
       - .github/workflows/live-agent-ux-review-once.yml
       - backend/scripts/run_live_agent_ux_review.py
       - backend/scripts/apply_agent_ux_continuation.py
+      - backend/scripts/apply_agent_semantic_followups.py
 
 permissions:
   contents: write
@@ -59,11 +60,14 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY"
           test -n "$DATABASE_URL"
-      - name: Apply continuation patch
-        run: python scripts/apply_agent_ux_continuation.py
+      - name: Apply continuation patches
+        run: |
+          python scripts/apply_agent_ux_continuation.py
+          python scripts/apply_agent_semantic_followups.py
       - name: Compile patched agent files
         run: |
           python -m py_compile scripts/run_live_agent_ux_review.py
+          python -m py_compile scripts/apply_agent_semantic_followups.py
           python -m py_compile app/agents/turn_interpreter.py
           python -m py_compile app/agents/clinic_grounding.py
           python -m py_compile app/agents/grounded_response.py
@@ -105,4 +109,4 @@ jobs:
         working-directory: .
         run: exit 1
 
-# one-shot continuation trigger
+# semantic follow-up rerun
