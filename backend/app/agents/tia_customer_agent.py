@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import tools_condition
 
+from app.agents.availability_presentation import customer_visible_verified_data
 from app.agents.llm_runtime import LLMProviderError, invoke_model, invoke_with_fallback
 from app.agents.model_provider import build_chat_fallback_model, build_chat_model, model_label
 from app.agents.prompts.customer_service import build_customer_service_system_prompt
@@ -73,7 +74,7 @@ def _finalizer_tool_context(messages: list[BaseMessage]) -> str | None:
         rows.append(
             {
                 "tool": message.name or "unknown",
-                "result": payload if payload is not None else str(message.content),
+                "result": customer_visible_verified_data(payload) if payload is not None else str(message.content),
             }
         )
     if not rows:

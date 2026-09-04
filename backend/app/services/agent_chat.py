@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.availability_presentation import format_availability_windows_reply
 from app.agents.capability_policy import (
     CapabilityPolicyDecision,
     ToolAuthorizationError,
@@ -1204,16 +1205,7 @@ def _verified_booking_slots_reply(
     *,
     booking_authorized: bool,
 ) -> str | None:
-    """Present verified booking slots directly from the adapter.
-
-    Availability is operational data, so the response does not need a second LLM
-    pass. The same code handles one or many slots; the customer simply chooses a
-    displayed option and the flow interpreter maps that choice to its index.
-    """
-    # Some adapter-backed availability payloads are successful structured reads
-    # without an explicit ``ok=True`` wrapper. An explicit ``ok=False`` is still
-    # an error, but verified slots are sufficient evidence for the deterministic
-    # presentation path.
+    """Present adapter-verified availability as natural free-time windows."""
     if payload.get("ok") is False:
         return None
     if any(
@@ -1226,51 +1218,10 @@ def _verified_booking_slots_reply(
         )
     ):
         return None
-    slots = payload.get("slots")
-    if not isinstance(slots, list) or not slots:
-        return None
-
-    presented: list[str] = []
-    for index, slot in enumerate(slots[:8], start=1):
-        if not isinstance(slot, dict):
-            continue
-        time_text = slot.get("start_time_24h")
-        if not isinstance(time_text, str) or not time_text.strip():
-            start_local = slot.get("start_local")
-            if isinstance(start_local, str):
-                try:
-                    time_text = datetime.fromisoformat(start_local).strftime("%H:%M")
-                except ValueError:
-                    time_text = None
-            else:
-                time_text = None
-        if not isinstance(time_text, str) or not time_text.strip():
-            continue
-
-        details: list[str] = [time_text.strip()]
-        doctor_name = slot.get("doctor_name")
-        branch_name = slot.get("branch_name")
-        if isinstance(doctor_name, str) and doctor_name.strip():
-            details.append(doctor_name.strip())
-        if isinstance(branch_name, str) and branch_name.strip():
-            details.append(branch_name.strip())
-        presented.append(f"{index}. " + " - ".join(details))
-
-    if not presented:
-        return None
-
-    date_value = payload.get("date")
-    if isinstance(date_value, str) and date_value.strip():
-        intro = f"المواعيد المتاحة يوم {date_value.strip()}:"
-    else:
-        intro = "المواعيد المتاحة:"
-    closing = (
-        "اختار رقم الميعاد المناسب ليك."
-        if booking_authorized
-        else "لو حابب تحجز واحد من المواعيد دي، قولي رقمه."
+    return format_availability_windows_reply(
+        payload,
+        booking_authorized=booking_authorized,
     )
-    return intro + "\n" + "\n".join(presented) + "\n" + closing
-
 
 def _exact_booking_selection_index(
     *,
@@ -1786,11 +1737,41 @@ def _structured_flow_write(
 ) -> tuple[str, str] | None:
     if turn.action != "select_option":
         return None
+    selected_doctor_id = getattr(turn.entity_hints, "doctor_id", None) or (
+        (flow.entity_state or {}).get("doctor_id")
+    )
     slot = select_slot_from_structured_selection(
         flow.option_snapshot,
         selection_index=turn.selection_index,
         selection_time=turn.selection_time,
+        doctor_id=str(selected_doctor_id) if selected_doctor_id else None,
     )
+    if slot is None and turn.selection_time:
+        normalized_time = str(turn.selection_time).strip()
+        if len(normalized_time) == 4 and normalized_time[1] == ":":
+            normalized_time = "0" + normalized_time
+        matching_doctors = []
+        seen_doctors: set[str] = set()
+        snapshot_slots = (flow.option_snapshot or {}).get("slots")
+        if isinstance(snapshot_slots, list):
+            for candidate in snapshot_slots:
+                if not isinstance(candidate, dict):
+                    continue
+                if str(candidate.get("start_time_24h") or "") != normalized_time:
+                    continue
+                doctor_name = str(candidate.get("doctor_name") or "الدكتور المتاح").strip()
+                doctor_key = str(candidate.get("doctor_id") or doctor_name)
+                if doctor_key in seen_doctors:
+                    continue
+                seen_doctors.add(doctor_key)
+                matching_doctors.append(doctor_name)
+        if len(matching_doctors) > 1:
+            names = "، ".join(matching_doctors[:4])
+            return (
+                f"الساعة {normalized_time} متاحة مع أكتر من دكتور: {names}. "
+                "قولي تفضّل مين عشان أحجز من غير ما أختار مكانك.",
+                "flow-interpreter:deterministic-slot-ambiguity",
+            )
     if slot is None:
         return None
     if flow.flow_type == "booking":

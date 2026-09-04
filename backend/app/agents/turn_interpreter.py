@@ -161,18 +161,31 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
         return {}
 
     summary: dict[str, object] = {}
-    slots = flow.option_snapshot.get("slots")
-    if isinstance(slots, list):
-        summary["slots"] = [
+    windows = flow.option_snapshot.get("availability_windows")
+    if isinstance(windows, list) and windows:
+        summary["availability_windows"] = [
             {
-                "index": index + 1,
-                "start_time_24h": slot.get("start_time_24h"),
-                "end_time_24h": slot.get("end_time_24h"),
-                "doctor_name": slot.get("doctor_name"),
+                "doctor_id": window.get("doctor_id"),
+                "doctor_name": window.get("doctor_name"),
+                "start_time_24h": window.get("start_time_24h"),
+                "end_time_24h": window.get("end_time_24h"),
             }
-            for index, slot in enumerate(slots[:8])
-            if isinstance(slot, dict)
+            for window in windows[:12]
+            if isinstance(window, dict)
         ]
+    else:
+        slots = flow.option_snapshot.get("slots")
+        if isinstance(slots, list):
+            summary["slots"] = [
+                {
+                    "index": index + 1,
+                    "start_time_24h": slot.get("start_time_24h"),
+                    "end_time_24h": slot.get("end_time_24h"),
+                    "doctor_name": slot.get("doctor_name"),
+                }
+                for index, slot in enumerate(slots[:8])
+                if isinstance(slot, dict)
+            ]
 
     choice_specs = (
         ("services", ("service_name", "name")),
@@ -190,11 +203,7 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
                 (choice.get(key) for key in name_keys if choice.get(key)),
                 None,
             )
-            canonical_id = (
-                choice.get("service_id")
-                or choice.get("doctor_id")
-                or choice.get("id")
-            )
+            canonical_id = choice.get("service_id") or choice.get("doctor_id") or choice.get("id")
             summarized.append(
                 {
                     "index": index + 1,
@@ -205,7 +214,6 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
         if summarized:
             summary[collection_name] = summarized
     return summary
-
 
 def _semantic_catalog_for_single_location(
     clinic_catalog: dict[str, object],
@@ -299,7 +307,10 @@ def _interpreter_system_prompt(
         "requirements; select_option means the customer chose a presented option; cancel_flow stops "
         "the current flow; interrupt transfers ownership to a separate operational task. A greeting, "
         "language change, acknowledgement, recall question, or harmless side read must not mutate the flow. "
-        "For a presented slot selection, set selection_index to the displayed option index.\n\n"
+        "For a numbered option selection, set selection_index to the displayed option index. "
+        "When availability was shown as a continuous time window and the customer chooses a clock "
+        "time inside it, set selection_time to HH:MM instead. Never invent a doctor when the same "
+        "clock time is available with multiple doctors.\n\n"
         "PACKAGES: distinguish one appointment from a package/course of multiple sessions by meaning, "
         "not wording. package_intent=none for an ordinary single appointment; inquire for package info or "
         "comparison; purchase when the customer wants to obtain/start a multi-session package; use_existing "

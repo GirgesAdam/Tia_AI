@@ -134,7 +134,7 @@ def test_verified_booking_tool_fallback_formats_slots_without_internal_ids() -> 
     assert "20/08/2026" in reply
     assert "18:30" in reply
     assert "أحمد محمود" in reply
-    assert "مدينة نصر" in reply
+    assert "مدينة نصر" not in reply
     assert "branch_id" not in reply
     assert "doctor_id" not in reply
 
