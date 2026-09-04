@@ -1266,6 +1266,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     def get_reschedule_options(
         booking_date: str,
         service_id: str = "",
+        doctor_id: str = "",
         service_search: str = "",
         requested_start_time: str = "",
         not_before_time: str = "",
@@ -1280,6 +1281,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         inputs = {
             "booking_date": booking_date,
             "service_id": service_id,
+            "doctor_id": doctor_id or None,
             "service_search": service_search,
             "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
@@ -1365,7 +1367,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 branch_id=current.branch_id,
                 service_id=current.service_id,
                 booking_date=requested_date,
-                doctor_id=current.doctor_id,
+                doctor_id=doctor_id or current.doctor_id,
                 requested_start=requested_start,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,

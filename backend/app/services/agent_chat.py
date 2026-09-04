@@ -1088,6 +1088,7 @@ def _prefetch_read_tools(
         }
         if grounded_mode:
             reschedule_arguments["service_id"] = service_id
+            reschedule_arguments["doctor_id"] = doctor_id
         else:
             reschedule_arguments["service_search"] = service_query
         run("get_reschedule_options", reschedule_arguments)
