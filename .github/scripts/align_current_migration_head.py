@@ -1,6 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+OLD_HEAD = "0055_lead_followup"
+NEW_HEAD = "0056_merge_automation_expenses"
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -13,13 +15,20 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 replace_once(
     ROOT / "backend/app/services/operational_readiness.py",
-    'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"',
-    'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"',
-)
-replace_once(
-    ROOT / "backend/tests/test_automation_operations_phase54.py",
-    'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"',
-    'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"',
+    f'EXPECTED_MIGRATION_HEAD = "{OLD_HEAD}"',
+    f'EXPECTED_MIGRATION_HEAD = "{NEW_HEAD}"',
 )
 
-print("current migration head aligned")
+updated_tests = 0
+for path in sorted((ROOT / "backend/tests").rglob("*.py")):
+    text = path.read_text(encoding="utf-8")
+    if OLD_HEAD not in text:
+        continue
+    occurrences = text.count(OLD_HEAD)
+    path.write_text(text.replace(OLD_HEAD, NEW_HEAD), encoding="utf-8")
+    updated_tests += occurrences
+
+if updated_tests != 17:
+    raise AssertionError(f"expected 17 stale migration-head assertions, updated {updated_tests}")
+
+print(f"current migration head aligned; updated {updated_tests} stale test assertions")
