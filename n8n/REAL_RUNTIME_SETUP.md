@@ -96,6 +96,10 @@ branches using the same `X-Automation-Token`:
 2. connector-driven incremental clinic sync via
    `/api/v1/automations/adapter/clinic-sync/tick`.
 
+Automation enable/disable state and admin-selected timing live in Tia/PostgreSQL.
+n8n does not own separate per-rule schedules; it only wakes the backend and
+executes the WhatsApp transport for jobs that Tia has already validated as due.
+
 The clinic-sync call is only a wake-up signal. The backend decides whether the
 workspace is enabled, due, already leased, or temporarily backed off. It then
 owns the deterministic sync runtime and durable checkpoints.
