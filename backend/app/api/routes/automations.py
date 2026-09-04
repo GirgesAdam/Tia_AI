@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
@@ -116,16 +116,30 @@ def update_rule(
         setattr(rule, key, value)
 
     if payload.enabled is False:
-        for job in db.scalars(
-            select(AutomationJob).where(
-                AutomationJob.workspace_id == access.workspace.id,
-                AutomationJob.rule_id == rule.id,
-                AutomationJob.status.in_(("queued", "failed")),
+        cancellable_job_ids = list(
+            db.scalars(
+                select(AutomationJob.id)
+                .outerjoin(MessageDispatch, MessageDispatch.id == AutomationJob.dispatch_id)
+                .where(
+                    AutomationJob.workspace_id == access.workspace.id,
+                    AutomationJob.rule_id == rule.id,
+                    or_(
+                        AutomationJob.status.in_(("queued", "failed")),
+                        and_(
+                            AutomationJob.status == "dispatched",
+                            MessageDispatch.status == "queued",
+                        ),
+                    ),
+                )
             )
-        ):
-            job.status = "cancelled"
-            job.completed_at = datetime.now(UTC)
-            job.result_json = {"reason": "rule_disabled_by_admin"}
+        )
+        for pending_job_id in cancellable_job_ids:
+            cancel_automation_job(
+                db,
+                workspace_id=access.workspace.id,
+                job_id=pending_job_id,
+                actor_user_id=access.user.id,
+            )
 
     if changed_fields:
         record_activity_event(
