@@ -44,11 +44,11 @@ jobs:
 
       - name: Focused natural UX tests
         working-directory: backend
-        run: pytest -q tests/test_agent_natural_availability.py
+        run: python -m pytest -q tests/test_agent_natural_availability.py
 
       - name: Full backend regression
         working-directory: backend
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Commit tested patch
         shell: bash
