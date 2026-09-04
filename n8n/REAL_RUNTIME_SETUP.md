@@ -4,11 +4,8 @@ Tia/PostgreSQL remains the system of record. n8n owns external credentials and
 transport execution only. It must not own booking state, sync checkpoints,
 identity resolution, source authority, retries, or financial decisions.
 
-Tia does not collect or persist patient/customer email addresses. Customer
-communication in the current product contract is WhatsApp-based. The legacy
-`tia_gmail_outbox_worker.json` file is retained only for repository history and
-must not be imported for the current patient runtime. Staff/account email is a
-separate concern and is not part of the patient CRM contract.
+Patient communication in the current product contract is WhatsApp-based. There
+is no Gmail automation runtime in the project.
 
 ## Active workflows
 
@@ -101,28 +98,14 @@ branches using the same `X-Automation-Token`:
 
 The clinic-sync call is only a wake-up signal. The backend decides whether the
 workspace is enabled, due, already leased, or temporarily backed off. It then
-owns this deterministic runtime flow:
-
-```text
-connector page
-→ canonical sync records
-→ existing structural/identity/authority rules
-→ idempotent writes
-→ durable checkpoint
-→ next page / retry backoff
-```
-
-A page budget can end cleanly without being treated as a failure; the next
-scheduler tick continues from the advanced durable checkpoint. A record-level
-failure does not advance past unsafe data. Connector/configuration failures are
-stored on the durable schedule and retried with bounded exponential backoff.
+owns the deterministic sync runtime and durable checkpoints.
 
 ## Retry policy
 
 n8n may retry idempotent Tia HTTP requests, but provider send nodes must not be
 blindly retried. Tia remains responsible for business retries, outbox reclaim,
 sync leases, checkpoints, and scheduler backoff. This avoids duplicate WhatsApp
-or email sends when a provider response is ambiguous.
+messages when a provider response is ambiguous.
 
 ## Staging vs real runtime
 
@@ -139,5 +122,3 @@ check.
 5. Enable one approved automation rule and verify a real reminder end-to-end.
 6. Configure an external clinic connector, run one manual sync, and verify its checkpoint.
 7. Enable scheduled sync and verify a later scheduler tick advances or confirms the checkpoint without duplicates.
-
-Do not use real patient contact data for the first live tests.
