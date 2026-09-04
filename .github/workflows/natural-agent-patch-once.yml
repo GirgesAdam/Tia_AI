@@ -68,3 +68,5 @@ jobs:
           fi
           git commit -m "fix: make customer booking conversations natural"
           git push origin HEAD:feat/core-product-hardening
+
+# Trigger after workflow registration.
