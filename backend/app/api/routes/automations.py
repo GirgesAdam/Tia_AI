@@ -42,6 +42,7 @@ from app.services.automations import (
     AutomationError,
     automation_operations_overview,
     cancel_automation_job,
+    cancel_system_lead_followups,
     claim_due_jobs,
     ensure_default_rules,
     execute_job,
@@ -144,6 +145,11 @@ def update_rule(
                 **(cancelled_job.result_json or {}),
                 "reason": "rule_disabled_by_admin",
             }
+        if rule.key == "lead_not_booked_followup":
+            cancel_system_lead_followups(
+                db,
+                workspace_id=access.workspace.id,
+            )
 
     if changed_fields:
         record_activity_event(

@@ -64,6 +64,17 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         enabled_by_default=False,
     ),
     DefaultAutomationRule(
+        key="lead_not_booked_followup",
+        name="Lead not-booked follow-up",
+        trigger_kind="after_lead_activity",
+        offset_minutes=1440,
+        channel="whatsapp",
+        template_name="tia_ai_followup_ar",
+        template_language="ar",
+        max_lateness_minutes=1440,
+        enabled_by_default=False,
+    ),
+    DefaultAutomationRule(
         key="no_show_followup",
         name="No-show recovery follow-up",
         trigger_kind="after_no_show",

@@ -22,6 +22,7 @@ AUTOMATION_TRIGGER_KINDS = (
     "after_completed",
     "after_no_show",
     "after_cancelled",
+    "after_lead_activity",
 )
 AUTOMATION_CHANNELS = ("auto", "whatsapp", "email", "sms")
 
@@ -31,7 +32,7 @@ class AutomationRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("workspace_id", "key", name="uq_automation_rules_workspace_key"),
         CheckConstraint(
-            "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled')",
+            "trigger_kind IN ('appointment_created', 'before_appointment', 'after_completed', 'after_no_show', 'after_cancelled', 'after_lead_activity')",
             name="automation_rule_trigger_kind_valid",
         ),
         CheckConstraint(

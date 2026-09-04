@@ -148,3 +148,11 @@ There is no Gmail automation worker in the current product runtime.
 The admin can enable it and choose how long after `appointments.cancelled_at` it should run.
 It reuses the normal appointment automation job/outbox path; there is no separate cancellation workflow or state machine.
 The Meta template is `tia_cancellation_recovery_ar` with four positional body parameters: customer name, service, cancelled appointment date, and cancelled appointment time.
+
+
+## Lead not-booked follow-up
+
+`lead_not_booked_followup` is optional and disabled by default. The admin chooses the delay after the lead's latest recorded contact, falling back to lead creation time.
+The planner creates one idempotent system AI CRM follow-up task per lead and reuses the existing `crm_follow_up` AutomationJob runtime; there is no lead-specific job type or workflow engine.
+Before sending, Tia verifies that the rule is still enabled, the lead is still `new`, `contacted`, or `qualified`, and no other active follow-up task is already handling that lead. `booked`, `won`, `lost`, and `spam` leads are not contacted by this automation.
+Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the existing connection-level approved `ai_followup_template` policy still applies.

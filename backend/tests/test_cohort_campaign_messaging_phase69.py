@@ -245,7 +245,7 @@ def test_campaign_migration_and_readiness_head() -> None:
     assert 'revision: str = "0039_crm_campaigns"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0038_crm_cohorts"' in migration
     assert len("0039_crm_campaigns") <= 32
-    assert 'EXPECTED_MIGRATION_HEAD = "0054_cancel_recovery"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
 
 
 def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_steps() -> None:

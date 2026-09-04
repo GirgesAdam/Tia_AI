@@ -18,6 +18,7 @@ const names: Record<string, string> = {
   appointment_reminder_6h: "تذكير قبل الموعد",
   post_visit_followup: "متابعة بعد الزيارة",
   cancellation_recovery: "استرجاع الحجوزات الملغاة",
+  lead_not_booked_followup: "متابعة العميل اللي ماحجزش",
   no_show_followup: "متابعة عدم الحضور",
 };
 
@@ -26,6 +27,7 @@ const descriptions: Record<string, string> = {
   appointment_reminder_6h: "تذكّر العميل بالموعد في التوقيت الذي تحدده العيادة.",
   post_visit_followup: "رسالة واحدة للاطمئنان، عرض المساعدة أو حجز الجلسة التالية، وطلب التقييم.",
   cancellation_recovery: "اختياري: تتواصل مع العميل بعد إلغاء الموعد وتعرض عليه ترتيب موعد جديد.",
+  lead_not_booked_followup: "اختياري: تتابع العميل المهتم لو لسه ماحجزش وتساعده يكمل الحجز.",
   no_show_followup: "اختياري: تتواصل مع العميل بعد عدم الحضور لعرض إعادة الحجز.",
 };
 
@@ -34,10 +36,11 @@ const visibleProductRuleKeys = new Set([
   "appointment_reminder_6h",
   "post_visit_followup",
   "cancellation_recovery",
+  "lead_not_booked_followup",
   "no_show_followup",
 ]);
 
-const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "no_show_followup"]);
+const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "lead_not_booked_followup", "no_show_followup"]);
 
 function attentionLabel(job: AutomationJob): string | null {
   if (job.attention_reason === "execution_failed") return "لم تكتمل العملية تلقائيًا";
@@ -62,6 +65,7 @@ function timingLabel(rule: AutomationRule): string {
   if (rule.trigger_kind === "after_completed") return "أرسل بعد انتهاء الزيارة بـ";
   if (rule.trigger_kind === "after_no_show") return "أرسل بعد عدم الحضور بـ";
   if (rule.trigger_kind === "after_cancelled") return "أرسل بعد إلغاء الموعد بـ";
+  if (rule.trigger_kind === "after_lead_activity") return "أرسل بعد آخر تواصل بـ";
   return "التوقيت";
 }
 

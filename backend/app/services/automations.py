@@ -23,6 +23,7 @@ from app.models.conversation import Conversation
 from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
 from app.models.handoff_request import HandoffRequest
+from app.models.lead import Lead
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
@@ -33,6 +34,7 @@ from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOve
 from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
+from app.services.crm_tasks import create_crm_task, sync_lead_next_follow_up
 
 
 class AutomationError(ValueError):
@@ -41,6 +43,10 @@ class AutomationError(ValueError):
 
 AUTOMATION_WORKER_FRESH_MINUTES = 5
 AUTOMATION_JOB_STALE_MINUTES = 10
+
+LEAD_FOLLOWUP_RULE_KEY = "lead_not_booked_followup"
+LEAD_FOLLOWUP_DEDUPE_PREFIX = "automation:lead-not-booked:"
+LEAD_FOLLOWUP_ELIGIBLE_STATUSES = frozenset({"new", "contacted", "qualified"})
 
 
 @dataclass(frozen=True)
@@ -221,6 +227,283 @@ def _candidate_appointments(
     return []
 
 
+
+def _lead_followup_anchor(lead: Lead) -> datetime:
+    return lead.last_contact_at or lead.created_at
+
+
+def _lead_followup_dedupe_key(lead_id: UUID) -> str:
+    return f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}{lead_id}"
+
+
+def _is_system_lead_followup_task(task: CRMTask) -> bool:
+    return (
+        task.source == "system"
+        and task.execution_mode == "ai"
+        and task.lead_id is not None
+        and str(task.dedupe_key or "").startswith(LEAD_FOLLOWUP_DEDUPE_PREFIX)
+    )
+
+
+def _other_active_lead_followup(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    lead_id: UUID,
+    exclude_task_id: UUID | None = None,
+) -> CRMTask | None:
+    stmt = select(CRMTask).where(
+        CRMTask.workspace_id == workspace_id,
+        CRMTask.lead_id == lead_id,
+        CRMTask.task_type == "follow_up",
+        CRMTask.status.in_(("pending", "in_progress")),
+    )
+    if exclude_task_id is not None:
+        stmt = stmt.where(CRMTask.id != exclude_task_id)
+    return db.scalar(stmt.order_by(CRMTask.due_at, CRMTask.created_at).limit(1))
+
+
+def _system_lead_followup_ineligible_reason(
+    db: Session,
+    *,
+    task: CRMTask,
+    for_update: bool = False,
+) -> str | None:
+    if not _is_system_lead_followup_task(task):
+        return None
+
+    rule_stmt = select(AutomationRule).where(
+        AutomationRule.workspace_id == task.workspace_id,
+        AutomationRule.key == LEAD_FOLLOWUP_RULE_KEY,
+    )
+    if for_update:
+        rule_stmt = rule_stmt.with_for_update()
+    rule = db.scalar(rule_stmt)
+    if rule is None or not rule.enabled:
+        return "lead_followup_rule_disabled"
+
+    lead_stmt = select(Lead).where(
+        Lead.workspace_id == task.workspace_id,
+        Lead.id == task.lead_id,
+    )
+    if for_update:
+        lead_stmt = lead_stmt.with_for_update()
+    lead = db.scalar(lead_stmt)
+    if lead is None or lead.patient_id != task.patient_id:
+        return "lead_followup_target_missing"
+    if lead.status not in LEAD_FOLLOWUP_ELIGIBLE_STATUSES:
+        return "lead_no_longer_eligible"
+    if _other_active_lead_followup(
+        db,
+        workspace_id=task.workspace_id,
+        lead_id=lead.id,
+        exclude_task_id=task.id,
+    ) is not None:
+        return "lead_followup_superseded_by_existing_task"
+    return None
+
+
+def _cancel_system_lead_followup_task(
+    db: Session,
+    *,
+    task: CRMTask,
+    now: datetime,
+    reason: str,
+) -> bool:
+    if task.status not in {"pending", "in_progress"}:
+        return False
+    job = db.scalar(
+        select(AutomationJob)
+        .where(
+            AutomationJob.workspace_id == task.workspace_id,
+            AutomationJob.crm_task_id == task.id,
+            AutomationJob.job_kind == "crm_follow_up",
+        )
+        .with_for_update()
+    )
+    if job is not None and job.status == "dispatched":
+        if not _cancel_pending_job_dispatch(db, job=job, reason=reason):
+            return False
+    if job is not None and job.status in {"queued", "failed", "processing", "dispatched"}:
+        job.status = "cancelled"
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.completed_at = now
+        job.result_json = {**(job.result_json or {}), "reason": reason}
+    task.status = "cancelled"
+    task.completed_at = now
+    sync_lead_next_follow_up(
+        db,
+        workspace_id=task.workspace_id,
+        lead_id=task.lead_id,
+    )
+    return True
+
+
+def cancel_system_lead_followups(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    now: datetime | None = None,
+) -> int:
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    tasks = list(
+        db.scalars(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.source == "system",
+                CRMTask.execution_mode == "ai",
+                CRMTask.status.in_(("pending", "in_progress")),
+                CRMTask.dedupe_key.like(f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}%"),
+            )
+        )
+    )
+    cancelled = 0
+    for task in tasks:
+        if _cancel_system_lead_followup_task(
+            db,
+            task=task,
+            now=now,
+            reason="lead_followup_rule_disabled",
+        ):
+            cancelled += 1
+    return cancelled
+
+
+def _plan_lead_followup_rule(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rule: AutomationRule,
+    now: datetime,
+    horizon: datetime,
+) -> PlanningResult:
+    active_system_tasks = list(
+        db.scalars(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.source == "system",
+                CRMTask.execution_mode == "ai",
+                CRMTask.dedupe_key.like(f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}%"),
+                CRMTask.status.in_(("pending", "in_progress")),
+            )
+        )
+    )
+    cancelled = 0
+    for task in active_system_tasks:
+        reason = _system_lead_followup_ineligible_reason(db, task=task)
+        if reason is not None and _cancel_system_lead_followup_task(
+            db,
+            task=task,
+            now=now,
+            reason=reason,
+        ):
+            cancelled += 1
+
+    if not rule.enabled:
+        return PlanningResult(planned=0, cancelled=cancelled)
+
+    oldest = now - timedelta(days=30)
+    leads = list(
+        db.scalars(
+            select(Lead).where(
+                Lead.workspace_id == workspace_id,
+                Lead.status.in_(tuple(LEAD_FOLLOWUP_ELIGIBLE_STATUSES)),
+                or_(Lead.created_at >= oldest, Lead.last_contact_at >= oldest),
+            )
+        )
+    )
+    planned = 0
+    for lead in leads:
+        anchor = _lead_followup_anchor(lead)
+        when = (anchor + timedelta(minutes=rule.offset_minutes)).astimezone(UTC)
+        if when > horizon or when + timedelta(minutes=rule.max_lateness_minutes) < now:
+            continue
+
+        dedupe_key = _lead_followup_dedupe_key(lead.id)
+        task = db.scalar(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.dedupe_key == dedupe_key,
+            )
+        )
+        if task is not None:
+            competing = _other_active_lead_followup(
+                db,
+                workspace_id=workspace_id,
+                lead_id=lead.id,
+                exclude_task_id=task.id,
+            )
+            if competing is not None:
+                continue
+            job = db.scalar(
+                select(AutomationJob).where(
+                    AutomationJob.workspace_id == workspace_id,
+                    AutomationJob.crm_task_id == task.id,
+                    AutomationJob.job_kind == "crm_follow_up",
+                )
+            )
+            renewable = (
+                task.status == "cancelled"
+                and job is not None
+                and job.status == "cancelled"
+                and str((job.result_json or {}).get("reason") or "")
+                == "lead_followup_rule_disabled"
+            )
+            if renewable:
+                task.status = "pending"
+                task.execution_mode = "ai"
+                task.completed_at = None
+                task.due_at = when
+                job.status = "queued"
+                job.scheduled_for = when
+                job.locked_at = None
+                job.next_attempt_at = None
+                job.completed_at = None
+                job.last_error = None
+                job.message_id = None
+                job.dispatch_id = None
+                job.result_json = {}
+                sync_lead_next_follow_up(db, workspace_id=workspace_id, lead_id=lead.id)
+            elif task.status == "pending" and task.execution_mode == "ai" and job is not None:
+                task.due_at = when
+                if job.status in {"queued", "failed"}:
+                    job.status = "queued"
+                    job.scheduled_for = when
+                    job.next_attempt_at = None
+                    job.locked_at = None
+                    job.last_error = None
+                sync_lead_next_follow_up(db, workspace_id=workspace_id, lead_id=lead.id)
+            continue
+
+        if _other_active_lead_followup(
+            db,
+            workspace_id=workspace_id,
+            lead_id=lead.id,
+        ) is not None:
+            continue
+
+        create_crm_task(
+            db,
+            workspace_id=workspace_id,
+            patient_id=lead.patient_id,
+            lead_id=lead.id,
+            title="مساعدة في استكمال الحجز",
+            description=(
+                "تابع مع العميل بشكل طبيعي لأنه مهتم ولم يكمل الحجز بعد. "
+                "جاوب على أسئلته واعرض المساعدة في الحجز بدون اختراع خصم أو استعجال غير حقيقي."
+            ),
+            due_at=when,
+            task_type="follow_up",
+            priority="normal",
+            source="system",
+            execution_mode="ai",
+            dedupe_key=dedupe_key,
+            commit=False,
+        )
+        planned += 1
+    return PlanningResult(planned=planned, cancelled=cancelled)
+
 def plan_automation_jobs(
     db: Session,
     *,
@@ -234,7 +517,23 @@ def plan_automation_jobs(
     planned = 0
     cancelled = 0
 
-    enabled_rules = [rule for rule in rules if rule.enabled]
+    lead_rules = [rule for rule in rules if rule.trigger_kind == "after_lead_activity"]
+    for lead_rule in lead_rules:
+        lead_result = _plan_lead_followup_rule(
+            db,
+            workspace_id=workspace_id,
+            rule=lead_rule,
+            now=now,
+            horizon=horizon,
+        )
+        planned += lead_result.planned
+        cancelled += lead_result.cancelled
+
+    enabled_rules = [
+        rule
+        for rule in rules
+        if rule.enabled and rule.trigger_kind != "after_lead_activity"
+    ]
     for rule in enabled_rules:
         for appointment in _candidate_appointments(
             db,
@@ -1066,6 +1365,27 @@ def _execute_crm_followup_job(
         db.commit()
         return ExecutionResult(job=job, reason="follow_up_target_missing")
 
+    lead_followup_reason = _system_lead_followup_ineligible_reason(
+        db,
+        task=task,
+        for_update=True,
+    )
+    if lead_followup_reason is not None:
+        task.status = "cancelled"
+        task.completed_at = now
+        job.status = "cancelled"
+        job.completed_at = now
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.result_json = {"reason": lead_followup_reason}
+        sync_lead_next_follow_up(
+            db,
+            workspace_id=workspace_id,
+            lead_id=task.lead_id,
+        )
+        db.commit()
+        return ExecutionResult(job=job, reason=lead_followup_reason)
+
     if task.execution_mode != "ai" or task.status not in {"pending", "in_progress"}:
         job.status = "cancelled"
         job.completed_at = now
@@ -1264,6 +1584,27 @@ def _execute_crm_followup_job(
         final_job.result_json = {"reason": "follow_up_target_missing_after_generation"}
         db.commit()
         return ExecutionResult(job=final_job, reason="follow_up_target_missing_after_generation")
+
+    lead_followup_reason = _system_lead_followup_ineligible_reason(
+        db,
+        task=final_task,
+        for_update=True,
+    )
+    if lead_followup_reason is not None:
+        final_task.status = "cancelled"
+        final_task.completed_at = now
+        final_job.status = "cancelled"
+        final_job.completed_at = now
+        final_job.locked_at = None
+        final_job.next_attempt_at = None
+        final_job.result_json = {"reason": lead_followup_reason}
+        sync_lead_next_follow_up(
+            db,
+            workspace_id=workspace_id,
+            lead_id=final_task.lead_id,
+        )
+        db.commit()
+        return ExecutionResult(job=final_job, reason=lead_followup_reason)
 
     if final_conversation.last_message_at != last_message_at_snapshot:
         final_job.status = "failed"
