@@ -1,0 +1,33 @@
+from pathlib import Path
+
+
+def _source() -> str:
+    root = Path(__file__).resolve().parents[1]
+    return (root / "app/services/automations.py").read_text(encoding="utf-8")
+
+
+def test_cancelled_jobs_are_not_reactivated_by_planner() -> None:
+    source = _source()
+    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]
+    assert 'existing.status in {"queued", "failed"}' in planner
+    assert 'existing.status in {"queued", "failed", "cancelled"}' not in planner
+    assert "Cancelled jobs are terminal" in planner
+
+
+def test_planner_cancels_only_safely_queued_stale_deliveries() -> None:
+    source = _source()
+    assert "def _cancel_pending_job_dispatch(" in source
+    assert 'dispatch.status != "queued"' in source
+    assert 'message.delivery_status == "queued"' in source
+    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]
+    assert 'AutomationJob.status.in_(("queued", "failed", "dispatched"))' in planner
+    assert "Appointment or rule became ineligible before provider send." in planner
+
+
+def test_reschedule_requeues_only_before_provider_send() -> None:
+    source = _source()
+    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]
+    assert 'existing.status == "dispatched" and existing.scheduled_for != when' in planner
+    assert '"reason": "rescheduled_before_provider_send"' in planner
+    assert "existing.message_id = None" in planner
+    assert "existing.dispatch_id = None" in planner

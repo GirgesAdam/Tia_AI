@@ -115,6 +115,29 @@ def _job_dedupe_key(appointment_id: UUID, rule_key: str) -> str:
     return f"appointment:{appointment_id}:rule:{rule_key}"
 
 
+def _cancel_pending_job_dispatch(
+    db: Session,
+    *,
+    job: AutomationJob,
+    reason: str,
+) -> bool:
+    """Cancel an automation message only while it is still safely queued."""
+    if job.dispatch_id is None:
+        return False
+    dispatch = db.get(MessageDispatch, job.dispatch_id)
+    if dispatch is None or dispatch.status != "queued":
+        return False
+
+    dispatch.status = "cancelled"
+    dispatch.locked_at = None
+    dispatch.next_attempt_at = None
+    dispatch.last_error = reason[:2000]
+    message = db.get(Message, dispatch.message_id)
+    if message is not None and message.delivery_status == "queued":
+        message.delivery_status = "cancelled"
+    return True
+
+
 def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
         return appointment.status in {"pending", "confirmed"}
@@ -217,7 +240,7 @@ def plan_automation_jobs(
                 )
             )
             if existing is not None:
-                if existing.status in {"queued", "failed", "cancelled"}:
+                if existing.status in {"queued", "failed"}:
                     existing.status = "queued"
                     existing.scheduled_for = when
                     existing.next_attempt_at = None
@@ -225,6 +248,23 @@ def plan_automation_jobs(
                     existing.completed_at = None
                     existing.last_error = None
                     existing.result_json = {}
+                elif existing.status == "dispatched" and existing.scheduled_for != when:
+                    if _cancel_pending_job_dispatch(
+                        db,
+                        job=existing,
+                        reason="Appointment timing changed before provider send.",
+                    ):
+                        existing.status = "queued"
+                        existing.scheduled_for = when
+                        existing.next_attempt_at = None
+                        existing.locked_at = None
+                        existing.completed_at = None
+                        existing.last_error = None
+                        existing.message_id = None
+                        existing.dispatch_id = None
+                        existing.result_json = {"reason": "rescheduled_before_provider_send"}
+                # Cancelled jobs are terminal. In particular, an admin cancellation
+                # must never be silently resurrected by the next planner tick.
                 continue
 
             db.add(
@@ -258,7 +298,7 @@ def plan_automation_jobs(
         )
         .where(
             AutomationJob.workspace_id == workspace_id,
-            AutomationJob.status.in_(("queued", "failed")),
+            AutomationJob.status.in_(("queued", "failed", "dispatched")),
         )
     )
     for job, appointment in db.execute(stale_stmt).all():
@@ -268,7 +308,16 @@ def plan_automation_jobs(
             or rule.id not in active_rule_ids
             or not _eligible_for_rule(appointment, rule)
         ):
+            if job.status == "dispatched" and not _cancel_pending_job_dispatch(
+                db,
+                job=job,
+                reason="Appointment or rule became ineligible before provider send.",
+            ):
+                # A processing/sent provider delivery cannot be safely recalled.
+                continue
             job.status = "cancelled"
+            job.locked_at = None
+            job.next_attempt_at = None
             job.completed_at = now
             job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
             cancelled += 1
