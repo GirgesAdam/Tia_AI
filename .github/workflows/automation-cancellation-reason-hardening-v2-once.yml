@@ -1,0 +1,102 @@
+name: Automation cancellation reason hardening v2 (one-time)
+
+on:
+  push:
+    branches: [feat/core-product-hardening]
+    paths: [.github/workflows/automation-cancellation-reason-hardening-v2-once.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+          fetch-depth: 0
+
+      - name: Apply cancellation semantics patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          service = Path("backend/app/services/automations.py")
+          s = service.read_text(encoding="utf-8")
+          anchor = "def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:\n"
+          helper = '''REPLANNABLE_CANCELLATION_REASONS = {\n    "rule_disabled",\n    "rule_disabled_by_admin",\n    "rule_disabled_or_appointment_no_longer_eligible",\n}\n\n\ndef _cancelled_job_can_be_replanned(job: AutomationJob) -> bool:\n    reason = str((job.result_json or {}).get("reason") or "")\n    return job.status == "cancelled" and reason in REPLANNABLE_CANCELLATION_REASONS\n\n\ndef _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:\n'''
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, helper, 1)
+
+          old = '''            if existing is not None:\n                if existing.status in {"queued", "failed"}:\n                    existing.status = "queued"\n                    existing.scheduled_for = when\n                    existing.next_attempt_at = None\n                    existing.locked_at = None\n                    existing.completed_at = None\n                    existing.last_error = None\n                    existing.result_json = {}\n                elif existing.status == "dispatched" and existing.scheduled_for != when:\n'''
+          new = '''            if existing is not None:\n                renewable_cancel = _cancelled_job_can_be_replanned(existing)\n                if existing.status in {"queued", "failed"} or renewable_cancel:\n                    existing.status = "queued"\n                    existing.scheduled_for = when\n                    existing.next_attempt_at = None\n                    existing.locked_at = None\n                    existing.completed_at = None\n                    existing.last_error = None\n                    if renewable_cancel:\n                        existing.message_id = None\n                        existing.dispatch_id = None\n                    existing.result_json = {}\n                elif existing.status == "dispatched" and existing.scheduled_for != when:\n'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              "                # Cancelled jobs are terminal. In particular, an admin cancellation\n                # must never be silently resurrected by the next planner tick.\n",
+              "                # Manual job cancellations stay terminal. Lifecycle cancellations\n                # are renewable only when the rule/appointment becomes eligible again.\n",
+              1,
+          )
+          service.write_text(s, encoding="utf-8")
+
+          route = Path("backend/app/api/routes/automations.py")
+          r = route.read_text(encoding="utf-8")
+          old = '''        for pending_job_id in cancellable_job_ids:\n            cancel_automation_job(\n                db,\n                workspace_id=access.workspace.id,\n                job_id=pending_job_id,\n                actor_user_id=access.user.id,\n            )\n\n'''
+          new = '''        for pending_job_id in cancellable_job_ids:\n            cancelled_job, _ = cancel_automation_job(\n                db,\n                workspace_id=access.workspace.id,\n                job_id=pending_job_id,\n                actor_user_id=access.user.id,\n            )\n            cancelled_job.result_json = {\n                **(cancelled_job.result_json or {}),\n                "reason": "rule_disabled_by_admin",\n            }\n\n'''
+          assert r.count(old) == 1
+          route.write_text(r.replace(old, new, 1), encoding="utf-8")
+
+          p = Path("backend/tests/test_auto_patient_lifecycle.py")
+          t = p.read_text(encoding="utf-8")
+          old = '''def test_reenabled_lifecycle_rule_can_revive_a_cancelled_due_job() -> None:\n    service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert 'existing.status in {"queued", "failed", "cancelled"}' in service\n    assert 'existing.status = "queued"' in service\n    assert "existing.completed_at = None" in service\n'''
+          new = '''def test_reenabled_lifecycle_rule_can_revive_only_lifecycle_cancelled_jobs() -> None:\n    service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert "REPLANNABLE_CANCELLATION_REASONS" in service\n    assert '"rule_disabled_by_admin"' in service\n    assert '"rule_disabled_or_appointment_no_longer_eligible"' in service\n    assert "_cancelled_job_can_be_replanned(existing)" in service\n    assert "existing.message_id = None" in service\n    assert "existing.dispatch_id = None" in service\n'''
+          assert t.count(old) == 1
+          p.write_text(t.replace(old, new, 1), encoding="utf-8")
+
+          p = Path("backend/tests/test_automation_lifecycle_contract.py")
+          t = p.read_text(encoding="utf-8")
+          old = '''def test_cancelled_jobs_are_not_reactivated_by_planner() -> None:\n    source = _source()\n    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]\n    assert 'existing.status in {"queued", "failed"}' in planner\n    assert 'existing.status in {"queued", "failed", "cancelled"}' not in planner\n    assert "Cancelled jobs are terminal" in planner\n'''
+          new = '''def test_manual_cancellations_stay_terminal_but_lifecycle_cancellations_can_replan() -> None:\n    source = _source()\n    assert "REPLANNABLE_CANCELLATION_REASONS" in source\n    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]\n    assert "renewable_cancel = _cancelled_job_can_be_replanned(existing)" in planner\n    assert 'existing.status in {"queued", "failed"} or renewable_cancel' in planner\n    assert "Manual job cancellations stay terminal" in planner\n'''
+          assert t.count(old) == 1
+          p.write_text(t.replace(old, new, 1), encoding="utf-8")
+
+          p = Path("backend/tests/test_automation_rule_disable_contract.py")
+          t = p.read_text(encoding="utf-8")
+          marker = "test_rule_disable_marks_cancellation_as_lifecycle_renewable_not_manual_job_cancel"
+          if marker not in t:
+              t += '''\n\ndef test_rule_disable_marks_cancellation_as_lifecycle_renewable_not_manual_job_cancel() -> None:\n    source = _route_source()\n    update = source.split("def update_rule(", 1)[1].split("@router.get(\\\"/overview\\\"", 1)[0]\n    assert '"reason": "rule_disabled_by_admin"' in update\n'''
+          p.write_text(t, encoding="utf-8")
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Full backend quality gate
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+          MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+          SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+          ENVIRONMENT: test
+          DEBUG: 'false'
+          DOCS_ENABLED: 'false'
+        run: |
+          ruff check app tests alembic
+          python -m compileall -q app alembic tests
+          python -m pytest -q
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/automations.py backend/app/api/routes/automations.py backend/tests/test_auto_patient_lifecycle.py backend/tests/test_automation_lifecycle_contract.py backend/tests/test_automation_rule_disable_contract.py
+          git diff --cached --check
+          git commit -m "fix: distinguish manual and lifecycle automation cancellations"
+          git push origin HEAD:feat/core-product-hardening
