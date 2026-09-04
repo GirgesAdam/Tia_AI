@@ -79,3 +79,5 @@ jobs:
         if: steps.review.outcome == 'failure'
         working-directory: .
         run: exit 1
+
+# one-shot trigger
