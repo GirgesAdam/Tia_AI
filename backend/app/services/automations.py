@@ -30,6 +30,7 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOverview
+from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
 
@@ -543,6 +544,42 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     return [patient_name, service_name, date, time, branch_name]
 
 
+def _config_flag_enabled(value: object) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _proactive_whatsapp_recipient(patient: Patient) -> str | None:
+    """Return the provider recipient id only when the CRM phone is globally routable."""
+    try:
+        _, normalized = normalize_patient_identity_phone(
+            patient.phone_normalized or patient.phone
+        )
+    except ValueError:
+        return None
+    if not normalized or not normalized.startswith("+"):
+        return None
+    digits = normalized[1:]
+    if not digits.isdigit() or not 8 <= len(digits) <= 15:
+        return None
+    return digits
+
+
+def _real_proactive_whatsapp_connection(connection: ChannelConnection) -> bool:
+    config = connection.config_json or {}
+    return (
+        connection.channel == "whatsapp"
+        and connection.status == "active"
+        and bool(connection.external_account_id)
+        and str(config.get("runtime_kind") or "").strip().lower() == "real"
+        and not _config_flag_enabled(config.get("mock"))
+        and not _config_flag_enabled(config.get("do_not_send"))
+    )
+
+
 def _resolve_external_route(
     db: Session,
     *,
@@ -599,11 +636,68 @@ def _resolve_external_route(
         .limit(1)
     )
     if identity is None:
-        return None
+        if channel not in {"auto", "whatsapp"}:
+            return None
+        patient = db.get(Patient, patient_id)
+        if patient is None:
+            return None
+        recipient = _proactive_whatsapp_recipient(patient)
+        if recipient is None:
+            return None
 
-    connection = db.get(ChannelConnection, identity.channel_connection_id)
-    if connection is None:
-        return None
+        proactive_connections = [
+            candidate
+            for candidate in db.scalars(
+                select(ChannelConnection).where(
+                    ChannelConnection.workspace_id == workspace_id,
+                    ChannelConnection.channel == "whatsapp",
+                    ChannelConnection.status == "active",
+                )
+            )
+            if _real_proactive_whatsapp_connection(candidate)
+        ]
+        # For a patient without an established identity, routing must be unambiguous.
+        # Multi-number workspaces can still route through an existing identity/conversation.
+        if len(proactive_connections) != 1:
+            return None
+        connection = proactive_connections[0]
+
+        recipient_identity = db.scalar(
+            select(ChannelIdentity).where(
+                ChannelIdentity.workspace_id == workspace_id,
+                ChannelIdentity.channel_connection_id == connection.id,
+                ChannelIdentity.external_user_id == recipient,
+            )
+        )
+        if recipient_identity is not None:
+            if recipient_identity.patient_id != patient_id:
+                # Never send to a phone already owned by another CRM patient.
+                return None
+            identity = recipient_identity
+        else:
+            display_name = (
+                f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+                or patient.first_name
+                or None
+            )
+            identity = ChannelIdentity(
+                workspace_id=workspace_id,
+                channel_connection_id=connection.id,
+                patient_id=patient_id,
+                external_user_id=recipient,
+                display_name=display_name,
+                phone=patient.phone,
+                metadata_json={
+                    "source": "crm_patient_phone",
+                    "proactive_identity": True,
+                },
+            )
+            db.add(identity)
+            db.flush()
+    else:
+        connection = db.get(ChannelConnection, identity.channel_connection_id)
+        if connection is None:
+            return None
 
     conversation = Conversation(
         workspace_id=workspace_id,
