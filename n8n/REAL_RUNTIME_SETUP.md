@@ -18,16 +18,23 @@ Import these three workflows:
 - `tia_whatsapp_outbox_worker.json`
 - `tia_automation_scheduler.json`
 
-Set this environment variable on the n8n runtime:
+Set these environment variables on the self-hosted n8n runtime:
 
 ```text
 TIA_API_BASE_URL=https://YOUR_PUBLIC_TIA_BACKEND_DOMAIN
+N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 ```
 
 Use the public HTTPS FastAPI origin only, with no trailing slash. All active Tia
-HTTP Request nodes read this value at runtime. For local Docker development the
-workflow JSON keeps `http://host.docker.internal:8000` as a fallback, so no URL
-editing is required when switching between local and hosted environments.
+HTTP Request nodes read `TIA_API_BASE_URL` at runtime. Recent n8n versions can
+block `$env` access in expressions, so the dedicated Tia n8n runtime must allow
+environment access with `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`. Do not use this
+setting on a shared/untrusted n8n instance where arbitrary workflow authors can
+read process environment variables.
+
+For local Docker development the workflow JSON keeps
+`http://host.docker.internal:8000` as a fallback, so no URL editing is required
+when switching between local and hosted environments.
 
 ## Credentials kept in n8n
 
@@ -125,7 +132,7 @@ check.
 
 ## First live test order
 
-1. Deploy the backend and set `TIA_API_BASE_URL` in n8n.
+1. Deploy the backend and set `TIA_API_BASE_URL` plus the n8n env-access setting.
 2. Import/publish the automation scheduler and confirm a real worker heartbeat.
 3. Provision/import WhatsApp and send a staging WhatsApp text from a phone you control.
 4. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks.
