@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/natural-agent-patch-once.yml
       - backend/scripts/apply_natural_agent_patch_once.py
+      - backend/scripts/patch_natural_agent_stale_tests_once.py
 
 permissions:
   contents: write
@@ -34,13 +35,15 @@ jobs:
 
       - name: Apply patch
         working-directory: backend
-        run: python scripts/apply_natural_agent_patch_once.py
+        run: |
+          python scripts/apply_natural_agent_patch_once.py
+          python scripts/patch_natural_agent_stale_tests_once.py
 
       - name: Lint
         working-directory: backend
         run: |
-          ruff check --fix app tests scripts/apply_natural_agent_patch_once.py
-          ruff check app tests scripts/apply_natural_agent_patch_once.py
+          ruff check --fix app tests scripts/apply_natural_agent_patch_once.py scripts/patch_natural_agent_stale_tests_once.py
+          ruff check app tests scripts/apply_natural_agent_patch_once.py scripts/patch_natural_agent_stale_tests_once.py
 
       - name: Focused natural UX tests
         working-directory: backend
@@ -63,7 +66,8 @@ jobs:
                   backend/app/agents/grounded_response.py \
                   backend/app/agents/tia_customer_agent.py \
                   backend/app/agents/turn_interpreter.py \
-                  backend/tests/test_agent_natural_availability.py
+                  backend/tests/test_agent_natural_availability.py \
+                  backend/tests/test_realtime_recovery.py
           if git diff --cached --quiet; then
             echo "No patch changes to commit."
             exit 0
