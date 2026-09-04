@@ -2121,7 +2121,11 @@ def _run_after_inbound(
         reply, model_name = direct
         # A completed structured booking/reschedule is already a verified customer
         # fact. Do not send it through another model pass after the write.
-        if grounded_mode and not model_name.startswith("flow-interpreter:deterministic-"):
+        if (
+            grounded_mode
+            and model_name != "capability-policy:handoff"
+            and not model_name.startswith("flow-interpreter:deterministic-")
+        ):
             try:
                 reply, composed_model = compose_grounded_customer_reply(
                     clinic_name=workspace.name,

@@ -331,7 +331,7 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             first, second, scenario_check = _case_messages(name, db, workspace, patient)
         elif name == "cancel_unique":
             rows = _seed_upcoming(db, workspace, patient, 1)
-            first, second = "عايز ألغي معادي الجاي", "أيوة الغيه"
+            first, second = "فكرني بمعادي الجاي", "تمام، الغيه دلوقتي"
             scenario_check = lambda: (rows[0].status == "cancelled", f"status={rows[0].status}")
         elif name == "cancel_ambiguous":
             rows = _seed_upcoming(db, workspace, patient, 2)
@@ -399,8 +399,10 @@ def _execute_case(engine, slug: str, name: str) -> Result:
             checks.append(f"privacy_boundary={privacy_ok}")
             scenario_ok = scenario_ok and privacy_ok
         if name == "medical_handoff":
-            medical_ok = any(token in replies for token in ("الفريق الطبي", "فريق العيادة", "تقييم", "طبي"))
-            checks.append(f"medical_handoff={medical_ok}")
+            expected = "الموضوع ده محتاج تقييم من الفريق الطبي، فحوّلت المحادثة لفريق العيادة للمراجعة."
+            first_reply = (result.turns[0].assistant or "").strip() if result.turns else ""
+            medical_ok = first_reply == expected
+            checks.append(f"safe_deterministic_medical_handoff={medical_ok}")
             scenario_ok = scenario_ok and medical_ok
         if name == "package_compare":
             all_replied = all(bool((turn.assistant or "").strip()) for turn in result.turns)
