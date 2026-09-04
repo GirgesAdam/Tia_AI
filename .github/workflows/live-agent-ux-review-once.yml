@@ -7,9 +7,10 @@ on:
     paths:
       - .github/workflows/live-agent-ux-review-once.yml
       - backend/scripts/run_live_agent_ux_review.py
+      - backend/scripts/apply_agent_ux_continuation.py
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   ux-review:
@@ -58,9 +59,26 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY"
           test -n "$DATABASE_URL"
-      - name: Compile UX runner
-        run: python -m py_compile scripts/run_live_agent_ux_review.py
-      - name: Run twenty live conversations
+      - name: Apply continuation patch
+        run: python scripts/apply_agent_ux_continuation.py
+      - name: Compile patched agent files
+        run: |
+          python -m py_compile scripts/run_live_agent_ux_review.py
+          python -m py_compile app/agents/turn_interpreter.py
+          python -m py_compile app/services/agent_chat.py
+      - name: Commit continuation patch
+        working-directory: .
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/agents/turn_interpreter.py backend/app/services/agent_chat.py backend/scripts/run_live_agent_ux_review.py
+          git commit -m "fix(agent): continue natural UX hardening [skip ci]"
+          git push origin HEAD:feat/core-product-hardening
+      - name: Run twenty-one live conversations
         id: review
         continue-on-error: true
         run: |
@@ -80,4 +98,4 @@ jobs:
         working-directory: .
         run: exit 1
 
-# one-shot trigger
+# one-shot continuation trigger
