@@ -55,3 +55,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix: align readiness with merged migration head"
           git push origin HEAD:feat/core-product-hardening
+
+# rerun after lint-clean lineage guard
