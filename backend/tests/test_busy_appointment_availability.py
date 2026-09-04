@@ -68,3 +68,18 @@ def test_booking_engine_filters_active_appointments_before_appending_slots() -> 
     slot_append = source.index("slots.append(", overlap_filter)
 
     assert active_query < overlap_filter < slot_append
+
+
+def test_manual_live_review_is_transcript_first_and_never_runs_all_cases_by_default() -> None:
+    """Live LLM cost and UX judgement stay explicit and human-reviewed."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_live_agent_manual_review.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'quality_scoring": "manual_transcript_review"' in source
+    assert 'required=True' in source
+    assert 'default_names' not in source
+    assert '"PASS"' not in source
+    assert '"FAIL"' not in source
