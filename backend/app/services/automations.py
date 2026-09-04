@@ -487,8 +487,8 @@ def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "appointment_reminder_6h":
         return (
             f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-            f"النهارده الساعة {data['time']} في {data['branch_name']}، فاضل حوالي 6 ساعات. "
-            "مستنيينك 💛"
+            f"يوم {data['date']} الساعة {data['time']}. "
+            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.
@@ -506,7 +506,9 @@ def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "post_visit_followup":
         return (
             f"إزيك {data['patient_name']}؟ حبيت أطمن عليكي بعد {data['service_name']} "
-            f"اللي كانت يوم {data['date']}. كل حاجة تمام؟"
+            f"اللي كانت يوم {data['date']}. كل حاجة تمام؟ "
+            "لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، "
+            "ويسعدنا نعرف تقييمك للجلسة."
         )
     if rule_key == "no_show_followup":
         return (
@@ -552,7 +554,7 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
-        return [patient_name, service_name, time, branch_name]
+        return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
         return [patient_name, service_name, date]
 
