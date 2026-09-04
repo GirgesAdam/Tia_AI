@@ -30,7 +30,7 @@ const descriptions: Record<string, string> = {
   no_show_followup: "تتواصل مع العميل بعد عدم الحضور للمساعدة في إعادة الحجز.",
 };
 
-const legacyRuleKeys = new Set(["appointment_reminder_24h", "appointment_reminder_2h"]);
+const visibleProductRuleKeys = new Set(["booking_confirmation", "appointment_reminder_6h", "post_visit_followup"]);
 
 function attentionLabel(job: AutomationJob): string | null {
   if (job.attention_reason === "execution_failed") return "لم تكتمل العملية تلقائيًا";
@@ -65,8 +65,8 @@ function variablesHint(rule: AutomationRule): string {
 }
 
 function automationWarning(state: AutomationOperationsOverview["worker_state"]) {
-  if (state === "stale") return "بعض عمليات الأتمتة تتأخر عن المعتاد. راجع الحالات التي تحتاج تدخلًا أدناه.";
-  if (state === "missing") return "الأتمتة غير جاهزة للتنفيذ حاليًا. راجع إعدادات التشغيل قبل الاعتماد على الرسائل التلقائية.";
+  if (state === "stale") return "محرك تنفيذ الأتمتة غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
+  if (state === "missing") return "لم يتم ربط محرك تنفيذ الأتمتة بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
   return null;
 }
 
@@ -77,7 +77,7 @@ export default async function AutomationsPage() {
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
     getAppContext(),
   ]);
-  const rules = rawRules.filter((rule) => !legacyRuleKeys.has(rule.key));
+  const rules = rawRules.filter((rule) => visibleProductRuleKeys.has(rule.key));
   const attentionJobs = jobs.filter((job) => Boolean(attentionLabel(job)));
   const recentJobs = jobs.slice(0, 12);
   const warning = automationWarning(overview.worker_state);
@@ -92,7 +92,13 @@ export default async function AutomationsPage() {
       {warning && (
         <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <CircleAlert size={18} className="mt-0.5 shrink-0" />
-          <div><b>تحتاج مراجعة</b><p className="mt-1 leading-6">{warning}</p></div>
+          <div>
+            <b>تحتاج مراجعة</b>
+            <p className="mt-1 leading-6">{warning}</p>
+            {overview.worker_last_seen_at && (
+              <p className="mt-1 text-xs">آخر اتصال بمحرك التنفيذ: {formatDateTime(overview.worker_last_seen_at)}</p>
+            )}
+          </div>
         </div>
       )}
 
