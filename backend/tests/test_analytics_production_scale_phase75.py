@@ -146,7 +146,7 @@ def test_phase75_uses_isolated_pool_timeout_cache_export_guards_and_payment_inde
     assert 'down_revision: str | None = "0042_analytics_saved_views"' in migration
     assert "autocommit_block" in migration
     assert "postgresql_concurrently=True" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def test_catalog_validation_reuses_entity_catalog_in_same_run(monkeypatch) -> None:

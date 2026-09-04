@@ -7,7 +7,7 @@ from app.services.operational_readiness import (
 
 
 def test_release_gate_targets_current_schema_head() -> None:
-    assert EXPECTED_MIGRATION_HEAD == "0055_lead_followup"
+    assert EXPECTED_MIGRATION_HEAD == "0056_merge_automation_expenses"
 
 
 def test_stale_lock_threshold_matches_existing_worker_reclaim_window_or_later() -> None:

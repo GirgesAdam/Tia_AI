@@ -327,7 +327,7 @@ def test_analytics_query_index_migration_is_current_head() -> None:
     assert 'revision: str = "0041_analytics_query_indexes"' in migration
     assert 'down_revision: str | None = "0040_doctor_name_hygiene"' in migration
     assert 'ix_appointments_workspace_status_start_patient' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def test_catalog_filter_options_hide_inactive_legacy_entities() -> None:

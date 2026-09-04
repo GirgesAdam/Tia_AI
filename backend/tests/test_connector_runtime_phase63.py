@@ -461,7 +461,7 @@ def test_phase63_migration_runtime_and_n8n_contracts_are_deterministic() -> None
     assert 'revision: str = "0036_sync_runtime"' in migration
     assert len("0036_sync_runtime") <= 32
     assert "clinic_integration_sync_schedules" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
     assert '"/integration/sync/run"' in clinic_routes
     assert '"/integration/sync/schedule"' in clinic_routes
     assert '"/adapter/clinic-sync/tick"' in automation_routes

@@ -16,4 +16,4 @@ def test_v049017_hardens_remaining_public_tables() -> None:
 def test_v049017_updates_operational_readiness_head() -> None:
     backend = Path(__file__).resolve().parent.parent
     readiness = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness

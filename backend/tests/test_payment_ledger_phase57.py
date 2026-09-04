@@ -101,7 +101,7 @@ def test_migration_backfills_legacy_snapshots_and_advances_readiness_head() -> N
     assert "legacy-payment" in migration
     assert "legacy-refund" in migration
     assert "a.payment_status IN ('paid', 'partial', 'refunded')" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def test_historical_import_writes_canonical_payment_ledger_directly() -> None:

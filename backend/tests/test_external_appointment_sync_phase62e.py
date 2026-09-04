@@ -499,7 +499,7 @@ def test_migration_0035_extends_sync_domain_checks_and_head() -> None:
     assert 'revision: str = "0035_appointment_sync"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0034_drop_customer_email"' in migration
     assert "'patients', 'payments', 'appointments'" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def _load_appointment_sync_migration_module():

@@ -124,7 +124,7 @@ def test_phase62a_model_and_migration_make_appointment_link_optional_and_backfil
     assert 'INSERT INTO payment_allocations' in migration
     assert 'nullable=True' in migration
     assert 'Never guess' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0055_lead_followup"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def test_appointment_money_reads_and_reschedule_use_allocation_rows() -> None:
