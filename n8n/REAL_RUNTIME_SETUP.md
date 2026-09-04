@@ -7,6 +7,16 @@ identity resolution, source authority, retries, or financial decisions.
 Patient communication in the current product contract is WhatsApp-based. There
 is no Gmail automation runtime in the project.
 
+The production FastAPI backend currently runs at:
+
+```text
+https://tia-api-production-54c5.up.railway.app
+```
+
+The lightweight Oracle deployment package for the always-on automation runtime
+is in `deploy/oracle-n8n/`. It runs n8n, a PostgreSQL database used only by n8n,
+and Caddy for HTTPS. FastAPI stays on Railway and is not duplicated on the VM.
+
 ## Active workflows
 
 Import these three workflows:
@@ -18,7 +28,7 @@ Import these three workflows:
 Set these environment variables on the self-hosted n8n runtime:
 
 ```text
-TIA_API_BASE_URL=https://YOUR_PUBLIC_TIA_BACKEND_DOMAIN
+TIA_API_BASE_URL=https://tia-api-production-54c5.up.railway.app
 N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 ```
 
@@ -69,6 +79,10 @@ python scripts/provision_whatsapp_channel.py --workspace-id YOUR_WORKSPACE_ID --
 python scripts/provision_n8n_automation_worker.py --workspace-id YOUR_WORKSPACE_ID --name "Tia n8n Runtime"
 ```
 
+Do not reuse the paused staging worker token or a demo channel token in
+production. Provision a new worker token and a production channel token, then
+store their plaintext values only in n8n credentials.
+
 ## WhatsApp path
 
 ```text
@@ -111,7 +125,11 @@ blindly retried. Tia remains responsible for business retries, outbox reclaim,
 sync leases, checkpoints, and scheduler backoff. This avoids duplicate WhatsApp
 messages when a provider response is ambiguous.
 
-## Staging vs real runtime
+## Production safety state before n8n activation
+
+Keep the real WhatsApp connection paused and the old n8n worker paused until the
+new production n8n instance is online and has fresh credentials. This prevents a
+partially configured runtime from sending messages.
 
 Connections marked `staging_mock`, `mock=true`, `do_not_send=true`, or without
 `runtime_kind=real` do not satisfy the Production Readiness external-channel
@@ -119,10 +137,12 @@ check.
 
 ## First live test order
 
-1. Deploy the backend and set `TIA_API_BASE_URL` plus the n8n env-access setting.
-2. Import/publish the automation scheduler and confirm a real worker heartbeat.
-3. Provision/import WhatsApp and send a staging WhatsApp text from a phone you control.
-4. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks.
-5. Enable one approved automation rule and verify a real reminder end-to-end.
-6. Configure an external clinic connector, run one manual sync, and verify its checkpoint.
-7. Enable scheduled sync and verify a later scheduler tick advances or confirms the checkpoint without duplicates.
+1. Start the Oracle n8n package and confirm HTTPS.
+2. Provision a new automation worker and configure `X-Automation-Token` in n8n.
+3. Import/publish only the automation scheduler and confirm a fresh worker heartbeat.
+4. Provision/configure the production WhatsApp channel token and Meta credential.
+5. Publish inbound/status and outbox workflows.
+6. Send the first provider test only to a phone number you control.
+7. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks and an inbound reply.
+8. Enable one approved automation rule and verify a real reminder end-to-end.
+9. Configure an external clinic connector only when a real clinic integration is ready.
