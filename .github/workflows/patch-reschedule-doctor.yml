@@ -53,14 +53,21 @@ jobs:
           test = Path('backend/tests/test_reschedule_doctor_change_contract.py')
           test.write_text('''from pathlib import Path\n\n\ndef test_grounded_reschedule_propagates_requested_doctor() -> None:\n    backend = Path(__file__).resolve().parent.parent\n    tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")\n    chat = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")\n\n    assert "doctor_id: str = \\\"\\\"" in tools\n    assert "doctor_id=doctor_id or current.doctor_id" in tools\n    assert "reschedule_arguments[\\\"doctor_id\\\"] = doctor_id" in chat\n''', encoding='utf-8')
           PY
-      - name: Run focused contract test
-        working-directory: backend
-        run: python -m pytest tests/test_reschedule_doctor_change_contract.py -q
+      - name: Validate focused contract without dependencies
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          tools = Path('backend/app/agents/tools/clinic_tools.py').read_text(encoding='utf-8')
+          chat = Path('backend/app/services/agent_chat.py').read_text(encoding='utf-8')
+          assert 'doctor_id: str = ""' in tools
+          assert 'doctor_id=doctor_id or current.doctor_id' in tools
+          assert 'reschedule_arguments["doctor_id"] = doctor_id' in chat
+          PY
       - name: Remove patch workflow and commit
         run: |
           rm .github/workflows/patch-reschedule-doctor.yml
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898218+github-actions[bot]@users.noreply.github.com"
           git add backend/app backend/tests/test_reschedule_doctor_change_contract.py .github/workflows/patch-reschedule-doctor.yml
           git diff --cached --check
           git commit -m "fix(agent): support doctor changes while rescheduling"
