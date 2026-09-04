@@ -14,6 +14,7 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
         "booking_confirmation",
         "appointment_reminder_6h",
         "post_visit_followup",
+        "cancellation_recovery",
         "no_show_followup",
     }
 
@@ -26,6 +27,7 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
 
     assert rules["booking_confirmation"].enabled_by_default is False
     assert rules["post_visit_followup"].enabled_by_default is False
+    assert rules["cancellation_recovery"].enabled_by_default is False
     assert rules["no_show_followup"].enabled_by_default is False
 
 

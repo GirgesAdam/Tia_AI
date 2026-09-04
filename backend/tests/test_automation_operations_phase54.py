@@ -90,7 +90,7 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0054_cancel_recovery"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:

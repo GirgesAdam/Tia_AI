@@ -158,6 +158,8 @@ def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
         return appointment.status == "completed" and appointment.completed_at is not None
     if rule.trigger_kind == "after_no_show":
         return appointment.status == "no_show" and appointment.no_show_at is not None
+    if rule.trigger_kind == "after_cancelled":
+        return appointment.status == "cancelled" and appointment.cancelled_at is not None
     return False
 
 
@@ -204,6 +206,18 @@ def _candidate_appointments(
                 )
             )
         )
+    if rule.trigger_kind == "after_cancelled":
+        oldest = now - timedelta(days=7)
+        return list(
+            db.scalars(
+                select(Appointment).where(
+                    Appointment.workspace_id == workspace_id,
+                    Appointment.status == "cancelled",
+                    Appointment.cancelled_at.is_not(None),
+                    Appointment.cancelled_at >= oldest,
+                )
+            )
+        )
     return []
 
 
@@ -236,6 +250,7 @@ def plan_automation_jobs(
                 appointment_start_at=appointment.start_at,
                 completed_at=appointment.completed_at,
                 no_show_at=appointment.no_show_at,
+                cancelled_at=appointment.cancelled_at,
             )
             if when is None:
                 continue
@@ -510,6 +525,12 @@ def _fallback_text(rule_key: str, data: dict) -> str:
             "لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، "
             "ويسعدنا نعرف تقييمك للجلسة."
         )
+    if rule_key == "cancellation_recovery":
+        return (
+            f"أهلًا {data['patient_name']}، حبيت أساعدك بعد إلغاء موعد {data['service_name']} "
+            f"يوم {data['date']} الساعة {data['time']}. "
+            "لو حابة نرتب ميعاد جديد ابعتيلي هنا وأنا أساعدك."
+        )
     if rule_key == "no_show_followup":
         return (
             f"أهلًا {data['patient_name']}، لاحظت إن ميعاد {data['service_name']} فات. "
@@ -554,6 +575,8 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
+        return [patient_name, service_name, date, time]
+    if rule_key == "cancellation_recovery":
         return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
         return [patient_name, service_name, date]

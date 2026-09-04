@@ -140,3 +140,11 @@ avoid duplicate messages after ambiguous provider responses.
 - stale/missing n8n heartbeat is surfaced to the admin.
 
 There is no Gmail automation worker in the current product runtime.
+
+
+## Cancellation recovery
+
+`cancellation_recovery` is an optional WhatsApp automation and is disabled by default.
+The admin can enable it and choose how long after `appointments.cancelled_at` it should run.
+It reuses the normal appointment automation job/outbox path; there is no separate cancellation workflow or state machine.
+The Meta template is `tia_cancellation_recovery_ar` with four positional body parameters: customer name, service, cancelled appointment date, and cancelled appointment time.

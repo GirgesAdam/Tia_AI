@@ -53,6 +53,17 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         enabled_by_default=False,
     ),
     DefaultAutomationRule(
+        key="cancellation_recovery",
+        name="Cancellation recovery follow-up",
+        trigger_kind="after_cancelled",
+        offset_minutes=60,
+        channel="whatsapp",
+        template_name="tia_cancellation_recovery_ar",
+        template_language="ar",
+        max_lateness_minutes=1440,
+        enabled_by_default=False,
+    ),
+    DefaultAutomationRule(
         key="no_show_followup",
         name="No-show recovery follow-up",
         trigger_kind="after_no_show",
@@ -74,6 +85,7 @@ def scheduled_for(
     appointment_start_at: datetime,
     completed_at: datetime | None,
     no_show_at: datetime | None,
+    cancelled_at: datetime | None = None,
 ) -> datetime | None:
     if trigger_kind == "appointment_created":
         anchor = appointment_created_at
@@ -83,6 +95,8 @@ def scheduled_for(
         anchor = completed_at
     elif trigger_kind == "after_no_show":
         anchor = no_show_at
+    elif trigger_kind == "after_cancelled":
+        anchor = cancelled_at
     else:
         return None
 

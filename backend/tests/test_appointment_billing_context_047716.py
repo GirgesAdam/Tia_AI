@@ -11,7 +11,7 @@ def test_billing_context_migration_is_head_and_reversible() -> None:
     migration = (_backend() / "alembic/versions/0047_appointment_billing_context.py").read_text(
         encoding="utf-8"
     )
-    assert EXPECTED_MIGRATION_HEAD == "0053_public_table_rls_completion"
+    assert EXPECTED_MIGRATION_HEAD == "0054_cancel_recovery"
     assert 'revision: str = "0047_appointment_billing_context"' in migration
     assert 'down_revision: str | None = "0046_sparse_appointment_context"' in migration
     assert '"billing_context"' in migration

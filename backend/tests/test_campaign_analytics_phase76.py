@@ -177,7 +177,7 @@ def test_phase76_routes_migration_and_frontend_are_explicit_about_attribution() 
     assert 'revision: str = "0044_campaign_analytics_tracking"' in migration
     assert 'down_revision: str | None = "0043_analytics_scale_guards"' in migration
     assert 'REVOKE ALL ON TABLE public."crm_campaign_conversions" FROM anon, authenticated' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0054_cancel_recovery"' in readiness
     assert '@router.get("/campaigns"' in route and '@router.get("/campaigns/{campaign_id}"' in route
     assert "get_analytics_db" in route and "get_analytics_workspace_reader" in route
     assert "direct_same_conversation_response" in attribution
