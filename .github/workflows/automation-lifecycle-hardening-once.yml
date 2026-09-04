@@ -1,0 +1,86 @@
+name: Automation lifecycle hardening (one-time)
+
+on:
+  push:
+    branches:
+      - feat/core-product-hardening
+    paths:
+      - .github/workflows/automation-lifecycle-hardening-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+          fetch-depth: 0
+
+      - name: Patch automation lifecycle
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("backend/app/services/automations.py")
+          source = path.read_text(encoding="utf-8")
+
+          anchor = '''def _job_dedupe_key(appointment_id: UUID, rule_key: str) -> str:\n    return f"appointment:{appointment_id}:rule:{rule_key}"\n\n\n'''
+          helper = '''def _job_dedupe_key(appointment_id: UUID, rule_key: str) -> str:\n    return f"appointment:{appointment_id}:rule:{rule_key}"\n\n\ndef _cancel_pending_job_dispatch(\n    db: Session,\n    *,\n    job: AutomationJob,\n    reason: str,\n) -> bool:\n    """Cancel an automation message only while it is still safely queued."""\n    if job.dispatch_id is None:\n        return False\n    dispatch = db.get(MessageDispatch, job.dispatch_id)\n    if dispatch is None or dispatch.status != "queued":\n        return False\n\n    dispatch.status = "cancelled"\n    dispatch.locked_at = None\n    dispatch.next_attempt_at = None\n    dispatch.last_error = reason[:2000]\n    message = db.get(Message, dispatch.message_id)\n    if message is not None and message.delivery_status == "queued":\n        message.delivery_status = "cancelled"\n    return True\n\n\n'''
+          assert source.count(anchor) == 1, "dedupe helper anchor changed"
+          source = source.replace(anchor, helper, 1)
+
+          old_existing = '''            if existing is not None:\n                if existing.status in {"queued", "failed", "cancelled"}:\n                    existing.status = "queued"\n                    existing.scheduled_for = when\n                    existing.next_attempt_at = None\n                    existing.locked_at = None\n                    existing.completed_at = None\n                    existing.last_error = None\n                    existing.result_json = {}\n                continue\n'''
+          new_existing = '''            if existing is not None:\n                if existing.status in {"queued", "failed"}:\n                    existing.status = "queued"\n                    existing.scheduled_for = when\n                    existing.next_attempt_at = None\n                    existing.locked_at = None\n                    existing.completed_at = None\n                    existing.last_error = None\n                    existing.result_json = {}\n                elif existing.status == "dispatched" and existing.scheduled_for != when:\n                    if _cancel_pending_job_dispatch(\n                        db,\n                        job=existing,\n                        reason="Appointment timing changed before provider send.",\n                    ):\n                        existing.status = "queued"\n                        existing.scheduled_for = when\n                        existing.next_attempt_at = None\n                        existing.locked_at = None\n                        existing.completed_at = None\n                        existing.last_error = None\n                        existing.message_id = None\n                        existing.dispatch_id = None\n                        existing.result_json = {"reason": "rescheduled_before_provider_send"}\n                # Cancelled jobs are terminal. In particular, an admin cancellation\n                # must never be silently resurrected by the next planner tick.\n                continue\n'''
+          assert source.count(old_existing) == 1, "existing-job planner block changed"
+          source = source.replace(old_existing, new_existing, 1)
+
+          old_status = '''            AutomationJob.status.in_(("queued", "failed")),\n'''
+          new_status = '''            AutomationJob.status.in_(("queued", "failed", "dispatched")),\n'''
+          assert source.count(old_status) >= 1, "stale-job status filter changed"
+          stale_start = source.index("    stale_stmt = (")
+          stale_end = source.index("    try:\n        db.commit()", stale_start)
+          stale_block = source[stale_start:stale_end]
+          assert stale_block.count(old_status) == 1, "unexpected stale-job status filter count"
+          stale_block = stale_block.replace(old_status, new_status, 1)
+
+          old_cancel = '''        if (\n            rule is None\n            or rule.id not in active_rule_ids\n            or not _eligible_for_rule(appointment, rule)\n        ):\n            job.status = "cancelled"\n            job.completed_at = now\n            job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}\n            cancelled += 1\n\n'''
+          new_cancel = '''        if (\n            rule is None\n            or rule.id not in active_rule_ids\n            or not _eligible_for_rule(appointment, rule)\n        ):\n            if job.status == "dispatched" and not _cancel_pending_job_dispatch(\n                db,\n                job=job,\n                reason="Appointment or rule became ineligible before provider send.",\n            ):\n                # A processing/sent provider delivery cannot be safely recalled.\n                continue\n            job.status = "cancelled"\n            job.locked_at = None\n            job.next_attempt_at = None\n            job.completed_at = now\n            job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}\n            cancelled += 1\n\n'''
+          assert stale_block.count(old_cancel) == 1, "stale-job cancellation block changed"
+          stale_block = stale_block.replace(old_cancel, new_cancel, 1)
+          source = source[:stale_start] + stale_block + source[stale_end:]
+
+          path.write_text(source, encoding="utf-8")
+
+          test_path = Path("backend/tests/test_automation_lifecycle_contract.py")
+          test_path.write_text('''from pathlib import Path\n\n\ndef _source() -> str:\n    root = Path(__file__).resolve().parents[1]\n    return (root / "app/services/automations.py").read_text(encoding="utf-8")\n\n\ndef test_cancelled_jobs_are_not_reactivated_by_planner() -> None:\n    source = _source()\n    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]\n    assert 'existing.status in {"queued", "failed"}' in planner\n    assert 'existing.status in {"queued", "failed", "cancelled"}' not in planner\n    assert "Cancelled jobs are terminal" in planner\n\n\ndef test_planner_cancels_only_safely_queued_stale_deliveries() -> None:\n    source = _source()\n    assert "def _cancel_pending_job_dispatch(" in source\n    assert 'dispatch.status != "queued"' in source\n    assert 'message.delivery_status == "queued"' in source\n    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]\n    assert 'AutomationJob.status.in_(("queued", "failed", "dispatched"))' in planner\n    assert "Appointment or rule became ineligible before provider send." in planner\n\n\ndef test_reschedule_requeues_only_before_provider_send() -> None:\n    source = _source()\n    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]\n    assert 'existing.status == "dispatched" and existing.scheduled_for != when' in planner\n    assert '"reason": "rescheduled_before_provider_send"' in planner\n    assert "existing.message_id = None" in planner\n    assert "existing.dispatch_id = None" in planner\n''', encoding="utf-8")
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend test dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run targeted automation tests
+        working-directory: backend
+        run: >-
+          python -m pytest
+          tests/test_automation_lifecycle_contract.py
+          tests/test_automation_engine.py
+          tests/test_appointment_reminder_6h.py
+          tests/test_n8n_workflow_contract.py
+          -q
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/automations.py backend/tests/test_automation_lifecycle_contract.py
+          git diff --cached --check
+          git commit -m "fix: harden appointment automation lifecycle"
+          git push origin HEAD:feat/core-product-hardening
