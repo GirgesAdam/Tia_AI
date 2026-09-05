@@ -111,7 +111,7 @@ for filename, config in configs.items():
             "parameters": [
                 {
                     "name": config["header"],
-                    "value": f"={{ $env.{config['env']} }}",
+                    "value": "={{ $env." + config["env"] + " }}",
                 }
             ]
         }
