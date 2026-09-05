@@ -14,6 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.agents.availability_presentation import availability_windows_from_slots
 from app.integrations.clinic.base import (
     AppointmentReadRequest,
     AppointmentReadResult,
@@ -547,9 +548,6 @@ def _availability_payload(
     upper_bound: time | None,
     exclude_appointment_id: str | UUID | None = None,
 ) -> dict:
-    # Backward-compatible helper boundary: Phase 2.2 callers/tests used ORM
-    # objects while Phase 2.4 runtime callers pass canonical IDs. Normalize
-    # both forms here, then keep the adapter contract string-ID only.
     resolved_branch_id = branch_id or (str(branch.id) if branch is not None else None)
     resolved_service_id = service_id or (str(service.id) if service is not None else None)
     if resolved_branch_id is None:
@@ -599,17 +597,14 @@ def _availability_payload(
                 local_minutes = local_start.hour * 60 + local_start.minute
                 return abs(local_minutes - target_minutes), local_start
 
-            # Respect any explicit hard window while recovering from an unavailable
-            # exact start. If there is no broad window, search the verified same-day
-            # availability. This never invents a slot.
             if lower_bound is not None or upper_bound is not None:
                 nearby_pool = window_slots
             else:
                 nearby_pool = [(slot, slot.start_at.astimezone(tz)) for slot in slots]
             presented_slots = sorted(nearby_pool, key=distance_from_requested)[:12]
 
-    result_slots = []
-    for slot, local_start in presented_slots[:12]:
+    result_slots: list[dict[str, object]] = []
+    for slot, local_start in presented_slots:
         local_end = slot.end_at.astimezone(tz)
         result_slots.append(
             {
@@ -647,17 +642,18 @@ def _availability_payload(
                 else None
             ),
         },
-        "requested_start_time": requested_start.strftime("%H:%M") if requested_start else None,
+        "requested_start_time": (
+            requested_start.strftime("%H:%M") if requested_start else None
+        ),
+        # Keep all verified starts internally so a customer can choose any clock
+        # time from a displayed availability window. These rows are not rendered
+        # directly to the customer.
         "slots": result_slots,
+        "availability_windows": availability_windows_from_slots(result_slots),
         "matching_slot_count": matching_slot_count,
         "requested_time_unavailable": requested_time_unavailable,
-        "more_slots_available": (
-            len(presented_slots) > len(result_slots)
-            if requested_start is not None
-            else len(window_slots) > len(result_slots)
-        ),
+        "more_slots_available": False,
     }
-
 
 def _record_action(
     ctx: AgentToolContext,
@@ -1270,6 +1266,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     def get_reschedule_options(
         booking_date: str,
         service_id: str = "",
+        doctor_id: str = "",
         service_search: str = "",
         requested_start_time: str = "",
         not_before_time: str = "",
@@ -1284,6 +1281,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         inputs = {
             "booking_date": booking_date,
             "service_id": service_id,
+            "doctor_id": doctor_id or None,
             "service_search": service_search,
             "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
@@ -1369,7 +1367,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 branch_id=current.branch_id,
                 service_id=current.service_id,
                 booking_date=requested_date,
-                doctor_id=current.doctor_id,
+                doctor_id=doctor_id or current.doctor_id,
                 requested_start=requested_start,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,

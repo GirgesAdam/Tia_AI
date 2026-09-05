@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8000/api/v1/channels/adapter/outbox/claim",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/outbox/claim' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -163,7 +163,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://host.docker.internal:8000/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -188,7 +188,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://host.docker.internal:8000/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,

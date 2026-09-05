@@ -4,11 +4,18 @@ Tia/PostgreSQL remains the system of record. n8n owns external credentials and
 transport execution only. It must not own booking state, sync checkpoints,
 identity resolution, source authority, retries, or financial decisions.
 
-Tia does not collect or persist patient/customer email addresses. Customer
-communication in the current product contract is WhatsApp-based. The legacy
-`tia_gmail_outbox_worker.json` file is retained only for repository history and
-must not be imported for the current patient runtime. Staff/account email is a
-separate concern and is not part of the patient CRM contract.
+Patient communication in the current product contract is WhatsApp-based. There
+is no Gmail automation runtime in the project.
+
+The production FastAPI backend currently runs at:
+
+```text
+https://tia-api-production-54c5.up.railway.app
+```
+
+The lightweight Oracle deployment package for the always-on automation runtime
+is in `deploy/oracle-n8n/`. It runs n8n, a PostgreSQL database used only by n8n,
+and Caddy for HTTPS. FastAPI stays on Railway and is not duplicated on the VM.
 
 ## Active workflows
 
@@ -18,8 +25,23 @@ Import these three workflows:
 - `tia_whatsapp_outbox_worker.json`
 - `tia_automation_scheduler.json`
 
-Replace `https://YOUR_TIA_BACKEND_DOMAIN` with the public HTTPS FastAPI URL in
-every Tia HTTP Request node.
+Set these environment variables on the self-hosted n8n runtime:
+
+```text
+TIA_API_BASE_URL=https://tia-api-production-54c5.up.railway.app
+N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+```
+
+Use the public HTTPS FastAPI origin only, with no trailing slash. All active Tia
+HTTP Request nodes read `TIA_API_BASE_URL` at runtime. Recent n8n versions can
+block `$env` access in expressions, so the dedicated Tia n8n runtime must allow
+environment access with `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`. Do not use this
+setting on a shared/untrusted n8n instance where arbitrary workflow authors can
+read process environment variables.
+
+For local Docker development the workflow JSON keeps
+`http://host.docker.internal:8000` as a fallback, so no URL editing is required
+when switching between local and hosted environments.
 
 ## Credentials kept in n8n
 
@@ -57,6 +79,10 @@ python scripts/provision_whatsapp_channel.py --workspace-id YOUR_WORKSPACE_ID --
 python scripts/provision_n8n_automation_worker.py --workspace-id YOUR_WORKSPACE_ID --name "Tia n8n Runtime"
 ```
 
+Do not reuse the paused staging worker token or a demo channel token in
+production. Provision a new worker token and a production channel token, then
+store their plaintext values only in n8n credentials.
+
 ## WhatsApp path
 
 ```text
@@ -84,32 +110,26 @@ branches using the same `X-Automation-Token`:
 2. connector-driven incremental clinic sync via
    `/api/v1/automations/adapter/clinic-sync/tick`.
 
+Automation enable/disable state and admin-selected timing live in Tia/PostgreSQL.
+n8n does not own separate per-rule schedules; it only wakes the backend and
+executes the WhatsApp transport for jobs that Tia has already validated as due.
+
 The clinic-sync call is only a wake-up signal. The backend decides whether the
 workspace is enabled, due, already leased, or temporarily backed off. It then
-owns this deterministic runtime flow:
-
-```text
-connector page
-→ canonical sync records
-→ existing structural/identity/authority rules
-→ idempotent writes
-→ durable checkpoint
-→ next page / retry backoff
-```
-
-A page budget can end cleanly without being treated as a failure; the next
-scheduler tick continues from the advanced durable checkpoint. A record-level
-failure does not advance past unsafe data. Connector/configuration failures are
-stored on the durable schedule and retried with bounded exponential backoff.
+owns the deterministic sync runtime and durable checkpoints.
 
 ## Retry policy
 
-n8n HTTP/transport nodes use bounded node retries. Tia remains responsible for
-business retries, outbox reclaim, sync leases, checkpoints, and scheduler
-backoff. n8n must never calculate a new sync cursor or decide to skip a failed
-record.
+n8n may retry idempotent Tia HTTP requests, but provider send nodes must not be
+blindly retried. Tia remains responsible for business retries, outbox reclaim,
+sync leases, checkpoints, and scheduler backoff. This avoids duplicate WhatsApp
+messages when a provider response is ambiguous.
 
-## Staging vs real runtime
+## Production safety state before n8n activation
+
+Keep the real WhatsApp connection paused and the old n8n worker paused until the
+new production n8n instance is online and has fresh credentials. This prevents a
+partially configured runtime from sending messages.
 
 Connections marked `staging_mock`, `mock=true`, `do_not_send=true`, or without
 `runtime_kind=real` do not satisfy the Production Readiness external-channel
@@ -117,11 +137,12 @@ check.
 
 ## First live test order
 
-1. Import/publish the automation scheduler and confirm a real worker heartbeat.
-2. Provision/import WhatsApp and send a staging WhatsApp text from a phone you control.
-3. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks.
-4. Enable one approved automation rule and verify a real reminder end-to-end.
-5. Configure an external clinic connector, run one manual sync, and verify its checkpoint.
-6. Enable scheduled sync and verify a later scheduler tick advances or confirms the checkpoint without duplicates.
-
-Do not use real patient contact data for the first live tests.
+1. Start the Oracle n8n package and confirm HTTPS.
+2. Provision a new automation worker and configure `X-Automation-Token` in n8n.
+3. Import/publish only the automation scheduler and confirm a fresh worker heartbeat.
+4. Provision/configure the production WhatsApp channel token and Meta credential.
+5. Publish inbound/status and outbox workflows.
+6. Send the first provider test only to a phone number you control.
+7. Verify Tia outbound `sent`, then Meta `delivered/read` callbacks and an inbound reply.
+8. Enable one approved automation rule and verify a real reminder end-to-end.
+9. Configure an external clinic connector only when a real clinic integration is ready.

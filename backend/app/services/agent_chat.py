@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.availability_presentation import format_availability_windows_reply
 from app.agents.capability_policy import (
     CapabilityPolicyDecision,
     ToolAuthorizationError,
@@ -22,7 +23,6 @@ from app.agents.clinic_grounding import (
     choice_snapshot_from_grounded_facts,
     grounded_catalog_facts,
 )
-from app.agents.flow_interpreter import FlowTurnDecision, interpret_active_flow_turn
 from app.agents.grounded_response import compose_grounded_customer_reply
 from app.agents.llm_runtime import LLMProviderError
 from app.agents.response_guard import sanitize_customer_reply
@@ -30,17 +30,15 @@ from app.agents.semantic_actions import (
     booking_tool_args,
     format_booking_success,
     format_handoff_reply,
+    format_reschedule_success,
     format_verified_tool_fallback,
     reschedule_tool_args,
     select_slot_from_structured_selection,
 )
-from app.agents.semantic_router import (
-    SemanticCapabilityDecision,
-    route_customer_message,
-)
 from app.agents.tia_customer_agent import run_tia_customer_agent
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.agents.turn_interpreter import interpret_customer_turn
+from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
 from app.core.config import settings
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
@@ -1091,6 +1089,7 @@ def _prefetch_read_tools(
         }
         if grounded_mode:
             reschedule_arguments["service_id"] = service_id
+            reschedule_arguments["doctor_id"] = doctor_id
         else:
             reschedule_arguments["service_search"] = service_query
         run("get_reschedule_options", reschedule_arguments)
@@ -1204,16 +1203,7 @@ def _verified_booking_slots_reply(
     *,
     booking_authorized: bool,
 ) -> str | None:
-    """Present verified booking slots directly from the adapter.
-
-    Availability is operational data, so the response does not need a second LLM
-    pass. The same code handles one or many slots; the customer simply chooses a
-    displayed option and the flow interpreter maps that choice to its index.
-    """
-    # Some adapter-backed availability payloads are successful structured reads
-    # without an explicit ``ok=True`` wrapper. An explicit ``ok=False`` is still
-    # an error, but verified slots are sufficient evidence for the deterministic
-    # presentation path.
+    """Present adapter-verified availability as natural free-time windows."""
     if payload.get("ok") is False:
         return None
     if any(
@@ -1226,66 +1216,23 @@ def _verified_booking_slots_reply(
         )
     ):
         return None
-    slots = payload.get("slots")
-    if not isinstance(slots, list) or not slots:
-        return None
-
-    presented: list[str] = []
-    for index, slot in enumerate(slots[:8], start=1):
-        if not isinstance(slot, dict):
-            continue
-        time_text = slot.get("start_time_24h")
-        if not isinstance(time_text, str) or not time_text.strip():
-            start_local = slot.get("start_local")
-            if isinstance(start_local, str):
-                try:
-                    time_text = datetime.fromisoformat(start_local).strftime("%H:%M")
-                except ValueError:
-                    time_text = None
-            else:
-                time_text = None
-        if not isinstance(time_text, str) or not time_text.strip():
-            continue
-
-        details: list[str] = [time_text.strip()]
-        doctor_name = slot.get("doctor_name")
-        branch_name = slot.get("branch_name")
-        if isinstance(doctor_name, str) and doctor_name.strip():
-            details.append(doctor_name.strip())
-        if isinstance(branch_name, str) and branch_name.strip():
-            details.append(branch_name.strip())
-        presented.append(f"{index}. " + " - ".join(details))
-
-    if not presented:
-        return None
-
-    date_value = payload.get("date")
-    if isinstance(date_value, str) and date_value.strip():
-        intro = f"المواعيد المتاحة يوم {date_value.strip()}:"
-    else:
-        intro = "المواعيد المتاحة:"
-    closing = (
-        "اختار رقم الميعاد المناسب ليك."
-        if booking_authorized
-        else "لو حابب تحجز واحد من المواعيد دي، قولي رقمه."
+    return format_availability_windows_reply(
+        payload,
+        booking_authorized=booking_authorized,
     )
-    return intro + "\n" + "\n".join(presented) + "\n" + closing
 
-
-def _exact_booking_selection_index(
+def _exact_action_selection_index(
     *,
     decision: SemanticCapabilityDecision,
     payload: dict[str, object],
+    required_capability: str,
 ) -> int | None:
-    """Return one verified slot index for an explicit exact-time booking request.
+    """Return one verified slot index for one semantically authorized exact-time action.
 
-    This is deliberately structural, not lexical: the interpreter has already
-    classified the newest turn as appointment creation and extracted an exact
-    date/time. If exactly one adapter-verified slot matches that clock time, no
-    second confirmation turn is needed. Ambiguous or multi-option requests keep
-    the normal option-selection flow.
+    The interpreter owns intent; Python only verifies that the exact structured
+    clock time maps to exactly one adapter slot before a write can execute.
     """
-    if "appointment_creation" not in set(decision.capabilities):
+    if required_capability not in set(decision.capabilities):
         return None
     requested_date = decision.entity_hints.requested_date
     requested_time = decision.entity_hints.requested_start_time
@@ -1325,12 +1272,12 @@ def _exact_booking_selection_index(
     return matches[0] if len(matches) == 1 else None
 
 
-def _exact_booking_flow_turn(
+def _exact_action_flow_turn(
     decision: SemanticCapabilityDecision,
     *,
     selection_index: int,
 ) -> FlowTurnDecision:
-    """Convert an already-structured exact booking request into a slot choice."""
+    """Convert an already-structured exact appointment action into a verified slot choice."""
     return FlowTurnDecision(
         action="select_option",
         capabilities=list(decision.capabilities),
@@ -1345,7 +1292,7 @@ def _exact_booking_flow_turn(
         recommended_handoff_priority=decision.recommended_handoff_priority,
         confidence=decision.confidence,
         reason=(
-            "The current turn explicitly requests appointment creation at an exact "
+            "The current turn semantically authorizes an appointment action at an exact "
             "date/time and exactly one verified adapter slot matches it."
         ),
     )
@@ -1786,11 +1733,41 @@ def _structured_flow_write(
 ) -> tuple[str, str] | None:
     if turn.action != "select_option":
         return None
+    selected_doctor_id = getattr(turn.entity_hints, "doctor_id", None) or (
+        (flow.entity_state or {}).get("doctor_id")
+    )
     slot = select_slot_from_structured_selection(
         flow.option_snapshot,
         selection_index=turn.selection_index,
         selection_time=turn.selection_time,
+        doctor_id=str(selected_doctor_id) if selected_doctor_id else None,
     )
+    if slot is None and turn.selection_time:
+        normalized_time = str(turn.selection_time).strip()
+        if len(normalized_time) == 4 and normalized_time[1] == ":":
+            normalized_time = "0" + normalized_time
+        matching_doctors = []
+        seen_doctors: set[str] = set()
+        snapshot_slots = (flow.option_snapshot or {}).get("slots")
+        if isinstance(snapshot_slots, list):
+            for candidate in snapshot_slots:
+                if not isinstance(candidate, dict):
+                    continue
+                if str(candidate.get("start_time_24h") or "") != normalized_time:
+                    continue
+                doctor_name = str(candidate.get("doctor_name") or "الدكتور المتاح").strip()
+                doctor_key = str(candidate.get("doctor_id") or doctor_name)
+                if doctor_key in seen_doctors:
+                    continue
+                seen_doctors.add(doctor_key)
+                matching_doctors.append(doctor_name)
+        if len(matching_doctors) > 1:
+            names = "، ".join(matching_doctors[:4])
+            return (
+                f"الساعة {normalized_time} متاحة مع أكتر من دكتور: {names}. "
+                "قولي تفضّل مين عشان أحجز من غير ما أختار مكانك.",
+                "flow-interpreter:deterministic-slot-ambiguity",
+            )
     if slot is None:
         return None
     if flow.flow_type == "booking":
@@ -1894,8 +1871,14 @@ def _structured_flow_write(
         run_id=run_id,
         result={"tool": tool_name, "output": result},
     )
+    appointment = result.get("appointment")
+    reschedule_reply = (
+        format_reschedule_success(appointment)
+        if isinstance(appointment, dict)
+        else "تمام، الموعد اتغيّر للميعاد الجديد بنجاح."
+    )
     return (
-        "تمام، الموعد اتغيّر للميعاد الجديد بنجاح.",
+        reschedule_reply,
         "flow-interpreter:deterministic-reschedule",
     )
 
@@ -1937,73 +1920,49 @@ def _run_after_inbound(
     )
     timezone_name, local_now = _workspace_clock(workspace)
     flow_turn: FlowTurnDecision | None = None
-    grounded_mode = settings.agent_unified_turn_interpreter_enabled
+    grounded_mode = True
     catalog_started = perf_counter()
-    clinic_catalog = build_clinic_catalog(db, workspace) if grounded_mode else {}
-    if grounded_mode:
-        logger.info(
-            "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
-            run_id,
-            len(clinic_catalog.get("services", [])),
-            len(clinic_catalog.get("branches", [])),
-            len(clinic_catalog.get("doctors", [])),
-            int((perf_counter() - catalog_started) * 1000),
-        )
+    clinic_catalog = build_clinic_catalog(db, workspace)
+    logger.info(
+        "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
+        run_id,
+        len(clinic_catalog.get("services", [])),
+        len(clinic_catalog.get("branches", [])),
+        len(clinic_catalog.get("doctors", [])),
+        int((perf_counter() - catalog_started) * 1000),
+    )
     semantic_started = perf_counter()
-    if grounded_mode:
-        unified_turn = interpret_customer_turn(
-            flow=flow,
-            history=history,
-            timezone_name=timezone_name,
-            local_now=local_now,
-            clinic_catalog=clinic_catalog,
-        )
-        semantic_decision = _package_intent_non_booking(unified_turn.as_semantic_decision())
-        semantic_decision = _with_implicit_primary_branch(
-            semantic_decision, workspace=workspace, clinic_catalog=clinic_catalog,
-        )
-        if flow is not None:
-            flow_turn = unified_turn.as_flow_turn_decision().model_copy(update={
+    unified_turn = interpret_customer_turn(
+        flow=flow,
+        history=history,
+        timezone_name=timezone_name,
+        local_now=local_now,
+        clinic_catalog=clinic_catalog,
+    )
+    semantic_decision = _package_intent_non_booking(unified_turn.as_semantic_decision())
+    semantic_decision = _with_implicit_primary_branch(
+        semantic_decision,
+        workspace=workspace,
+        clinic_catalog=clinic_catalog,
+    )
+    if flow is not None:
+        flow_turn = unified_turn.as_flow_turn_decision().model_copy(
+            update={
                 "capabilities": list(semantic_decision.capabilities),
                 "package_intent": semantic_decision.package_intent,
                 "entity_hints": semantic_decision.entity_hints,
-            })
-            turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
-            inherited_capabilities = (
-                _persistent_flow_capabilities(flow.flow_type, flow.capabilities)
-                if flow_turn.action != "interrupt" and not turn_local_side_read
-                else []
-            )
-        else:
-            turn_local_side_read = False
-            inherited_capabilities = []
-        semantic_stage = "unified-turn-interpreter"
-    elif flow is not None:
-        flow_turn = interpret_active_flow_turn(
-            flow=flow,
-            history=history,
-            timezone_name=timezone_name,
-            local_now=local_now,
+            }
         )
-        semantic_decision = _package_intent_non_booking(_flow_turn_as_capability_decision(flow_turn))
-        flow_turn = flow_turn.model_copy(update={
-            "capabilities": list(semantic_decision.capabilities),
-            "package_intent": semantic_decision.package_intent,
-        })
         turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
         inherited_capabilities = (
             _persistent_flow_capabilities(flow.flow_type, flow.capabilities)
             if flow_turn.action != "interrupt" and not turn_local_side_read
             else []
         )
-        semantic_stage = "flow-interpreter"
     else:
         turn_local_side_read = False
-        semantic_decision = _package_intent_non_booking(route_customer_message(
-            history=history, timezone_name=timezone_name, local_now=local_now,
-        ))
         inherited_capabilities = []
-        semantic_stage = "semantic-router"
+    semantic_stage = "unified-turn-interpreter"
     logger.info(
         "Tia turn run_id=%s stage=%s duration_ms=%s capabilities=%s risks=%s",
         run_id,
@@ -2140,7 +2099,11 @@ def _run_after_inbound(
         reply, model_name = direct
         # A completed structured booking/reschedule is already a verified customer
         # fact. Do not send it through another model pass after the write.
-        if grounded_mode and not model_name.startswith("flow-interpreter:deterministic-"):
+        if (
+            grounded_mode
+            and model_name != "capability-policy:handoff"
+            and not model_name.startswith("flow-interpreter:deterministic-")
+        ):
             try:
                 reply, composed_model = compose_grounded_customer_reply(
                     clinic_name=workspace.name,
@@ -2241,9 +2204,10 @@ def _run_after_inbound(
         if flow is not None and flow.is_active and flow.flow_type == "booking":
             payload = prefetched_results.get("get_booking_options")
             if isinstance(payload, dict):
-                selection_index = _exact_booking_selection_index(
+                selection_index = _exact_action_selection_index(
                     decision=semantic_decision,
                     payload=payload,
+                    required_capability="appointment_creation",
                 )
                 if selection_index is not None and not turn_local_side_read:
                     flow = _sync_flow_from_verified_prefetch(
@@ -2255,7 +2219,7 @@ def _run_after_inbound(
                     prefetch_direct = _structured_flow_write(
                         db=db,
                         flow=flow,
-                        turn=_exact_booking_flow_turn(
+                        turn=_exact_action_flow_turn(
                             semantic_decision,
                             selection_index=selection_index,
                         ),
@@ -2263,7 +2227,14 @@ def _run_after_inbound(
                         tool_context=tool_context,
                         run_id=run_id,
                     )
-                if prefetch_direct is None:
+                # The deterministic availability renderer is intentionally narrow.
+                # The semantic interpreter may identify a compound read such as
+                # pricing + availability; in that case let the grounded composer
+                # combine all verified facts instead of dropping part of the ask.
+                availability_only_request = set(policy.capabilities).issubset(
+                    {"availability_discovery", "appointment_creation"}
+                )
+                if prefetch_direct is None and availability_only_request:
                     verified_reply = _verified_booking_slots_reply(
                         payload,
                         booking_authorized="appointment_creation" in set(policy.capabilities),
@@ -2274,7 +2245,46 @@ def _run_after_inbound(
                             "deterministic:verified-get_booking_options",
                         )
 
-        if prefetch_direct is None and str(semantic_decision.package_intent) in {"purchase", "inquire"}:
+        if (
+            prefetch_direct is None
+            and flow is not None
+            and flow.is_active
+            and flow.flow_type == "appointment_reschedule"
+            and flow_turn is not None
+            and flow_turn.action in {"modify", "select_option"}
+            and not turn_local_side_read
+        ):
+            payload = prefetched_results.get("get_reschedule_options")
+            if isinstance(payload, dict):
+                selection_index = _exact_action_selection_index(
+                    decision=semantic_decision,
+                    payload=payload,
+                    required_capability="appointment_reschedule",
+                )
+                if selection_index is not None:
+                    flow = _sync_flow_from_verified_prefetch(
+                        db=db,
+                        flow=flow,
+                        prefetched_results=prefetched_results,
+                        run_id=run_id,
+                    )
+                    prefetch_direct = _structured_flow_write(
+                        db=db,
+                        flow=flow,
+                        turn=_exact_action_flow_turn(
+                            semantic_decision,
+                            selection_index=selection_index,
+                        ),
+                        policy=policy,
+                        tool_context=tool_context,
+                        run_id=run_id,
+                    )
+
+        if (
+            prefetch_direct is None
+            and "package_refund_quote" not in policy.capabilities
+            and str(semantic_decision.package_intent) == "purchase"
+        ):
             package_intent_reply = _verified_package_intent_reply(
                 intent=str(semantic_decision.package_intent),
                 package_payload=(

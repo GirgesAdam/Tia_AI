@@ -30,12 +30,13 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         enabled_by_default=False,
     ),
     DefaultAutomationRule(
+        # Keep the historical key for database compatibility. Timing is admin-configurable.
         key="appointment_reminder_6h",
-        name="Appointment reminder - 6 hours",
+        name="Appointment reminder",
         trigger_kind="before_appointment",
         offset_minutes=-360,
         channel="whatsapp",
-        template_name="tia_appointment_reminder_6h_ar",
+        template_name="tia_appointment_reminder_ar",
         template_language="ar",
         max_lateness_minutes=30,
         enabled_by_default=True,
@@ -49,17 +50,28 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
         template_name="tia_post_visit_followup_ar",
         template_language="ar",
         max_lateness_minutes=1440,
-        enabled_by_default=True,
+        enabled_by_default=False,
     ),
     DefaultAutomationRule(
-        key="no_show_followup",
-        name="No-show recovery follow-up",
-        trigger_kind="after_no_show",
-        offset_minutes=30,
+        key="cancellation_recovery",
+        name="Cancellation recovery follow-up",
+        trigger_kind="after_cancelled",
+        offset_minutes=60,
         channel="whatsapp",
-        template_name="tia_no_show_followup_ar",
+        template_name="tia_cancellation_recovery_ar",
         template_language="ar",
-        max_lateness_minutes=720,
+        max_lateness_minutes=1440,
+        enabled_by_default=False,
+    ),
+    DefaultAutomationRule(
+        key="lead_not_booked_followup",
+        name="Lead not-booked follow-up",
+        trigger_kind="after_lead_activity",
+        offset_minutes=1440,
+        channel="whatsapp",
+        template_name="tia_ai_followup_ar",
+        template_language="ar",
+        max_lateness_minutes=1440,
         enabled_by_default=False,
     ),
 )
@@ -73,6 +85,7 @@ def scheduled_for(
     appointment_start_at: datetime,
     completed_at: datetime | None,
     no_show_at: datetime | None,
+    cancelled_at: datetime | None = None,
 ) -> datetime | None:
     if trigger_kind == "appointment_created":
         anchor = appointment_created_at
@@ -82,6 +95,8 @@ def scheduled_for(
         anchor = completed_at
     elif trigger_kind == "after_no_show":
         anchor = no_show_at
+    elif trigger_kind == "after_cancelled":
+        anchor = cancelled_at
     else:
         return None
 

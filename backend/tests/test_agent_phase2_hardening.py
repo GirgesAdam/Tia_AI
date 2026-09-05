@@ -12,9 +12,6 @@ from app.agents.semantic_router import (
     SemanticCapabilityDecision,
     SemanticEntityHints,
 )
-from app.agents.semantic_router import (
-    _history_excerpt as semantic_history_excerpt,
-)
 from app.agents.turn_interpreter import _history_excerpt as turn_history_excerpt
 from app.services import agent_chat
 
@@ -55,14 +52,13 @@ def _decision(capabilities: list[str], *, hints: SemanticEntityHints | None = No
     )
 
 
-def test_semantic_planners_only_receive_latest_customer_turn() -> None:
+def test_unified_turn_interpreter_only_receives_latest_customer_turn() -> None:
     history = [
         HumanMessage(content="مش عايز رسائل عروض تاني"),
         AIMessage(content="تمام"),
         HumanMessage(content="عايز أحجز underarm بكرة"),
     ]
 
-    assert semantic_history_excerpt(history) == "عايز أحجز underarm بكرة"
     assert turn_history_excerpt(history) == "عايز أحجز underarm بكرة"
 
 
@@ -195,6 +191,7 @@ def test_refund_quote_reprices_consumed_sessions_at_standalone_price(monkeypatch
     assert result["quote"]["consumed_value_minor"] == 250_000
     assert result["quote"]["refundable_minor"] == 550_000
 
+
 def test_single_verified_slot_selection_defaults_to_first_option() -> None:
     flow = SimpleNamespace(
         flow_type="booking",
@@ -254,4 +251,3 @@ def test_single_verified_slot_does_not_autobook_non_selection_turn() -> None:
 
     assert normalized.action == "continue"
     assert normalized.selection_index is None
-

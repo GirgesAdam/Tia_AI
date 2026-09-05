@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Banknote,
   BarChart3,
+  BotMessageSquare,
   CalendarDays,
   ContactRound,
   History,
   Inbox,
   ListTodo,
   MessageCircleMore,
-  BotMessageSquare,
   Settings2,
   Sparkles,
   UsersRound,
@@ -28,6 +29,7 @@ const primaryItems = [
   { href: "/patients", label: "العملاء", icon: ContactRound },
   { href: "/tasks", label: "المتابعات", icon: ListTodo },
   { href: "/analytics", label: "التقارير", icon: BarChart3 },
+  { href: "/finance", label: "المالية", icon: Banknote },
   ...(demoEnabled ? [{ href: "/agent-demo", label: "Test Tia", icon: BotMessageSquare }] : []),
 ] as const;
 

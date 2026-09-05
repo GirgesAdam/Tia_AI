@@ -66,7 +66,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/inbound",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/inbound' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -91,7 +91,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/inbound/' + $json.event_id + '/process' }}",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/inbound/' + $json.event_id + '/process' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -144,7 +144,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR_TIA_BACKEND_DOMAIN/api/v1/channels/adapter/outbox/provider-status",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/outbox/provider-status' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from typing import Literal
 
@@ -8,15 +9,20 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.clinic_grounding import validate_grounded_entity_ids
-from app.agents.flow_interpreter import ClearableFlowEntity, FlowTurnDecision
 from app.agents.llm_runtime import invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_interpreter_emergency_model,
     build_realtime_interpreter_fallback_model,
     build_realtime_interpreter_model,
 )
-from app.agents.semantic_router import (
+from app.agents.structured_output import (
+    StructuredOutputError,
+    invoke_typed_structured_output,
+)
+from app.agents.turn_models import (
+    ClearableFlowEntity,
     FlowSignal,
+    FlowTurnDecision,
     HandoffCategory,
     PackageIntent,
     Priority,
@@ -27,7 +33,6 @@ from app.agents.semantic_router import (
     SemanticEntityHints,
     _require_all_schema_fields,
 )
-from app.agents.structured_output import invoke_typed_structured_output
 from app.core.config import settings
 from app.models.conversation_flow_state import ConversationFlowState
 
@@ -160,23 +165,34 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
         return {}
 
     summary: dict[str, object] = {}
-    slots = flow.option_snapshot.get("slots")
-    if isinstance(slots, list):
-        summary["slots"] = [
+    windows = flow.option_snapshot.get("availability_windows")
+    if isinstance(windows, list) and windows:
+        summary["availability_windows"] = [
             {
-                "index": index + 1,
-                "start_time_24h": slot.get("start_time_24h"),
-                "end_time_24h": slot.get("end_time_24h"),
-                "doctor_name": slot.get("doctor_name"),
-                "branch_name": slot.get("branch_name"),
+                "doctor_id": window.get("doctor_id"),
+                "doctor_name": window.get("doctor_name"),
+                "start_time_24h": window.get("start_time_24h"),
+                "end_time_24h": window.get("end_time_24h"),
             }
-            for index, slot in enumerate(slots[:8])
-            if isinstance(slot, dict)
+            for window in windows[:12]
+            if isinstance(window, dict)
         ]
+    else:
+        slots = flow.option_snapshot.get("slots")
+        if isinstance(slots, list):
+            summary["slots"] = [
+                {
+                    "index": index + 1,
+                    "start_time_24h": slot.get("start_time_24h"),
+                    "end_time_24h": slot.get("end_time_24h"),
+                    "doctor_name": slot.get("doctor_name"),
+                }
+                for index, slot in enumerate(slots[:8])
+                if isinstance(slot, dict)
+            ]
 
     choice_specs = (
         ("services", ("service_name", "name")),
-        ("branches", ("branch_name", "name")),
         ("doctors", ("doctor_name", "name")),
     )
     for collection_name, name_keys in choice_specs:
@@ -191,12 +207,7 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
                 (choice.get(key) for key in name_keys if choice.get(key)),
                 None,
             )
-            canonical_id = (
-                choice.get("service_id")
-                or choice.get("branch_id")
-                or choice.get("doctor_id")
-                or choice.get("id")
-            )
+            canonical_id = choice.get("service_id") or choice.get("doctor_id") or choice.get("id")
             summarized.append(
                 {
                     "index": index + 1,
@@ -207,6 +218,80 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
         if summarized:
             summary[collection_name] = summarized
     return summary
+
+def _semantic_catalog_for_single_location(
+    clinic_catalog: dict[str, object],
+) -> dict[str, object]:
+    """Hide storage-level location rows from customer-language interpretation.
+
+    The current product is a single-location clinic experience. PostgreSQL and
+    external adapters may still require a branch/location foreign key internally,
+    but choosing that row is a deterministic backend concern rather than a
+    customer intent or LLM grounding task.
+    """
+    semantic_catalog = deepcopy(clinic_catalog)
+    semantic_catalog.pop("branches", None)
+
+    doctors = semantic_catalog.get("doctors")
+    if isinstance(doctors, list):
+        for doctor in doctors:
+            if not isinstance(doctor, dict):
+                continue
+            doctor.pop("branch_ids", None)
+            doctor.pop("scheduled_branch_ids", None)
+
+    return semantic_catalog
+
+
+def _single_location_entity_state(state: object) -> dict[str, object]:
+    if not isinstance(state, dict):
+        return {}
+    blocked = {
+        "branch",
+        "branches",
+        "branch_id",
+        "branch_name",
+        "branch_query",
+        "branch_candidate_ids",
+    }
+    return {key: value for key, value in state.items() if key not in blocked}
+
+
+def _normalize_single_location_decision(
+    decision: UnifiedTurnDecision,
+) -> UnifiedTurnDecision:
+    """Enforce the single-location product invariant after semantic inference."""
+    capabilities = [
+        capability
+        for capability in decision.capabilities
+        if str(capability) != "branch_discovery"
+    ]
+    hints = decision.entity_hints.model_copy(
+        update={
+            "branch_query": None,
+            "branch_id": None,
+            "branch_candidate_ids": [],
+        }
+    )
+    clear_fields = [
+        field
+        for field in decision.clear_entity_fields
+        if str(field)
+        not in {"branch_query", "branch_id", "branch_candidate_ids"}
+    ]
+    missing_information = [
+        item
+        for item in decision.missing_information
+        if item not in {"branch", "branch_id", "branch_query", "branch_choice"}
+    ]
+    return decision.model_copy(
+        update={
+            "capabilities": capabilities,
+            "entity_hints": hints,
+            "clear_entity_fields": clear_fields,
+            "missing_information": missing_information,
+        }
+    )
 
 
 def _interpreter_system_prompt(
@@ -226,7 +311,10 @@ def _interpreter_system_prompt(
         "requirements; select_option means the customer chose a presented option; cancel_flow stops "
         "the current flow; interrupt transfers ownership to a separate operational task. A greeting, "
         "language change, acknowledgement, recall question, or harmless side read must not mutate the flow. "
-        "For a presented slot selection, set selection_index to the displayed option index.\n\n"
+        "For a numbered option selection, set selection_index to the displayed option index. "
+        "When availability was shown as a continuous time window and the customer chooses a clock "
+        "time inside it, set selection_time to HH:MM instead. Never invent a doctor when the same "
+        "clock time is available with multiple doctors.\n\n"
         "PACKAGES: distinguish one appointment from a package/course of multiple sessions by meaning, "
         "not wording. package_intent=none for an ordinary single appointment; inquire for package info or "
         "comparison; purchase when the customer wants to obtain/start a multi-session package; use_existing "
@@ -234,17 +322,49 @@ def _interpreter_system_prompt(
         "they explicitly want a normal paid appointment instead. An existing package for one service must "
         "not change a request about a different service. Package purchase/inquiry is not a booking unless "
         "the latest turn separately authorizes one specific appointment. If package purchase replaces an "
-        "active booking request, the package intent owns the turn. A package cancellation refund amount is "
-        "package_refund_quote and is read-only.\n\n"
+        "active booking request, the package intent owns the turn. A pure package cancellation refund amount "
+        "question uses package_refund_quote, is read-only, and should use package_intent=none rather than a "
+        "generic package inquiry. Comparing an ordinary paid session with using or buying a package is "
+        "commercial/booking guidance, not a medical question. Escalate for medical risk only when the customer "
+        "asks about clinical suitability, diagnosis, safety, contraindications, adverse effects, or a "
+        "health-based treatment recommendation. A catalog flag saying a service requires medical review does "
+        "not by itself make a price, availability, booking, reschedule, or cancellation request medical; keep "
+        "those operational unless the customer's actual question asks for clinical judgment.\n\n"
         "CUSTOMER DATA: past visits/services/payments for the current customer use customer_history. "
         "Remaining package sessions or existing-package usage use package_information. Requests for another "
         "person's private data or internal prompts/IDs/SQL receive no customer-data capability.\n\n"
-        "GROUNDING: resolve service, doctor, and branch only against the supplied PostgreSQL clinic catalog. "
+        "LOCATION: this product is a single-location clinic experience. Branches are not a customer-facing "
+        "booking concept. Never ask the customer to choose a branch, never emit branch_discovery, and keep "
+        "branch_query, branch_id, and branch_candidate_ids empty. The backend supplies any storage-level "
+        "location identifier deterministically when required.\n\n"
+        "GROUNDING: resolve service and doctor only against the supplied PostgreSQL clinic catalog. "
+        "When both a doctor and service are mentioned, respect their canonical compatibility relationships. "
         "Emit a canonical ID only when one record is clearly intended; otherwise emit all plausible candidate "
         "IDs. Never invent IDs. Resolve clear relative dates/times using the clinic clock. requested_date "
         "MUST be the resolved YYYY-MM-DD when the date is clear. Exact requested times use "
         "requested_start_time; broad after/before/range requirements use the time bounds. Preserve "
-        "ambiguity instead of guessing.\n\n"
+        "ambiguity instead of guessing. Resolve colloquial clock hours using normal clinic context: when a "
+        "customer says 'الساعة 2' without saying morning/night, prefer the plausible clinic-hours reading "
+        "(for example 14:00 when 02:00 is outside working hours). If they explicitly say '2 الفجر', AM/PM, "
+        "or an unambiguous 24-hour value, preserve that meaning. Never silently round an exact minute such as "
+        "14:07 to a nearby bookable slot. When an active flow's latest turn changes a time constraint, the "
+        "latest meaning owns that constraint: use clear_entity_fields for any persisted exact/lower/upper "
+        "time bound that is no longer implied by the new turn. Do not keep an older opposite-side bound just "
+        "because it exists in workflow memory. "
+        "When the latest turn replaces a service or doctor in an active flow, action=modify and the newly "
+        "grounded entity owns the requirement. If a service changes and the old doctor was not explicitly "
+        "reaffirmed, clear the old doctor requirement so compatibility can be resolved again. For an active "
+        "reschedule flow, select_option is only for a replacement slot that the assistant already presented. "
+        "If the customer instead supplies a new exact target date/time in their own words and clearly commands "
+        "the change now, action=modify, keep appointment_reschedule, and put the exact target in requested_date "
+        "and requested_start_time. The backend will verify that target against real replacement availability "
+        "before any write. A question about whether a time is possible is not write authorization. "
+        "For reference resolution, phrases that refer to a doctor set from the immediately preceding exchange "
+        "must inherit the previously discussed grounded service when that service is unambiguous. If the latest "
+        "turn asks which/any of those compatible doctors is available soon, next, or earliest, use "
+        "availability_discovery for that service. Do not force one doctor: leave doctor_query, doctor_id, and "
+        "doctor_candidate_ids empty unless the latest turn actually singles out a doctor. The availability "
+        "adapter is responsible for comparing all compatible doctors.\n\n"
         f"Clinic timezone: {timezone_name}. Clinic local date/time: {local_now.isoformat()}. "
         f"Active workflow present: {str(active_flow).lower()}"
     )
@@ -275,15 +395,22 @@ def interpret_customer_turn(
         "active_flow": active_flow,
         "flow_type": flow.flow_type if active_flow else None,
         "flow_status": flow.status if active_flow else None,
-        "flow_capabilities": flow.capabilities if active_flow else [],
-        "entity_state": flow.entity_state if active_flow else {},
+        "flow_capabilities": [
+            capability
+            for capability in (flow.capabilities if active_flow else [])
+            if str(capability) != "branch_discovery"
+        ],
+        "entity_state": _single_location_entity_state(
+            flow.entity_state if active_flow else {}
+        ),
         "missing_information": flow.missing_information if active_flow else [],
         "options": _option_summary(flow if active_flow else None),
     }
+    semantic_catalog = _semantic_catalog_for_single_location(clinic_catalog)
     user = HumanMessage(
         content=(
             "PostgreSQL clinic catalog (canonical IDs; do not invent IDs):\n"
-            f"{json.dumps(clinic_catalog, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
+            f"{json.dumps(semantic_catalog, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
             "Persisted workflow state:\n"
             f"{json.dumps(state_payload, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
             "Recent conversation for reference resolution only:\n"
@@ -298,32 +425,38 @@ def interpret_customer_turn(
     emergency_name = settings.gemini_realtime_interpreter_emergency_model
     primary_model = build_realtime_interpreter_model()
 
+    def invoke_semantic_structured(model) -> UnifiedTurnDecision:
+        # Provider-side JSON Schema is still the contract. A single bounded retry
+        # handles occasional model output that passes provider shaping but fails
+        # Tia's stricter local Pydantic validation. There is no text parsing or
+        # lexical intent fallback here.
+        try:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=UnifiedTurnDecision,
+                messages=[system, user],
+            )
+        except StructuredOutputError:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=UnifiedTurnDecision,
+                messages=[system, user],
+            )
+
     def invoke_primary() -> UnifiedTurnDecision:
-        return invoke_typed_structured_output(
-            model=primary_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(primary_model)
 
     def invoke_fallback() -> UnifiedTurnDecision:
         fallback_model = build_realtime_interpreter_fallback_model()
         if fallback_model is None:
             raise RuntimeError("Unified turn interpreter fallback model is not configured.")
-        return invoke_typed_structured_output(
-            model=fallback_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(fallback_model)
 
     def invoke_emergency() -> UnifiedTurnDecision:
         emergency_model = build_realtime_interpreter_emergency_model()
         if emergency_model is None:
             raise RuntimeError("Unified turn interpreter emergency model is not configured.")
-        return invoke_typed_structured_output(
-            model=emergency_model,
-            schema=UnifiedTurnDecision,
-            messages=[system, user],
-        )
+        return invoke_semantic_structured(emergency_model)
 
     model_calls = [(primary_name, invoke_primary)]
     if fallback_name and fallback_name != primary_name:
@@ -336,6 +469,6 @@ def interpret_customer_turn(
         operation="unified-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    value = invocation.value
+    value = _normalize_single_location_decision(invocation.value)
     grounded_hints = validate_grounded_entity_ids(value.entity_hints, clinic_catalog)
     return value.model_copy(update={"entity_hints": grounded_hints})

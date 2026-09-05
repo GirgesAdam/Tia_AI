@@ -20,11 +20,15 @@ def test_e2e_matrix_covers_core_agent_risk_surfaces() -> None:
     required_cases = [
         "service_underarm_dialect",
         "service_underarm_paraphrase",
+        "branch_city_name",
         "full_booking_grounding",
         "service_information",
         "pricing",
         "doctor_discovery",
         "branch_discovery",
+        "package_use_existing",
+        "package_avoid_existing",
+        "single_session_no_package_intent",
         "exact_time_semantics",
         "after_time_semantics",
         "before_time_semantics",
@@ -41,6 +45,30 @@ def test_e2e_matrix_covers_core_agent_risk_surfaces() -> None:
     ]
     for case in required_cases:
         assert case in source
+
+
+def test_e2e_semantic_profile_exercises_unified_turn_interpreter() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    source = (backend / "scripts/run_agent_e2e_matrix.py").read_text(encoding="utf-8")
+
+    assert "from app.agents.turn_interpreter import interpret_customer_turn" in source
+    assert "interpret_customer_turn(" in source
+    assert "route_customer_message(" not in source
+    assert "interpret_active_flow_turn(" not in source
+
+
+def test_structured_flow_write_preserves_verified_slot_selection() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    source = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")
+
+    # The flow must select from the persisted verified snapshot, preserve that
+    # selection as pending state, and authorize the write before invoking it.
+    assert "select_slot_from_structured_selection(" in source
+    assert 'event_type="requirement_selected"' in source
+    assert 'status="ready_to_execute"' in source
+    assert "pending_action={" in source
+    assert "record_write_authorized(" in source
+    assert "record_write_completed(" in source
 
 
 def test_e2e_matrix_has_no_runtime_keyword_or_regex_routing() -> None:

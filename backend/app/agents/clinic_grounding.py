@@ -76,6 +76,48 @@ def _catalog_cache_put(
             _catalog_cache.popitem(last=False)
 
 
+def _annotate_catalog_relationships(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Expose canonical doctor compatibility next to service rows for grounding.
+
+    Adapters already provide doctor -> service/branch IDs. Mirroring the service
+    relationship makes cross-entity consistency explicit to the semantic model
+    without inspecting customer text or duplicating clinic business rules.
+    """
+    service_rows = catalog.get("services")
+    doctor_rows = catalog.get("doctors")
+    if not isinstance(service_rows, list) or not isinstance(doctor_rows, list):
+        return catalog
+
+    known_service_ids = {
+        str(row.get("id"))
+        for row in service_rows
+        if isinstance(row, dict) and row.get("id")
+    }
+    doctor_ids_by_service: dict[str, set[str]] = {
+        service_id: set() for service_id in known_service_ids
+    }
+
+    for doctor in doctor_rows:
+        if not isinstance(doctor, dict) or not doctor.get("id"):
+            continue
+        doctor_id = str(doctor["id"])
+        raw_service_ids = doctor.get("service_ids")
+        if not isinstance(raw_service_ids, list):
+            continue
+        for value in raw_service_ids:
+            service_id = str(value)
+            if service_id in doctor_ids_by_service:
+                doctor_ids_by_service[service_id].add(doctor_id)
+
+    for service in service_rows:
+        if not isinstance(service, dict) or not service.get("id"):
+            continue
+        service_id = str(service["id"])
+        service["doctor_ids"] = sorted(doctor_ids_by_service.get(service_id, set()))
+
+    return catalog
+
+
 def build_clinic_catalog(db: Session, workspace: Workspace) -> dict[str, Any]:
     """Build/reuse the canonical clinic catalog through the workspace adapter.
 
@@ -103,7 +145,7 @@ def build_clinic_catalog(db: Session, workspace: Workspace) -> dict[str, Any]:
             return cached
 
     build_started = perf_counter()
-    catalog = adapter.build_catalog()
+    catalog = _annotate_catalog_relationships(adapter.build_catalog())
     build_ms = int((perf_counter() - build_started) * 1000)
 
     if cache_signature is not None:
@@ -130,6 +172,22 @@ def _catalog_ids(catalog: dict[str, Any], collection: str) -> set[str]:
     }
 
 
+def _catalog_row_by_id(
+    catalog: dict[str, Any],
+    collection: str,
+    canonical_id: str | None,
+) -> dict[str, Any] | None:
+    if not canonical_id:
+        return None
+    rows = catalog.get(collection)
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("id")) == str(canonical_id):
+            return row
+    return None
+
+
 def _valid_id(value: str | None, allowed: set[str]) -> str | None:
     if not value:
         return None
@@ -150,26 +208,94 @@ def _valid_ids(values: Iterable[str] | None, allowed: set[str]) -> list[str]:
     return result
 
 
+def _filter_candidates_for_selected_doctor(
+    *,
+    selected_id: str | None,
+    candidate_ids: list[str],
+    allowed_ids: set[str],
+    allow_promotion: bool,
+) -> tuple[str | None, list[str]]:
+    """Apply one canonical doctor relationship without guessing from customer text.
+
+    A single compatible candidate may become selected only when the model did not
+    provide an explicit selected ID. If an explicit ID was hallucinated or was
+    incompatible, validation rejects it but does not silently replace that model
+    decision in the same pass.
+    """
+    if not allowed_ids:
+        return selected_id, candidate_ids
+
+    compatible_candidates = [
+        candidate_id for candidate_id in candidate_ids if candidate_id in allowed_ids
+    ]
+    if selected_id is not None and selected_id not in allowed_ids:
+        selected_id = None
+
+    if selected_id is not None:
+        return selected_id, []
+    if allow_promotion and len(compatible_candidates) == 1:
+        return compatible_candidates[0], []
+    return None, compatible_candidates
+
+
 def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
-    """Return a copy with only IDs that existed in the supplied catalog snapshot."""
+    """Validate canonical IDs and doctor/service/branch compatibility.
+
+    The model may only return IDs from the supplied catalog. When it identifies
+    one doctor, deterministic catalog relationships further prevent an
+    incompatible service or branch from reaching booking logic. Candidate sets
+    are narrowed only by canonical IDs; customer wording is never inspected.
+    """
     service_ids = _catalog_ids(catalog, "services")
     branch_ids = _catalog_ids(catalog, "branches")
     doctor_ids = _catalog_ids(catalog, "doctors")
 
+    raw_service_id = getattr(entity_hints, "service_id", None)
+    raw_branch_id = getattr(entity_hints, "branch_id", None)
+
+    service_id = _valid_id(raw_service_id, service_ids)
+    service_candidate_ids = _valid_ids(
+        getattr(entity_hints, "service_candidate_ids", []), service_ids
+    )
+    branch_id = _valid_id(raw_branch_id, branch_ids)
+    branch_candidate_ids = _valid_ids(
+        getattr(entity_hints, "branch_candidate_ids", []), branch_ids
+    )
+    doctor_id = _valid_id(getattr(entity_hints, "doctor_id", None), doctor_ids)
+    doctor_candidate_ids = _valid_ids(
+        getattr(entity_hints, "doctor_candidate_ids", []), doctor_ids
+    )
+
+    doctor_row = _catalog_row_by_id(catalog, "doctors", doctor_id)
+    if doctor_row is not None:
+        doctor_service_ids = {
+            str(value) for value in (doctor_row.get("service_ids") or []) if value
+        }
+        service_id, service_candidate_ids = _filter_candidates_for_selected_doctor(
+            selected_id=service_id,
+            candidate_ids=service_candidate_ids,
+            allowed_ids=doctor_service_ids,
+            allow_promotion=not bool(raw_service_id),
+        )
+
+        doctor_branch_ids = {
+            str(value) for value in (doctor_row.get("branch_ids") or []) if value
+        }
+        branch_id, branch_candidate_ids = _filter_candidates_for_selected_doctor(
+            selected_id=branch_id,
+            candidate_ids=branch_candidate_ids,
+            allowed_ids=doctor_branch_ids,
+            allow_promotion=not bool(raw_branch_id),
+        )
+
     return entity_hints.model_copy(
         update={
-            "service_id": _valid_id(getattr(entity_hints, "service_id", None), service_ids),
-            "service_candidate_ids": _valid_ids(
-                getattr(entity_hints, "service_candidate_ids", []), service_ids
-            ),
-            "branch_id": _valid_id(getattr(entity_hints, "branch_id", None), branch_ids),
-            "branch_candidate_ids": _valid_ids(
-                getattr(entity_hints, "branch_candidate_ids", []), branch_ids
-            ),
-            "doctor_id": _valid_id(getattr(entity_hints, "doctor_id", None), doctor_ids),
-            "doctor_candidate_ids": _valid_ids(
-                getattr(entity_hints, "doctor_candidate_ids", []), doctor_ids
-            ),
+            "service_id": service_id,
+            "service_candidate_ids": service_candidate_ids,
+            "branch_id": branch_id,
+            "branch_candidate_ids": branch_candidate_ids,
+            "doctor_id": doctor_id,
+            "doctor_candidate_ids": doctor_candidate_ids,
         }
     )
 
@@ -217,6 +343,27 @@ def grounded_catalog_facts(
     branch_candidate_ids = list(getattr(entity_hints, "branch_candidate_ids", []) or [])
     selected_doctor_id = getattr(entity_hints, "doctor_id", None)
     doctor_candidate_ids = list(getattr(entity_hints, "doctor_candidate_ids", []) or [])
+
+    # service_relationship_doctor_discovery: the semantic interpreter decides that
+    # the customer is asking for doctors and grounds the service. Python then
+    # materializes the canonical service -> doctor relationship from the catalog;
+    # no customer wording is inspected and no lexical intent rule exists here.
+    if (
+        "doctor_discovery" in capability_set
+        and "availability_discovery" not in capability_set
+        and "appointment_creation" not in capability_set
+        and selected_doctor_id is None
+        and not doctor_candidate_ids
+        and selected_service_id
+    ):
+        service_row = _catalog_row_by_id(catalog, "services", selected_service_id)
+        known_doctor_ids = _catalog_ids(catalog, "doctors")
+        if service_row is not None:
+            doctor_candidate_ids = [
+                str(value)
+                for value in (service_row.get("doctor_ids") or [])
+                if str(value) in known_doctor_ids
+            ]
 
     if capability_set.intersection({"service_information", "pricing", "availability_discovery", "appointment_creation"}):
         service_ids = [selected_service_id] if selected_service_id else service_candidate_ids

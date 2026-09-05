@@ -154,7 +154,7 @@ def test_task_routes_are_workspace_scoped_and_overdue_is_computed_at_read_time()
 
 
 def test_ai_followup_uses_existing_semantic_turn_and_backend_validated_tool() -> None:
-    semantic = (_root() / "backend/app/agents/semantic_router.py").read_text(encoding="utf-8")
+    semantic = (_root() / "backend/app/agents/turn_models.py").read_text(encoding="utf-8")
     policy = (_root() / "backend/app/agents/capability_policy.py").read_text(encoding="utf-8")
     tools = (_root() / "backend/app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
     prompt = (_root() / "backend/app/agents/prompts/customer_service.py").read_text(encoding="utf-8")

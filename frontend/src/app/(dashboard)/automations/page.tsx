@@ -6,31 +6,38 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import type { AutomationJob, AutomationOperationsOverview, AutomationRule } from "@/lib/types";
-import { cancelAutomationJob, retryAutomationJob, saveAutomationTemplates, toggleAutomation } from "./actions";
+import { cancelAutomationJob, retryAutomationJob, saveAutomationTiming, toggleAutomation } from "./actions";
 
 const names: Record<string, string> = {
   booking_confirmation: "تأكيد الحجز",
   appointment_reminder_6h: "تذكير قبل الموعد",
-  appointment_reminder_24h: "تذكير قبل 24 ساعة",
-  appointment_reminder_2h: "تذكير قبل ساعتين",
   post_visit_followup: "متابعة بعد الزيارة",
-  no_show_followup: "متابعة عدم الحضور",
+  cancellation_recovery: "استرجاع الحجوزات الملغاة",
+  lead_not_booked_followup: "متابعة العميل اللي ماحجزش",
 };
 
 const descriptions: Record<string, string> = {
   booking_confirmation: "ترسل رسالة تأكيد تلقائيًا بعد تسجيل الحجز.",
-  appointment_reminder_6h: "تذكّر العميل بالموعد قبل 6 ساعات للمساعدة في تقليل عدم الحضور.",
-  post_visit_followup: "تتابع مع العميل بعد الزيارة للاطمئنان واستكمال الخدمة عند الحاجة.",
-  no_show_followup: "تتواصل مع العميل بعد عدم الحضور للمساعدة في إعادة الحجز.",
+  appointment_reminder_6h: "تذكّر العميل بالموعد في التوقيت الذي تحدده العيادة.",
+  post_visit_followup: "رسالة واحدة للاطمئنان، عرض المساعدة أو حجز الجلسة التالية، وطلب التقييم.",
+  cancellation_recovery: "اختياري: تتواصل مع العميل بعد إلغاء الموعد وتعرض عليه ترتيب موعد جديد.",
+  lead_not_booked_followup: "اختياري: تتابع العميل المهتم لو لسه ماحجزش وتساعده يكمل الحجز.",
 };
 
-const legacyRuleKeys = new Set(["appointment_reminder_24h", "appointment_reminder_2h"]);
+const visibleProductRuleKeys = new Set([
+  "booking_confirmation",
+  "appointment_reminder_6h",
+  "post_visit_followup",
+  "cancellation_recovery",
+  "lead_not_booked_followup",
+]);
+
+const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "lead_not_booked_followup"]);
 
 function attentionLabel(job: AutomationJob): string | null {
   if (job.attention_reason === "execution_failed") return "لم تكتمل العملية تلقائيًا";
@@ -43,30 +50,25 @@ function jobKindLabel(job: AutomationJob) {
   return job.job_kind === "crm_follow_up" ? "متابعة عميل" : "رسالة مرتبطة بموعد";
 }
 
-function variantNames(rule: AutomationRule): string[] {
-  const raw = rule.config_json?.template_variants;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item) => {
-      if (!item || typeof item !== "object") return "";
-      return String((item as { name?: unknown }).name || "").trim();
-    })
-    .filter(Boolean);
+function timingParts(rule: AutomationRule): { value: number; unit: "minutes" | "hours" | "days" } {
+  const minutes = Math.abs(rule.offset_minutes);
+  if (minutes >= 1440 && minutes % 1440 === 0) return { value: minutes / 1440, unit: "days" };
+  if (minutes >= 60 && minutes % 60 === 0) return { value: minutes / 60, unit: "hours" };
+  return { value: minutes, unit: "minutes" };
 }
 
-function variablesHint(rule: AutomationRule): string {
-  if (rule.key === "appointment_reminder_6h") {
-    return "يجب أن تستخدم القوالب البديلة نفس بيانات الاسم والخدمة والوقت والفرع الموجودة في القالب الأساسي.";
-  }
-  if (rule.key === "post_visit_followup") {
-    return "يجب أن تستخدم القوالب البديلة نفس بيانات الاسم والخدمة وتاريخ الجلسة الموجودة في القالب الأساسي.";
-  }
-  return "استخدم نفس البيانات والمتغيرات الموجودة في القالب الأساسي.";
+function timingLabel(rule: AutomationRule): string {
+  if (rule.trigger_kind === "before_appointment") return "أرسل قبل الموعد بـ";
+  if (rule.trigger_kind === "after_completed") return "أرسل بعد انتهاء الزيارة بـ";
+  if (rule.trigger_kind === "after_no_show") return "أرسل بعد عدم الحضور بـ";
+  if (rule.trigger_kind === "after_cancelled") return "أرسل بعد إلغاء الموعد بـ";
+  if (rule.trigger_kind === "after_lead_activity") return "أرسل بعد آخر تواصل بـ";
+  return "التوقيت";
 }
 
 function automationWarning(state: AutomationOperationsOverview["worker_state"]) {
-  if (state === "stale") return "بعض عمليات الأتمتة تتأخر عن المعتاد. راجع الحالات التي تحتاج تدخلًا أدناه.";
-  if (state === "missing") return "الأتمتة غير جاهزة للتنفيذ حاليًا. راجع إعدادات التشغيل قبل الاعتماد على الرسائل التلقائية.";
+  if (state === "stale") return "محرك تنفيذ الأتمتة غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
+  if (state === "missing") return "لم يتم ربط محرك تنفيذ الأتمتة بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
   return null;
 }
 
@@ -77,7 +79,7 @@ export default async function AutomationsPage() {
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
     getAppContext(),
   ]);
-  const rules = rawRules.filter((rule) => !legacyRuleKeys.has(rule.key));
+  const rules = rawRules.filter((rule) => visibleProductRuleKeys.has(rule.key));
   const attentionJobs = jobs.filter((job) => Boolean(attentionLabel(job)));
   const recentJobs = jobs.slice(0, 12);
   const warning = automationWarning(overview.worker_state);
@@ -86,13 +88,19 @@ export default async function AutomationsPage() {
     <>
       <PageHeader
         title="الأتمتة"
-        description="حدد الرسائل والمتابعات التي تنفذها Tia تلقائيًا، وراجع فقط الحالات التي تحتاج تدخلًا من الفريق."
+        description="فعّل فقط المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
       />
 
       {warning && (
         <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <CircleAlert size={18} className="mt-0.5 shrink-0" />
-          <div><b>تحتاج مراجعة</b><p className="mt-1 leading-6">{warning}</p></div>
+          <div>
+            <b>تحتاج مراجعة</b>
+            <p className="mt-1 leading-6">{warning}</p>
+            {overview.worker_last_seen_at && (
+              <p className="mt-1 text-xs">آخر اتصال بمحرك التنفيذ: {formatDateTime(overview.worker_last_seen_at)}</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -120,12 +128,13 @@ export default async function AutomationsPage() {
 
       <div className="mb-3">
         <h2 className="text-lg font-black text-slate-950">الرسائل والمتابعات التلقائية</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">فعّل ما تحتاجه فقط. كل قاعدة تعمل بشكل مستقل ويمكن إيقافها في أي وقت.</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">كل ميزة مستقلة. المزايا غير الضرورية يمكن تركها متوقفة وتفعيلها عند الحاجة.</p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         {rules.map((rule) => {
-          const variants = variantNames(rule);
+          const timing = timingParts(rule);
+          const hasTiming = timingRuleKeys.has(rule.key);
           return (
             <Card key={rule.id}>
               <CardContent className="p-5">
@@ -152,38 +161,40 @@ export default async function AutomationsPage() {
                   )}
                 </div>
 
-                {ctx.workspace.role === "admin" && (
-                  <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                    <summary className="cursor-pointer text-xs font-bold text-slate-600">إعدادات واتساب المتقدمة</summary>
-                    <form action={saveAutomationTemplates} className="mt-3 space-y-3">
-                      <input type="hidden" name="rule_id" value={rule.id} />
-                      <p className="text-[11px] leading-5 text-[var(--muted)]">{variablesHint(rule)}</p>
-                      <div className="grid gap-3 sm:grid-cols-[1fr_110px]">
-                        <label className="text-xs font-bold text-slate-700">
-                          اسم قالب واتساب
-                          <Input name="template_name" defaultValue={rule.template_name} required dir="ltr" className="mt-1" />
-                        </label>
-                        <label className="text-xs font-bold text-slate-700">
-                          اللغة
-                          <Input name="template_language" defaultValue={rule.template_language} required dir="ltr" className="mt-1" placeholder="ar" />
-                        </label>
-                      </div>
-                      <label className="block text-xs font-bold text-slate-700">
-                        قوالب بديلة - اختياري
-                        <Textarea
-                          name="template_variants"
-                          defaultValue={variants.join("\n")}
-                          dir="ltr"
-                          placeholder={"اسم قالب إضافي في كل سطر"}
-                          className="mt-1 min-h-24 text-xs"
+                {ctx.workspace.role === "admin" && hasTiming && (
+                  <form action={saveAutomationTiming} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                    <input type="hidden" name="rule_id" value={rule.id} />
+                    <input type="hidden" name="trigger_kind" value={rule.trigger_kind} />
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                      <label className="min-w-0 flex-1 text-xs font-bold text-slate-700">
+                        {timingLabel(rule)}
+                        <Input
+                          name="timing_value"
+                          type="number"
+                          min="0"
+                          max="10080"
+                          step="1"
+                          defaultValue={timing.value}
+                          required
+                          className="mt-1"
                         />
                       </label>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-[11px] text-[var(--muted)]">يمكن إضافة حتى 20 قالبًا بديلًا.</span>
-                        <Button type="submit" size="sm" variant="outline">حفظ الإعدادات</Button>
-                      </div>
-                    </form>
-                  </details>
+                      <label className="text-xs font-bold text-slate-700">
+                        الوحدة
+                        <select
+                          name="timing_unit"
+                          defaultValue={timing.unit}
+                          className="mt-1 h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
+                        >
+                          <option value="minutes">دقيقة</option>
+                          <option value="hours">ساعة</option>
+                          <option value="days">يوم</option>
+                        </select>
+                      </label>
+                      <Button type="submit" size="sm" variant="outline">حفظ التوقيت</Button>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">الحد الأقصى الحالي 7 أيام حتى تظل المتابعات قريبة من الحدث ومفهومة.</p>
+                  </form>
                 )}
               </CardContent>
             </Card>

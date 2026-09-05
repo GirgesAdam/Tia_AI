@@ -9,7 +9,8 @@ def test_default_rules_cover_core_clinic_automations() -> None:
         "booking_confirmation",
         "appointment_reminder_6h",
         "post_visit_followup",
-        "no_show_followup",
+        "cancellation_recovery",
+        "lead_not_booked_followup",
     }
 
 

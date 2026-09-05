@@ -184,7 +184,7 @@ def test_historical_analytics_uses_full_history_and_repeat_patients() -> None:
 def test_customer_history_is_read_only_semantic_capability() -> None:
     root = Path(__file__).resolve().parents[1]
     policy = (root / "app/agents/capability_policy.py").read_text(encoding="utf-8")
-    router = (root / "app/agents/semantic_router.py").read_text(encoding="utf-8")
+    router = (root / "app/agents/turn_models.py").read_text(encoding="utf-8")
     customer_agent = (root / "app/agents/tia_customer_agent.py").read_text(encoding="utf-8")
     assert '"customer_history": frozenset({"get_customer_history"})' in policy
     assert '"customer_history"' in router
@@ -211,5 +211,5 @@ def test_migration_preserves_original_patient_timestamp_and_head() -> None:
     assert 'revision: str = "0037_patient_history"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0036_sync_runtime"' in migration
     assert 'sa.Column("source_created_at", sa.DateTime(timezone=True), nullable=True)' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
     assert len("0037_patient_history") <= 32

@@ -245,7 +245,7 @@ def test_campaign_migration_and_readiness_head() -> None:
     assert 'revision: str = "0039_crm_campaigns"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0038_crm_cohorts"' in migration
     assert len("0039_crm_campaigns") <= 32
-    assert 'EXPECTED_MIGRATION_HEAD = "0053_public_table_rls_completion"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
 
 
 def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_steps() -> None:
@@ -259,7 +259,7 @@ def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_s
 
 def test_customer_opt_out_is_semantic_tool_not_keyword_router() -> None:
     root = Path(__file__).resolve().parents[1]
-    router = (root / "app/agents/semantic_router.py").read_text(encoding="utf-8")
+    router = (root / "app/agents/turn_models.py").read_text(encoding="utf-8")
     policy = (root / "app/agents/capability_policy.py").read_text(encoding="utf-8")
     tools = (root / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
     prompt = (root / "app/agents/prompts/customer_service.py").read_text(encoding="utf-8")

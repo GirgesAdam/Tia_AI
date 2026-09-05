@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 
-async function signInAndOpenWorkspace(email: string, password: string) {
+async function signInAndOpenWorkspace(email: string, password: string, destination = "/dashboard") {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.session?.access_token) {
@@ -36,7 +36,7 @@ async function signInAndOpenWorkspace(email: string, password: string) {
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
   });
-  redirect("/dashboard");
+  redirect(destination);
 }
 
 export async function loginAction(formData: FormData) {
@@ -54,5 +54,5 @@ export async function demoLoginAction() {
   if (!email || !password) {
     redirect(`/login?error=${encodeURIComponent("حساب الـDemo غير مجهز بعد.")}`);
   }
-  await signInAndOpenWorkspace(email, password);
+  await signInAndOpenWorkspace(email, password, "/demo");
 }

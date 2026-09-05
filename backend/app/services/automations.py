@@ -23,6 +23,7 @@ from app.models.conversation import Conversation
 from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
 from app.models.handoff_request import HandoffRequest
+from app.models.lead import Lead
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
@@ -30,8 +31,10 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOverview
+from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
+from app.services.crm_tasks import create_crm_task, sync_lead_next_follow_up
 
 
 class AutomationError(ValueError):
@@ -40,6 +43,11 @@ class AutomationError(ValueError):
 
 AUTOMATION_WORKER_FRESH_MINUTES = 5
 AUTOMATION_JOB_STALE_MINUTES = 10
+
+LEAD_FOLLOWUP_RULE_KEY = "lead_not_booked_followup"
+LEAD_FOLLOWUP_DEDUPE_PREFIX = "automation:lead-not-booked:"
+LEAD_FOLLOWUP_ELIGIBLE_STATUSES = frozenset({"new", "contacted", "qualified"})
+RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
 
 @dataclass(frozen=True)
@@ -83,7 +91,13 @@ def ensure_default_rules(
             select(AutomationRule).where(AutomationRule.workspace_id == workspace_id)
         )
     }
-    created = False
+    changed = False
+    for retired_key in RETIRED_AUTOMATION_RULE_KEYS:
+        retired = existing.get(retired_key)
+        if retired is not None and retired.enabled:
+            retired.enabled = False
+            changed = True
+
     for definition in DEFAULT_AUTOMATION_RULES:
         if definition.key in existing:
             continue
@@ -102,8 +116,8 @@ def ensure_default_rules(
         )
         db.add(row)
         existing[row.key] = row
-        created = True
-    if created:
+        changed = True
+    if changed:
         if commit:
             db.commit()
         else:
@@ -115,6 +129,41 @@ def _job_dedupe_key(appointment_id: UUID, rule_key: str) -> str:
     return f"appointment:{appointment_id}:rule:{rule_key}"
 
 
+def _cancel_pending_job_dispatch(
+    db: Session,
+    *,
+    job: AutomationJob,
+    reason: str,
+) -> bool:
+    """Cancel an automation message only while it is still safely queued."""
+    if job.dispatch_id is None:
+        return False
+    dispatch = db.get(MessageDispatch, job.dispatch_id)
+    if dispatch is None or dispatch.status != "queued":
+        return False
+
+    dispatch.status = "cancelled"
+    dispatch.locked_at = None
+    dispatch.next_attempt_at = None
+    dispatch.last_error = reason[:2000]
+    message = db.get(Message, dispatch.message_id)
+    if message is not None and message.delivery_status == "queued":
+        message.delivery_status = "cancelled"
+    return True
+
+
+REPLANNABLE_CANCELLATION_REASONS = {
+    "rule_disabled",
+    "rule_disabled_by_admin",
+    "rule_disabled_or_appointment_no_longer_eligible",
+}
+
+
+def _cancelled_job_can_be_replanned(job: AutomationJob) -> bool:
+    reason = str((job.result_json or {}).get("reason") or "")
+    return job.status == "cancelled" and reason in REPLANNABLE_CANCELLATION_REASONS
+
+
 def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
         return appointment.status in {"pending", "confirmed"}
@@ -122,6 +171,11 @@ def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
         return appointment.status == "completed" and appointment.completed_at is not None
     if rule.trigger_kind == "after_no_show":
         return appointment.status == "no_show" and appointment.no_show_at is not None
+    if rule.trigger_kind == "after_cancelled":
+        return (
+            (appointment.status == "cancelled" and appointment.cancelled_at is not None)
+            or (appointment.status == "no_show" and appointment.no_show_at is not None)
+        )
     return False
 
 
@@ -168,8 +222,306 @@ def _candidate_appointments(
                 )
             )
         )
+    if rule.trigger_kind == "after_cancelled":
+        oldest = now - timedelta(days=7)
+        return list(
+            db.scalars(
+                select(Appointment).where(
+                    Appointment.workspace_id == workspace_id,
+                    or_(
+                        and_(
+                            Appointment.status == "cancelled",
+                            Appointment.cancelled_at.is_not(None),
+                            Appointment.cancelled_at >= oldest,
+                        ),
+                        and_(
+                            Appointment.status == "no_show",
+                            Appointment.no_show_at.is_not(None),
+                            Appointment.no_show_at >= oldest,
+                        ),
+                    ),
+                )
+            )
+        )
     return []
 
+
+
+def _lead_followup_anchor(lead: Lead) -> datetime:
+    return lead.last_contact_at or lead.created_at
+
+
+def _lead_followup_dedupe_key(lead_id: UUID) -> str:
+    return f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}{lead_id}"
+
+
+def _is_system_lead_followup_task(task: CRMTask) -> bool:
+    return (
+        task.source == "system"
+        and task.execution_mode == "ai"
+        and task.lead_id is not None
+        and str(task.dedupe_key or "").startswith(LEAD_FOLLOWUP_DEDUPE_PREFIX)
+    )
+
+
+def _other_active_lead_followup(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    lead_id: UUID,
+    exclude_task_id: UUID | None = None,
+) -> CRMTask | None:
+    stmt = select(CRMTask).where(
+        CRMTask.workspace_id == workspace_id,
+        CRMTask.lead_id == lead_id,
+        CRMTask.task_type == "follow_up",
+        CRMTask.status.in_(("pending", "in_progress")),
+    )
+    if exclude_task_id is not None:
+        stmt = stmt.where(CRMTask.id != exclude_task_id)
+    return db.scalar(stmt.order_by(CRMTask.due_at, CRMTask.created_at).limit(1))
+
+
+def _system_lead_followup_ineligible_reason(
+    db: Session,
+    *,
+    task: CRMTask,
+    for_update: bool = False,
+) -> str | None:
+    if not _is_system_lead_followup_task(task):
+        return None
+
+    rule_stmt = select(AutomationRule).where(
+        AutomationRule.workspace_id == task.workspace_id,
+        AutomationRule.key == LEAD_FOLLOWUP_RULE_KEY,
+    )
+    if for_update:
+        rule_stmt = rule_stmt.with_for_update()
+    rule = db.scalar(rule_stmt)
+    if rule is None or not rule.enabled:
+        return "lead_followup_rule_disabled"
+
+    lead_stmt = select(Lead).where(
+        Lead.workspace_id == task.workspace_id,
+        Lead.id == task.lead_id,
+    )
+    if for_update:
+        lead_stmt = lead_stmt.with_for_update()
+    lead = db.scalar(lead_stmt)
+    if lead is None or lead.patient_id != task.patient_id:
+        return "lead_followup_target_missing"
+    if lead.status not in LEAD_FOLLOWUP_ELIGIBLE_STATUSES:
+        return "lead_no_longer_eligible"
+    if _other_active_lead_followup(
+        db,
+        workspace_id=task.workspace_id,
+        lead_id=lead.id,
+        exclude_task_id=task.id,
+    ) is not None:
+        return "lead_followup_superseded_by_existing_task"
+    return None
+
+
+def _cancel_system_lead_followup_task(
+    db: Session,
+    *,
+    task: CRMTask,
+    now: datetime,
+    reason: str,
+) -> bool:
+    if task.status not in {"pending", "in_progress"}:
+        return False
+    job = db.scalar(
+        select(AutomationJob)
+        .where(
+            AutomationJob.workspace_id == task.workspace_id,
+            AutomationJob.crm_task_id == task.id,
+            AutomationJob.job_kind == "crm_follow_up",
+        )
+        .with_for_update()
+    )
+    if job is not None and job.status == "dispatched":
+        if not _cancel_pending_job_dispatch(db, job=job, reason=reason):
+            return False
+    if job is not None and job.status in {"queued", "failed", "processing", "dispatched"}:
+        job.status = "cancelled"
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.completed_at = now
+        job.result_json = {**(job.result_json or {}), "reason": reason}
+    task.status = "cancelled"
+    task.completed_at = now
+    sync_lead_next_follow_up(
+        db,
+        workspace_id=task.workspace_id,
+        lead_id=task.lead_id,
+    )
+    return True
+
+
+def cancel_system_lead_followups(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    now: datetime | None = None,
+) -> int:
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    tasks = list(
+        db.scalars(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.source == "system",
+                CRMTask.execution_mode == "ai",
+                CRMTask.status.in_(("pending", "in_progress")),
+                CRMTask.dedupe_key.like(f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}%"),
+            )
+        )
+    )
+    cancelled = 0
+    for task in tasks:
+        if _cancel_system_lead_followup_task(
+            db,
+            task=task,
+            now=now,
+            reason="lead_followup_rule_disabled",
+        ):
+            cancelled += 1
+    return cancelled
+
+
+def _plan_lead_followup_rule(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rule: AutomationRule,
+    now: datetime,
+    horizon: datetime,
+) -> PlanningResult:
+    active_system_tasks = list(
+        db.scalars(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.source == "system",
+                CRMTask.execution_mode == "ai",
+                CRMTask.dedupe_key.like(f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}%"),
+                CRMTask.status.in_(("pending", "in_progress")),
+            )
+        )
+    )
+    cancelled = 0
+    for task in active_system_tasks:
+        reason = _system_lead_followup_ineligible_reason(db, task=task)
+        if reason is not None and _cancel_system_lead_followup_task(
+            db,
+            task=task,
+            now=now,
+            reason=reason,
+        ):
+            cancelled += 1
+
+    if not rule.enabled:
+        return PlanningResult(planned=0, cancelled=cancelled)
+
+    oldest = now - timedelta(days=30)
+    leads = list(
+        db.scalars(
+            select(Lead).where(
+                Lead.workspace_id == workspace_id,
+                Lead.status.in_(tuple(LEAD_FOLLOWUP_ELIGIBLE_STATUSES)),
+                or_(Lead.created_at >= oldest, Lead.last_contact_at >= oldest),
+            )
+        )
+    )
+    planned = 0
+    for lead in leads:
+        anchor = _lead_followup_anchor(lead)
+        when = (anchor + timedelta(minutes=rule.offset_minutes)).astimezone(UTC)
+        if when > horizon or when + timedelta(minutes=rule.max_lateness_minutes) < now:
+            continue
+
+        dedupe_key = _lead_followup_dedupe_key(lead.id)
+        task = db.scalar(
+            select(CRMTask).where(
+                CRMTask.workspace_id == workspace_id,
+                CRMTask.dedupe_key == dedupe_key,
+            )
+        )
+        if task is not None:
+            competing = _other_active_lead_followup(
+                db,
+                workspace_id=workspace_id,
+                lead_id=lead.id,
+                exclude_task_id=task.id,
+            )
+            if competing is not None:
+                continue
+            job = db.scalar(
+                select(AutomationJob).where(
+                    AutomationJob.workspace_id == workspace_id,
+                    AutomationJob.crm_task_id == task.id,
+                    AutomationJob.job_kind == "crm_follow_up",
+                )
+            )
+            renewable = (
+                task.status == "cancelled"
+                and job is not None
+                and job.status == "cancelled"
+                and str((job.result_json or {}).get("reason") or "")
+                == "lead_followup_rule_disabled"
+            )
+            if renewable:
+                task.status = "pending"
+                task.execution_mode = "ai"
+                task.completed_at = None
+                task.due_at = when
+                job.status = "queued"
+                job.scheduled_for = when
+                job.locked_at = None
+                job.next_attempt_at = None
+                job.completed_at = None
+                job.last_error = None
+                job.message_id = None
+                job.dispatch_id = None
+                job.result_json = {}
+                sync_lead_next_follow_up(db, workspace_id=workspace_id, lead_id=lead.id)
+            elif task.status == "pending" and task.execution_mode == "ai" and job is not None:
+                task.due_at = when
+                if job.status in {"queued", "failed"}:
+                    job.status = "queued"
+                    job.scheduled_for = when
+                    job.next_attempt_at = None
+                    job.locked_at = None
+                    job.last_error = None
+                sync_lead_next_follow_up(db, workspace_id=workspace_id, lead_id=lead.id)
+            continue
+
+        if _other_active_lead_followup(
+            db,
+            workspace_id=workspace_id,
+            lead_id=lead.id,
+        ) is not None:
+            continue
+
+        create_crm_task(
+            db,
+            workspace_id=workspace_id,
+            patient_id=lead.patient_id,
+            lead_id=lead.id,
+            title="مساعدة في استكمال الحجز",
+            description=(
+                "تابع مع العميل بشكل طبيعي لأنه مهتم ولم يكمل الحجز بعد. "
+                "جاوب على أسئلته واعرض المساعدة في الحجز بدون اختراع خصم أو استعجال غير حقيقي."
+            ),
+            due_at=when,
+            task_type="follow_up",
+            priority="normal",
+            source="system",
+            execution_mode="ai",
+            dedupe_key=dedupe_key,
+            commit=False,
+        )
+        planned += 1
+    return PlanningResult(planned=planned, cancelled=cancelled)
 
 def plan_automation_jobs(
     db: Session,
@@ -184,7 +536,23 @@ def plan_automation_jobs(
     planned = 0
     cancelled = 0
 
-    enabled_rules = [rule for rule in rules if rule.enabled]
+    lead_rules = [rule for rule in rules if rule.trigger_kind == "after_lead_activity"]
+    for lead_rule in lead_rules:
+        lead_result = _plan_lead_followup_rule(
+            db,
+            workspace_id=workspace_id,
+            rule=lead_rule,
+            now=now,
+            horizon=horizon,
+        )
+        planned += lead_result.planned
+        cancelled += lead_result.cancelled
+
+    enabled_rules = [
+        rule
+        for rule in rules
+        if rule.enabled and rule.trigger_kind != "after_lead_activity"
+    ]
     for rule in enabled_rules:
         for appointment in _candidate_appointments(
             db,
@@ -200,6 +568,7 @@ def plan_automation_jobs(
                 appointment_start_at=appointment.start_at,
                 completed_at=appointment.completed_at,
                 no_show_at=appointment.no_show_at,
+                cancelled_at=appointment.cancelled_at or appointment.no_show_at,
             )
             if when is None:
                 continue
@@ -217,14 +586,35 @@ def plan_automation_jobs(
                 )
             )
             if existing is not None:
-                if existing.status in {"queued", "failed", "cancelled"}:
+                renewable_cancel = _cancelled_job_can_be_replanned(existing)
+                if existing.status in {"queued", "failed"} or renewable_cancel:
                     existing.status = "queued"
                     existing.scheduled_for = when
                     existing.next_attempt_at = None
                     existing.locked_at = None
                     existing.completed_at = None
                     existing.last_error = None
+                    if renewable_cancel:
+                        existing.message_id = None
+                        existing.dispatch_id = None
                     existing.result_json = {}
+                elif existing.status == "dispatched" and existing.scheduled_for != when:
+                    if _cancel_pending_job_dispatch(
+                        db,
+                        job=existing,
+                        reason="Appointment timing changed before provider send.",
+                    ):
+                        existing.status = "queued"
+                        existing.scheduled_for = when
+                        existing.next_attempt_at = None
+                        existing.locked_at = None
+                        existing.completed_at = None
+                        existing.last_error = None
+                        existing.message_id = None
+                        existing.dispatch_id = None
+                        existing.result_json = {"reason": "rescheduled_before_provider_send"}
+                # Manual job cancellations stay terminal. Lifecycle cancellations
+                # are renewable only when the rule/appointment becomes eligible again.
                 continue
 
             db.add(
@@ -258,7 +648,7 @@ def plan_automation_jobs(
         )
         .where(
             AutomationJob.workspace_id == workspace_id,
-            AutomationJob.status.in_(("queued", "failed")),
+            AutomationJob.status.in_(("queued", "failed", "dispatched")),
         )
     )
     for job, appointment in db.execute(stale_stmt).all():
@@ -268,7 +658,16 @@ def plan_automation_jobs(
             or rule.id not in active_rule_ids
             or not _eligible_for_rule(appointment, rule)
         ):
+            if job.status == "dispatched" and not _cancel_pending_job_dispatch(
+                db,
+                job=job,
+                reason="Appointment or rule became ineligible before provider send.",
+            ):
+                # A processing/sent provider delivery cannot be safely recalled.
+                continue
             job.status = "cancelled"
+            job.locked_at = None
+            job.next_attempt_at = None
             job.completed_at = now
             job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
             cancelled += 1
@@ -421,8 +820,8 @@ def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "appointment_reminder_6h":
         return (
             f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-            f"النهارده الساعة {data['time']} في {data['branch_name']}، فاضل حوالي 6 ساعات. "
-            "مستنيينك 💛"
+            f"يوم {data['date']} الساعة {data['time']}. "
+            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.
@@ -440,7 +839,15 @@ def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "post_visit_followup":
         return (
             f"إزيك {data['patient_name']}؟ حبيت أطمن عليكي بعد {data['service_name']} "
-            f"اللي كانت يوم {data['date']}. كل حاجة تمام؟"
+            f"اللي كانت يوم {data['date']}. كل حاجة تمام؟ "
+            "لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، "
+            "ويسعدنا نعرف تقييمك للجلسة."
+        )
+    if rule_key == "cancellation_recovery":
+        return (
+            f"أهلًا {data['patient_name']}، حبيت أساعدك بعد إلغاء موعد {data['service_name']} "
+            f"يوم {data['date']} الساعة {data['time']}. "
+            "لو حابة نرتب ميعاد جديد ابعتيلي هنا وأنا أساعدك."
         )
     if rule_key == "no_show_followup":
         return (
@@ -486,12 +893,50 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
-        return [patient_name, service_name, time, branch_name]
+        return [patient_name, service_name, date, time]
+    if rule_key == "cancellation_recovery":
+        return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
         return [patient_name, service_name, date]
 
     # Opt-in / legacy appointment templates retain the original five-variable contract.
     return [patient_name, service_name, date, time, branch_name]
+
+
+def _config_flag_enabled(value: object) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _proactive_whatsapp_recipient(patient: Patient) -> str | None:
+    """Return the provider recipient id only when the CRM phone is globally routable."""
+    try:
+        _, normalized = normalize_patient_identity_phone(
+            patient.phone_normalized or patient.phone
+        )
+    except ValueError:
+        return None
+    if not normalized or not normalized.startswith("+"):
+        return None
+    digits = normalized[1:]
+    if not digits.isdigit() or not 8 <= len(digits) <= 15:
+        return None
+    return digits
+
+
+def _real_proactive_whatsapp_connection(connection: ChannelConnection) -> bool:
+    config = connection.config_json or {}
+    return (
+        connection.channel == "whatsapp"
+        and connection.status == "active"
+        and bool(connection.external_account_id)
+        and str(config.get("runtime_kind") or "").strip().lower() == "real"
+        and not _config_flag_enabled(config.get("mock"))
+        and not _config_flag_enabled(config.get("do_not_send"))
+    )
 
 
 def _resolve_external_route(
@@ -550,11 +995,68 @@ def _resolve_external_route(
         .limit(1)
     )
     if identity is None:
-        return None
+        if channel not in {"auto", "whatsapp"}:
+            return None
+        patient = db.get(Patient, patient_id)
+        if patient is None:
+            return None
+        recipient = _proactive_whatsapp_recipient(patient)
+        if recipient is None:
+            return None
 
-    connection = db.get(ChannelConnection, identity.channel_connection_id)
-    if connection is None:
-        return None
+        proactive_connections = [
+            candidate
+            for candidate in db.scalars(
+                select(ChannelConnection).where(
+                    ChannelConnection.workspace_id == workspace_id,
+                    ChannelConnection.channel == "whatsapp",
+                    ChannelConnection.status == "active",
+                )
+            )
+            if _real_proactive_whatsapp_connection(candidate)
+        ]
+        # For a patient without an established identity, routing must be unambiguous.
+        # Multi-number workspaces can still route through an existing identity/conversation.
+        if len(proactive_connections) != 1:
+            return None
+        connection = proactive_connections[0]
+
+        recipient_identity = db.scalar(
+            select(ChannelIdentity).where(
+                ChannelIdentity.workspace_id == workspace_id,
+                ChannelIdentity.channel_connection_id == connection.id,
+                ChannelIdentity.external_user_id == recipient,
+            )
+        )
+        if recipient_identity is not None:
+            if recipient_identity.patient_id != patient_id:
+                # Never send to a phone already owned by another CRM patient.
+                return None
+            identity = recipient_identity
+        else:
+            display_name = (
+                f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+                or patient.first_name
+                or None
+            )
+            identity = ChannelIdentity(
+                workspace_id=workspace_id,
+                channel_connection_id=connection.id,
+                patient_id=patient_id,
+                external_user_id=recipient,
+                display_name=display_name,
+                phone=patient.phone,
+                metadata_json={
+                    "source": "crm_patient_phone",
+                    "proactive_identity": True,
+                },
+            )
+            db.add(identity)
+            db.flush()
+    else:
+        connection = db.get(ChannelConnection, identity.channel_connection_id)
+        if connection is None:
+            return None
 
     conversation = Conversation(
         workspace_id=workspace_id,
@@ -882,6 +1384,27 @@ def _execute_crm_followup_job(
         db.commit()
         return ExecutionResult(job=job, reason="follow_up_target_missing")
 
+    lead_followup_reason = _system_lead_followup_ineligible_reason(
+        db,
+        task=task,
+        for_update=True,
+    )
+    if lead_followup_reason is not None:
+        task.status = "cancelled"
+        task.completed_at = now
+        job.status = "cancelled"
+        job.completed_at = now
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.result_json = {"reason": lead_followup_reason}
+        sync_lead_next_follow_up(
+            db,
+            workspace_id=workspace_id,
+            lead_id=task.lead_id,
+        )
+        db.commit()
+        return ExecutionResult(job=job, reason=lead_followup_reason)
+
     if task.execution_mode != "ai" or task.status not in {"pending", "in_progress"}:
         job.status = "cancelled"
         job.completed_at = now
@@ -1081,6 +1604,27 @@ def _execute_crm_followup_job(
         db.commit()
         return ExecutionResult(job=final_job, reason="follow_up_target_missing_after_generation")
 
+    lead_followup_reason = _system_lead_followup_ineligible_reason(
+        db,
+        task=final_task,
+        for_update=True,
+    )
+    if lead_followup_reason is not None:
+        final_task.status = "cancelled"
+        final_task.completed_at = now
+        final_job.status = "cancelled"
+        final_job.completed_at = now
+        final_job.locked_at = None
+        final_job.next_attempt_at = None
+        final_job.result_json = {"reason": lead_followup_reason}
+        sync_lead_next_follow_up(
+            db,
+            workspace_id=workspace_id,
+            lead_id=final_task.lead_id,
+        )
+        db.commit()
+        return ExecutionResult(job=final_job, reason=lead_followup_reason)
+
     if final_conversation.last_message_at != last_message_at_snapshot:
         final_job.status = "failed"
         final_job.locked_at = None
@@ -1201,6 +1745,7 @@ def automation_operations_overview(
             .where(
                 AutomationRule.workspace_id == workspace_id,
                 AutomationRule.enabled.is_(True),
+                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS),
             )
         )
         or 0

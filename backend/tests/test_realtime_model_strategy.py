@@ -1,18 +1,14 @@
 from pathlib import Path
 
+from app.core.config import Settings
 
-def test_realtime_defaults_use_lite_first_and_no_37_critical_path() -> None:
-    backend = Path(__file__).resolve().parent.parent
-    config = (backend / "app/core/config.py").read_text(encoding="utf-8")
 
-    assert 'gemini_realtime_interpreter_model: str = "gemini-3.5-flash-lite"' in config
-    assert 'gemini_realtime_interpreter_fallback_model: str | None = "gemini-3.6-flash"' in config
-    assert 'gemini_realtime_interpreter_emergency_model: str | None = "gemini-3.5-flash"' in config
-    assert 'gemini_realtime_composer_model: str = "gemini-3.5-flash-lite"' in config
-    assert 'gemini_realtime_composer_fallback_model: str | None = "gemini-3.6-flash"' in config
-    assert 'gemini_agent_model: str = "gemini-3.6-flash"' in config
-    assert 'gemini_router_model: str = "gemini-3.6-flash"' in config
-    assert 'gemini_flow_model: str = "gemini-3.6-flash"' in config
+def test_realtime_defaults_use_luna_then_gpt5_mini() -> None:
+    assert Settings.model_fields["openai_model"].default == "gpt-5.6-luna"
+    assert Settings.model_fields["openai_fallback_model"].default == "gpt-5-mini"
+    assert Settings.model_fields["openai_reasoning_effort"].default == "low"
+    assert Settings.model_fields["openai_fallback_reasoning_effort"].default == "low"
+    assert Settings.model_fields["llm_realtime_max_retries"].default == 0
 
 
 def test_realtime_model_chain_source_has_no_customer_text_heuristics() -> None:

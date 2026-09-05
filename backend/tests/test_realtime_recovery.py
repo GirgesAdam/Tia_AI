@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
 
-from app.agents import flow_interpreter, semantic_router
+from app.agents import turn_interpreter
 from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_actions import format_verified_tool_fallback
 from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
@@ -43,71 +43,31 @@ def _semantic_decision() -> SemanticCapabilityDecision:
     )
 
 
-def test_semantic_router_receives_clinic_local_clock(monkeypatch) -> None:
-    captured: dict[str, str] = {}
-    monkeypatch.setattr(semantic_router, "build_semantic_router_model", lambda: object())
-
-    def fake_structured_output(*, model, schema, messages):
-        captured["system"] = str(messages[0].content)
-        return _semantic_decision()
-
-    monkeypatch.setattr(semantic_router, "invoke_typed_structured_output", fake_structured_output)
-
-    decision = semantic_router.route_customer_message(
-        history=[HumanMessage(content="عايز أحجز بكرة بعد 6")],
+def test_unified_turn_interpreter_receives_clinic_local_clock() -> None:
+    local_now = datetime.fromisoformat("2026-08-19T18:30:00+03:00")
+    prompt = turn_interpreter._interpreter_system_prompt(
         timezone_name="Africa/Cairo",
-        local_now=datetime.fromisoformat("2026-08-19T18:30:00+03:00"),
+        local_now=local_now,
+        active_flow=False,
     )
 
-    assert decision.entity_hints.requested_date == "2026-08-20"
-    assert "Africa/Cairo" in captured["system"]
-    assert "2026-08-19T18:30:00+03:00" in captured["system"]
-    assert "Resolve clear relative dates/times" in captured["system"]
-    assert "requested_start_time" in captured["system"]
+    assert "Africa/Cairo" in prompt
+    assert "2026-08-19T18:30:00+03:00" in prompt
+    assert "Resolve clear relative dates/times" in prompt
+    assert "requested_start_time" in prompt
 
 
-def test_flow_interpreter_receives_clinic_local_clock(monkeypatch) -> None:
-    captured: dict[str, str] = {}
-    monkeypatch.setattr(flow_interpreter, "build_flow_interpreter_model", lambda: object())
-
-    decision = FlowTurnDecision(
-        action="modify",
-        capabilities=["availability_discovery", "appointment_creation"],
-        risk_flags=[],
-        entity_hints=_hints(requested_date="2026-08-20"),
-        selection_index=None,
-        selection_time=None,
-        missing_information=[],
-        recommended_handoff_category="other",
-        recommended_handoff_priority="normal",
-        confidence=0.99,
-        reason="test",
-    )
-
-    def fake_structured_output(*, model, schema, messages):
-        captured["system"] = str(messages[0].content)
-        return decision
-
-    monkeypatch.setattr(flow_interpreter, "invoke_typed_structured_output", fake_structured_output)
-
-    flow = SimpleNamespace(
-        flow_type="booking",
-        status="collecting_requirements",
-        capabilities=["availability_discovery", "appointment_creation"],
-        entity_state={},
-        missing_information=[],
-        option_snapshot={},
-    )
-    result = flow_interpreter.interpret_active_flow_turn(
-        flow=flow,
-        history=[HumanMessage(content="خليه بكرة")],
+def test_unified_active_flow_prompt_receives_clinic_local_clock() -> None:
+    local_now = datetime.fromisoformat("2026-08-19T18:30:00+03:00")
+    prompt = turn_interpreter._interpreter_system_prompt(
         timezone_name="Africa/Cairo",
-        local_now=datetime.fromisoformat("2026-08-19T18:30:00+03:00"),
+        local_now=local_now,
+        active_flow=True,
     )
 
-    assert result.entity_hints.requested_date == "2026-08-20"
-    assert "Africa/Cairo" in captured["system"]
-    assert "2026-08-19T18:30:00+03:00" in captured["system"]
+    assert "Africa/Cairo" in prompt
+    assert "2026-08-19T18:30:00+03:00" in prompt
+    assert "Active workflow present: true" in prompt
 
 
 def test_verified_booking_tool_fallback_formats_slots_without_internal_ids() -> None:
@@ -134,7 +94,7 @@ def test_verified_booking_tool_fallback_formats_slots_without_internal_ids() -> 
     assert "20/08/2026" in reply
     assert "18:30" in reply
     assert "أحمد محمود" in reply
-    assert "مدينة نصر" in reply
+    assert "مدينة نصر" not in reply
     assert "branch_id" not in reply
     assert "doctor_id" not in reply
 
@@ -457,36 +417,8 @@ def test_unavailable_model_tool_call_gets_matching_response_and_clean_finalizer(
     assert base.finalizer_messages is not None
 
 
-def test_flow_interpreter_exposes_service_choices_for_follow_up_selection(monkeypatch) -> None:
-    captured: dict[str, str] = {}
-    monkeypatch.setattr(flow_interpreter, "build_flow_interpreter_model", lambda: object())
-
-    decision = FlowTurnDecision(
-        action="select_option",
-        capabilities=["availability_discovery", "appointment_creation"],
-        risk_flags=[],
-        entity_hints=_hints(),
-        selection_index=1,
-        selection_time=None,
-        missing_information=[],
-        recommended_handoff_category="other",
-        recommended_handoff_priority="normal",
-        confidence=0.99,
-        reason="customer selected the first service",
-    )
-
-    def fake_structured_output(*, model, schema, messages):
-        captured["state"] = str(messages[1].content)
-        return decision
-
-    monkeypatch.setattr(flow_interpreter, "invoke_typed_structured_output", fake_structured_output)
-
+def test_unified_interpreter_exposes_service_choices_for_follow_up_selection() -> None:
     flow = SimpleNamespace(
-        flow_type="booking",
-        status="awaiting_option_selection",
-        capabilities=["availability_discovery", "appointment_creation"],
-        entity_state={"service_query": "ليزر"},
-        missing_information=[],
         option_snapshot={
             "ok": True,
             "needs_service_choice": True,
@@ -503,14 +435,20 @@ def test_flow_interpreter_exposes_service_choices_for_follow_up_selection(monkey
         },
     )
 
-    flow_interpreter.interpret_active_flow_turn(
-        flow=flow,
-        history=[HumanMessage(content="1")],
-        timezone_name="Africa/Cairo",
-        local_now=datetime.fromisoformat("2026-08-19T19:10:00+03:00"),
-    )
+    summary = turn_interpreter._option_summary(flow)
 
-    assert '"services": [{"index": 1, "name": "ليزر إزالة الشعر"}' in captured["state"]
+    assert summary["services"] == [
+        {
+            "index": 1,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "name": "ليزر إزالة الشعر",
+        },
+        {
+            "index": 2,
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "ليزر إزالة الشعر — Demo",
+        },
+    ]
 
 
 def test_prerequisite_service_index_selection_updates_semantic_state_without_write(monkeypatch) -> None:

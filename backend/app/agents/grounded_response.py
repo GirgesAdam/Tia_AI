@@ -6,6 +6,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from app.agents.availability_presentation import customer_visible_verified_data
 from app.agents.llm_runtime import LLMProviderError, invoke_model, invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_composer_fallback_model,
@@ -67,6 +68,15 @@ def compose_grounded_customer_reply(
             "- Every factual claim about services, prices, durations, doctors, branches, dates, "
             "times, availability, appointment status, or completed actions MUST come from VERIFIED_DATA.\n"
             "- Never print internal UUIDs or implementation metadata.\n"
+            "- The customer experience is single-location. Never mention or ask about branches; "
+            "storage-level branch data is internal only.\n"
+            "- When availability_windows are provided, summarize those natural continuous windows "
+            "per doctor instead of listing dense quarter-hour slot starts.\n"
+            "- Slot-level prices in verified availability are appointment-specific booking prices. The service "
+            "catalog price is a general/base price. If they differ, do not present them as a contradiction or "
+            "quote both as if both apply to the same booking. If all relevant slots share one verified price, "
+            "use that price for the availability/booking answer; if prices vary, explain that they vary by "
+            "option and use only the verified slot prices.\n"
             "- If VERIFIED_DATA contains multiple candidate services/doctors/branches, present all "
             "provided relevant options clearly and ask the customer to choose. Do not silently pick one.\n"
             "- If an exact requested time is unavailable and alternatives are provided, say it is "
@@ -88,7 +98,7 @@ def compose_grounded_customer_reply(
                 getattr(semantic_decision, "missing_information", []) or []
             ),
         },
-        "verified_data": verified_data,
+        "verified_data": customer_visible_verified_data(verified_data),
     }
     user = HumanMessage(
         content=(

@@ -7,7 +7,7 @@ from app.services.operational_readiness import (
 
 
 def test_release_gate_targets_current_schema_head() -> None:
-    assert EXPECTED_MIGRATION_HEAD == "0053_public_table_rls_completion"
+    assert EXPECTED_MIGRATION_HEAD == "0056_merge_automation_expenses"
 
 
 def test_stale_lock_threshold_matches_existing_worker_reclaim_window_or_later() -> None:
@@ -45,6 +45,7 @@ def test_provider_readiness_does_not_expose_api_key() -> None:
     service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
 
     assert '"gemini_api_key"' not in service
+    assert '"openai_api_key"' not in service
     assert '"onboarding_primary_model"' in service
     assert '"onboarding_fallback_model"' in service
 
@@ -56,3 +57,14 @@ def test_readiness_checks_workspace_clinic_integration() -> None:
     assert 'key="clinic_integration"' in service
     assert "registered_clinic_adapter_keys()" in service
     assert 'clinic_integration.status == "active"' in service
+
+
+def test_provider_readiness_is_provider_aware() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    service = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
+
+    assert 'key="llm_provider_configuration"' in service
+    assert 'provider_name == "openai"' in service
+    assert "settings.openai_api_key" in service
+    assert 'runtime_strategy = "single_model"' in service
+    assert '"configured": provider_configured' in service

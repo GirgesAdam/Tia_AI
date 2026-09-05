@@ -8,7 +8,7 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_default_lifecycle_has_one_six_hour_reminder_only() -> None:
+def test_default_lifecycle_has_one_configurable_appointment_reminder() -> None:
     rules = {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}
 
     assert "appointment_reminder_24h" not in rules
@@ -18,12 +18,13 @@ def test_default_lifecycle_has_one_six_hour_reminder_only() -> None:
     assert reminder.enabled_by_default is True
     assert reminder.trigger_kind == "before_appointment"
     assert reminder.offset_minutes == -360
-    assert reminder.template_name == "tia_appointment_reminder_6h_ar"
+    assert reminder.name == "Appointment reminder"
+    assert reminder.template_name == "tia_appointment_reminder_ar"
 
-    assert rules["post_visit_followup"].enabled_by_default is True
+    assert rules["post_visit_followup"].enabled_by_default is False
 
 
-def test_six_hour_reminder_timing_and_post_visit_timing() -> None:
+def test_default_reminder_and_post_visit_offsets_remain_valid_starting_values() -> None:
     start = datetime(2026, 9, 5, 18, 0, tzinfo=UTC)
     completed = datetime(2026, 9, 5, 19, 15, tzinfo=UTC)
     created = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
@@ -49,7 +50,7 @@ def test_six_hour_reminder_timing_and_post_visit_timing() -> None:
     assert post_visit == datetime(2026, 9, 6, 19, 15, tzinfo=UTC)
 
 
-def test_migration_disables_old_reminders_cancels_jobs_and_materializes_6h() -> None:
+def test_historical_migration_disabled_old_reminders_and_materialized_6h_key() -> None:
     migration = (
         _root() / "backend/alembic/versions/0026_appointment_reminder_6h.py"
     ).read_text(encoding="utf-8")
@@ -67,40 +68,56 @@ def test_migration_disables_old_reminders_cancels_jobs_and_materializes_6h() -> 
     assert "tia_appointment_reminder_6h_ar" in migration
 
 
-def test_six_hour_fallback_copy_is_natural_and_post_visit_is_preserved() -> None:
+def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_is_merged() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
 
-    assert 'rule_key == "appointment_reminder_6h"' in service
-    assert "فاضل حوالي 6 ساعات" in service
-    assert "مستنيينك 💛" in service
-    assert "تعدّلي الموعد" not in service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split('if rule_key == "appointment_reminder_24h":', 1)[0]
-    assert "حبيت أطمن عليكي بعد {data['service_name']}" in service
-    assert "كل حاجة تمام؟" in service
+    reminder = service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split(
+        'if rule_key == "appointment_reminder_24h":', 1
+    )[0]
+    post_visit = service.split('if rule_key == "post_visit_followup":', 1)[1].split(
+        'if rule_key == "no_show_followup":', 1
+    )[0]
+
+    assert "فاضل حوالي 6 ساعات" not in reminder
+    assert "{data['date']}" in reminder
+    assert "{data['time']}" in reminder
+    assert "تعدّلي الموعد" in reminder
+    assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
+    assert "تحجزي الجلسة الجاية" in post_visit
+    assert "تقييمك للجلسة" in post_visit
 
 
-def test_automation_ui_labels_six_hour_rule() -> None:
+def test_automation_ui_exposes_configurable_reminder_timing() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(
         encoding="utf-8"
     )
 
-    assert page.count("appointment_reminder_6h") >= 3
-    assert 'rule.key === "appointment_reminder_6h"' in page
+    assert page.count("appointment_reminder_6h") >= 2
+    assert "saveAutomationTiming" in page
+    assert 'name="timing_value"' in page
+    assert 'name="timing_unit"' in page
 
 
-
-def test_setup_documents_six_hour_template_as_the_only_default_reminder() -> None:
+def test_setup_documents_timing_neutral_template_contract() -> None:
     setup = (_root() / "n8n/AUTOMATIONS_SETUP.md").read_text(encoding="utf-8")
 
-    assert "tia_appointment_reminder_6h_ar" in setup
-    assert "قبل الموعد بـ 6 ساعات" in setup
-    assert "v0.31.6" in setup
-    six_hour_line = next(line for line in setup.splitlines() if "tia_appointment_reminder_6h_ar" in line and "أهلًا" in line)
-    assert "تعدّلي الموعد" not in six_hour_line
-    assert "مستنيينك 💛" in six_hour_line
-    assert "{{3}}" in six_hour_line and "{{4}}" in six_hour_line
-    assert "{{5}}" not in six_hour_line
-    post_visit_line = next(line for line in setup.splitlines() if "tia_post_visit_followup_ar" in line and "إزيك" in line)
+    assert "tia_appointment_reminder_ar" in setup
+    assert "admin controls the timing" in setup
+    assert 'Do not hardcode "6 hours"' in setup
+    reminder_line = next(
+        line for line in setup.splitlines()
+        if "tia_appointment_reminder_ar" in line and "أهلًا" in line
+    )
+    assert "بموعدك لـ{{2}}" in reminder_line
+    assert "{{3}}" in reminder_line and "{{4}}" in reminder_line
+    assert "{{5}}" not in reminder_line
+    assert "تعدّلي الموعد" in reminder_line
+
+    post_visit_line = next(
+        line for line in setup.splitlines()
+        if "tia_post_visit_followup_ar" in line and "إزيك" in line
+    )
     assert "{{1}}" in post_visit_line and "{{2}}" in post_visit_line and "{{3}}" in post_visit_line
     assert "{{4}}" not in post_visit_line and "{{5}}" not in post_visit_line
-    assert "الفرع" not in post_visit_line and "في {{" not in post_visit_line
-    assert "24h and 2h reminder rules are disabled" in setup
+    assert "تحجزي الجلسة الجاية" in post_visit_line
+    assert "تقييمك للجلسة" in post_visit_line

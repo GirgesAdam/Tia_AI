@@ -1,4 +1,4 @@
-from app.agents.structured_output import canonicalize_gemini_json_schema
+from app.agents.structured_output import canonicalize_provider_json_schema
 from app.schemas.onboarding_provider import OnboardingProviderDecision
 
 
@@ -21,7 +21,7 @@ def test_provider_schema_contains_pydantic_refs_and_nullable_anyof_before_conver
 
 
 def test_canonical_schema_has_no_defs_refs_or_anyof() -> None:
-    schema = canonicalize_gemini_json_schema(OnboardingProviderDecision.model_json_schema())
+    schema = canonicalize_provider_json_schema(OnboardingProviderDecision.model_json_schema())
     keys = set(_all_keys(schema))
 
     assert "$defs" not in keys
@@ -30,7 +30,7 @@ def test_canonical_schema_has_no_defs_refs_or_anyof() -> None:
 
 
 def test_nullable_provider_fields_use_type_array() -> None:
-    schema = canonicalize_gemini_json_schema(OnboardingProviderDecision.model_json_schema())
+    schema = canonicalize_provider_json_schema(OnboardingProviderDecision.model_json_schema())
     branch = schema["properties"]["branches"]["items"]
     city_type = branch["properties"]["city"]["type"]
 
@@ -38,7 +38,7 @@ def test_nullable_provider_fields_use_type_array() -> None:
 
 
 def test_supported_schema_constraints_are_preserved() -> None:
-    schema = canonicalize_gemini_json_schema(OnboardingProviderDecision.model_json_schema())
+    schema = canonicalize_provider_json_schema(OnboardingProviderDecision.model_json_schema())
     doctor_hours = schema["properties"]["doctor_hours"]["items"]
     weekdays = doctor_hours["properties"]["weekdays"]
     weekday = weekdays["items"]
