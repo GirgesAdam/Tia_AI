@@ -41,6 +41,7 @@ def select_slot_from_structured_selection(
 
     return None
 
+
 def booking_tool_args(slot: dict[str, Any]) -> dict[str, str]:
     return {
         "branch_id": str(slot["branch_id"]),
@@ -78,6 +79,36 @@ def format_booking_success(appointment: dict[str, Any]) -> str:
     ]
     suffix = "، ".join(str(item) for item in details if item)
     return opening + (f": {suffix}." if suffix else ".")
+
+
+def _clock_ar(value: datetime) -> str:
+    suffix = "ص" if value.hour < 12 else "م"
+    hour = value.hour % 12 or 12
+    if value.minute == 0:
+        return f"{hour} {suffix}"
+    return f"{hour}:{value.minute:02d} {suffix}"
+
+
+def format_reschedule_success(appointment: dict[str, Any]) -> str:
+    """Confirm a completed reschedule using only adapter-verified appointment facts."""
+    start: datetime | None = None
+    try:
+        start = datetime.fromisoformat(str(appointment.get("start_local")))
+    except (TypeError, ValueError):
+        pass
+
+    doctor = str(
+        appointment.get("doctor") or appointment.get("doctor_name") or ""
+    ).strip()
+    details: list[str] = []
+    if start is not None:
+        details.append(f"ليوم {start.strftime('%d/%m/%Y')} الساعة {_clock_ar(start)}")
+    if doctor:
+        details.append(f"مع {doctor}")
+    if not details:
+        return "تمام، الموعد اتغيّر للميعاد الجديد بنجاح."
+    return "تمام، الموعد اتغيّر " + " ".join(details) + "."
+
 
 def format_handoff_reply(category: str) -> str:
     if category == "medical":
@@ -134,6 +165,7 @@ def _format_slot_choices(output: dict[str, Any], *, reschedule: bool) -> str | N
         reschedule=reschedule,
         booking_authorized=not reschedule,
     )
+
 
 def format_verified_tool_fallback(tool_name: str, output: dict[str, Any]) -> str | None:
     """Build a customer-safe reply only from verified composite tool output.
