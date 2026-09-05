@@ -45,7 +45,7 @@ https://tia-api-production-54c5.up.railway.app
 Before starting, run the committed validation script. It refuses to start if required values are missing or still use example placeholders:
 
 ```bash
-./start-production.sh
+bash ./start-production.sh
 ```
 
 The script validates the Compose file, pulls the pinned images, starts the stack, and prints container status.
@@ -118,7 +118,7 @@ git fetch origin
 git checkout main
 git pull --ff-only origin main
 cd deploy/oracle-n8n
-./start-production.sh
+bash ./start-production.sh
 ```
 
 This keeps the Oracle runtime aligned with the same production branch as the application source.
