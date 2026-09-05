@@ -237,7 +237,7 @@ def format_availability_windows_reply(
         if not ranges:
             continue
         joined = "، و".join(ranges)
-        lines.append(f"{doctor} متاح {joined}.")
+        lines.append(f"المتاح مع {doctor} {joined}.")
 
     if not lines:
         return _legacy_slot_reply(
