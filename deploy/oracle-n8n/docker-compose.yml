@@ -20,6 +20,9 @@ services:
     depends_on:
       n8n_db:
         condition: service_healthy
+    env_file:
+      - path: .runtime-secrets/tia-runtime.env
+        required: false
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: n8n_db
