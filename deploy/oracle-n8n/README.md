@@ -17,12 +17,12 @@ The Tia FastAPI backend stays on Railway. Tia/PostgreSQL remains the source of t
 
 ## Install and start
 
-Install Docker Engine and the Docker Compose plugin on the VM, then clone the Tia repository and switch to the production branch used by the backend.
+Install Docker Engine and the Docker Compose plugin on the VM, then clone the Tia repository from the production branch:
 
 ```bash
 git clone https://github.com/GirgesAdam/Tia_AI.git
 cd Tia_AI
-git checkout feat/core-product-hardening
+git checkout main
 cd deploy/oracle-n8n
 cp .env.example .env
 ```
@@ -36,17 +36,32 @@ openssl rand -hex 32
 
 Use one for `N8N_DB_PASSWORD` and the other for `N8N_ENCRYPTION_KEY`. Never commit `.env`.
 
-Start the runtime:
+The production Tia API origin is already documented in `.env.example`:
 
-```bash
-docker compose pull
-docker compose up -d
+```text
+https://tia-api-production-54c5.up.railway.app
 ```
 
-Check it:
+Before starting, run the committed validation script. It refuses to start if required values are missing or still use example placeholders:
 
 ```bash
+./start-production.sh
+```
+
+The script validates the Compose file, pulls the pinned images, starts the stack, and prints container status.
+
+Manual equivalent:
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d
 docker compose ps
+```
+
+Check logs:
+
+```bash
 docker compose logs --tail=100 n8n
 docker compose logs --tail=100 caddy
 ```
@@ -92,6 +107,21 @@ Never put those values in Git, `.env.example`, screenshots, or chat messages.
 6. Publish inbound/status and outbox workflows.
 7. Send the first provider test only to a WhatsApp number you control.
 8. Confirm `sent`, `delivered`, and inbound reply handling before enabling patient-facing optional automations.
+
+## Production update procedure
+
+After changes are merged to `main`:
+
+```bash
+cd ~/Tia_AI
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+cd deploy/oracle-n8n
+./start-production.sh
+```
+
+This keeps the Oracle runtime aligned with the same production branch as the application source.
 
 ## Backups
 
