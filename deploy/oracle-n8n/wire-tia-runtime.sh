@@ -111,7 +111,7 @@ for filename, config in configs.items():
             "parameters": [
                 {
                     "name": config["header"],
-                    "value": "={{ $env." + config["env"] + " }}",
+                    "value": f"={{ $env.{config['env']} }}",
                 }
             ]
         }
@@ -128,16 +128,38 @@ for filename, config in configs.items():
     print(f"Prepared {filename}: {len(found)} Tia-authenticated HTTP nodes")
 PY
 
-import_one() {
-  local filename="$1"
-  docker compose cp "$tmp_dir/$filename" "n8n:/tmp/$filename" >/dev/null
-  docker compose exec -T --user node n8n \
-    n8n import:workflow --input="/tmp/$filename" --userId="$owner_id"
+workflow_exists() {
+  local workflow_id="$1"
+  local count
+  count="$(
+    docker compose exec -T n8n_db \
+      psql -U n8n -d n8n -Atc \
+      "SELECT COUNT(*) FROM workflow_entity WHERE id = '${workflow_id}';" \
+      | tr -d '\r\n'
+  )"
+  [[ "$count" == "1" ]]
 }
 
-import_one "tia_automation_scheduler.json"
-import_one "tia_whatsapp_outbox_worker.json"
-import_one "tia_whatsapp_inbound_status.json"
+import_one() {
+  local filename="$1"
+  local workflow_id="$2"
+
+  docker compose cp "$tmp_dir/$filename" "n8n:/tmp/$filename" >/dev/null
+
+  if workflow_exists "$workflow_id"; then
+    echo "Updating existing workflow: $workflow_id"
+    docker compose exec -T --user node n8n \
+      n8n import:workflow --input="/tmp/$filename"
+  else
+    echo "Creating workflow for owner: $workflow_id"
+    docker compose exec -T --user node n8n \
+      n8n import:workflow --input="/tmp/$filename" --userId="$owner_id"
+  fi
+}
+
+import_one "tia_automation_scheduler.json" "tiaAutoSched0001"
+import_one "tia_whatsapp_outbox_worker.json" "tiaWAOutbox00001"
+import_one "tia_whatsapp_inbound_status.json" "tiaWAInbound0001"
 
 docker compose restart n8n >/dev/null
 
