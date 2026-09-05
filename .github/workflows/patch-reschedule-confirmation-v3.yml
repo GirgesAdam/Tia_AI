@@ -1,0 +1,116 @@
+name: Apply final verified reschedule confirmation
+
+on:
+  push:
+    branches: [feat/core-product-hardening]
+    paths: [.github/workflows/patch-reschedule-confirmation-v3.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/core-product-hardening
+
+      - name: Apply customer-presentation patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          chat = Path('backend/app/services/agent_chat.py')
+          text = chat.read_text(encoding='utf-8')
+
+          old_import = '    format_handoff_reply,\n    format_verified_tool_fallback,'
+          new_import = '    format_handoff_reply,\n    format_reschedule_success,\n    format_verified_tool_fallback,'
+          if old_import not in text:
+              raise SystemExit('semantic_actions import marker not found')
+          text = text.replace(old_import, new_import, 1)
+
+          old_block = (
+              '    return (\n'
+              '        "تمام، الموعد اتغيّر للميعاد الجديد بنجاح.",\n'
+              '        "flow-interpreter:deterministic-reschedule",\n'
+              '    )'
+          )
+          new_block = (
+              '    appointment = result.get("appointment")\n'
+              '    reschedule_reply = (\n'
+              '        format_reschedule_success(appointment)\n'
+              '        if isinstance(appointment, dict)\n'
+              '        else "تمام، الموعد اتغيّر للميعاد الجديد بنجاح."\n'
+              '    )\n'
+              '    return (\n'
+              '        reschedule_reply,\n'
+              '        "flow-interpreter:deterministic-reschedule",\n'
+              '    )'
+          )
+          if old_block not in text:
+              raise SystemExit('deterministic reschedule return block not found')
+          chat.write_text(text.replace(old_block, new_block, 1), encoding='utf-8')
+
+          natural_test = Path('backend/tests/test_agent_natural_availability.py')
+          text = natural_test.read_text(encoding='utf-8')
+          old_assertion = 'assert "د. مريم متاح من 3 م لـ4 م، ومن 7 م لـ9 م." in reply'
+          new_assertion = 'assert "المتاح مع د. مريم من 3 م لـ4 م، ومن 7 م لـ9 م." in reply'
+          if old_assertion not in text:
+              raise SystemExit('natural availability assertion marker not found')
+          natural_test.write_text(text.replace(old_assertion, new_assertion, 1), encoding='utf-8')
+
+          presentation_test = Path('backend/tests/test_agent_customer_presentation.py')
+          presentation_test.write_text(
+              'from pathlib import Path\n\n'
+              'from app.agents.availability_presentation import format_availability_windows_reply\n'
+              'from app.agents.semantic_actions import format_reschedule_success\n\n\n'
+              'def test_availability_uses_neutral_doctor_wording() -> None:\n'
+              '    reply = format_availability_windows_reply(\n'
+              '        {\n'
+              '            "ok": True,\n'
+              '            "date": "2026-09-05",\n'
+              '            "availability_windows": [\n'
+              '                {\n'
+              '                    "doctor_name": "مريم حسن",\n'
+              '                    "start_local": "2026-09-05T15:00:00+03:00",\n'
+              '                    "end_local": "2026-09-05T18:00:00+03:00",\n'
+              '                }\n'
+              '            ],\n'
+              '        },\n'
+              '        booking_authorized=False,\n'
+              '    )\n\n'
+              '    assert reply is not None\n'
+              '    assert "المتاح مع مريم حسن من 3 م لـ6 م." in reply\n'
+              '    assert "مريم حسن متاح" not in reply\n\n\n'
+              'def test_reschedule_confirmation_uses_verified_details() -> None:\n'
+              '    reply = format_reschedule_success(\n'
+              '        {\n'
+              '            "doctor": "نور علي",\n'
+              '            "start_local": "2026-09-05T17:00:00+03:00",\n'
+              '        }\n'
+              '    )\n\n'
+              '    assert reply == "تمام، الموعد اتغيّر ليوم 05/09/2026 الساعة 5 م مع نور علي."\n\n\n'
+              'def test_structured_reschedule_uses_verified_detail_formatter() -> None:\n'
+              '    backend = Path(__file__).resolve().parent.parent\n'
+              '    source = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")\n\n'
+              '    assert "format_reschedule_success(appointment)" in source\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Validate patch without dependencies
+        run: |
+          python -m py_compile backend/app/agents/semantic_actions.py backend/app/services/agent_chat.py backend/tests/test_agent_customer_presentation.py
+          grep -q 'format_reschedule_success(appointment)' backend/app/services/agent_chat.py
+          grep -q 'المتاح مع' backend/app/agents/availability_presentation.py
+
+      - name: Remove temporary workflow and commit
+        run: |
+          rm .github/workflows/patch-reschedule-confirmation-v3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py backend/tests/test_agent_natural_availability.py backend/tests/test_agent_customer_presentation.py .github/workflows/patch-reschedule-confirmation-v3.yml
+          git diff --cached --check
+          git commit -m "fix(agent): polish verified booking confirmations"
+          git push origin HEAD:feat/core-product-hardening
