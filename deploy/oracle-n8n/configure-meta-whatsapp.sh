@@ -41,12 +41,44 @@ if [[ -z "$META_ACCESS_TOKEN" || -z "$META_APP_ID" || -z "$META_APP_SECRET" ]]; 
   exit 1
 fi
 
+# App IDs are numeric and are sometimes copied with surrounding whitespace.
+META_APP_ID="$(printf '%s' "$META_APP_ID" | tr -d '[:space:]')"
+if [[ ! "$META_APP_ID" =~ ^[0-9]+$ ]]; then
+  echo "Meta App ID must be numeric. Make sure you copied App ID, not Business ID or another identifier." >&2
+  exit 1
+fi
+
 tmp_dir="$(mktemp -d)"
 cleanup() {
   unset META_ACCESS_TOKEN META_APP_ID META_APP_SECRET
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
+
+print_meta_error() {
+  local file="$1"
+  python3 - "$file" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("Meta did not return a readable JSON error.")
+    raise SystemExit(0)
+err = payload.get("error") if isinstance(payload, dict) else None
+if not isinstance(err, dict):
+    print("Meta returned an error without structured details.")
+    raise SystemExit(0)
+message = str(err.get("message") or "Unknown Meta error")
+code = err.get("code")
+type_ = err.get("type")
+print(f"Meta error: {message}")
+if type_ is not None:
+    print(f"Meta error type: {type_}")
+if code is not None:
+    print(f"Meta error code: {code}")
+PY
+}
 
 # Validate the WhatsApp API token against the configured WABA without printing secrets.
 status="$(
@@ -57,6 +89,7 @@ status="$(
 )"
 if [[ ! "$status" =~ ^2 ]]; then
   echo "Meta API token validation failed for the configured WhatsApp Business Account (HTTP $status)." >&2
+  print_meta_error "$tmp_dir/waba-check.json" >&2
   exit 1
 fi
 
@@ -71,6 +104,8 @@ status="$(
 )"
 if [[ ! "$status" =~ ^2 ]]; then
   echo "Meta App ID / App Secret validation failed (HTTP $status)." >&2
+  print_meta_error "$tmp_dir/app-check.json" >&2
+  echo "Open Meta for Developers -> My Apps -> select the WhatsApp app -> App settings -> Basic, then copy App ID and App Secret from that same app." >&2
   exit 1
 fi
 
