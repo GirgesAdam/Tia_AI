@@ -30,6 +30,7 @@ from app.agents.semantic_actions import (
     booking_tool_args,
     format_booking_success,
     format_handoff_reply,
+    format_reschedule_success,
     format_verified_tool_fallback,
     reschedule_tool_args,
     select_slot_from_structured_selection,
@@ -1870,8 +1871,14 @@ def _structured_flow_write(
         run_id=run_id,
         result={"tool": tool_name, "output": result},
     )
+    appointment = result.get("appointment")
+    reschedule_reply = (
+        format_reschedule_success(appointment)
+        if isinstance(appointment, dict)
+        else "تمام، الموعد اتغيّر للميعاد الجديد بنجاح."
+    )
     return (
-        "تمام، الموعد اتغيّر للميعاد الجديد بنجاح.",
+        reschedule_reply,
         "flow-interpreter:deterministic-reschedule",
     )
 

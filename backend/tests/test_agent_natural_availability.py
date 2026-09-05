@@ -97,7 +97,7 @@ def test_customer_reply_uses_ranges_not_quarter_hour_grid_or_branch() -> None:
     reply = format_availability_windows_reply(payload, booking_authorized=True)
 
     assert reply is not None
-    assert "د. مريم متاح من 3 م لـ4 م، ومن 7 م لـ9 م." in reply
+    assert "المتاح مع د. مريم من 3 م لـ4 م، ومن 7 م لـ9 م." in reply
     assert "15:15" not in reply
     assert "15:30" not in reply
     assert "Internal Main Branch" not in reply
