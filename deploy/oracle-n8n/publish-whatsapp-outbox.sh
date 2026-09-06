@@ -3,8 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# Keep result recording deterministic before publishing. This preserves the
+# already-configured Meta credentials by repairing the exported live workflow.
+bash ./repair-whatsapp-outbox-results.sh
+
 # Controlled rollout: inbound has already passed an end-to-end test.
-# Publish the WhatsApp outbox worker so the queued controlled reply can be sent.
 docker compose exec -T --user node n8n n8n publish:workflow --id=tiaWAOutbox00001
 
 # Ensure scheduler and inbound remain published.
