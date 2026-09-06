@@ -91,7 +91,7 @@ def test_rejecting_presented_date_advances_next_availability_search() -> None:
         "not_before_time": "17:00",
     }
     turn = _turn(
-        hints=_hints(not_before_time="17:00"),
+        hints=_hints(requested_date="2026-09-08", not_before_time="17:00"),
         clear_entity_fields=["requested_date"],
     )
 
