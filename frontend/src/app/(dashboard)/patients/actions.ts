@@ -28,23 +28,25 @@ export async function addPatientNote(formData: FormData) {
 export async function createPatientTask(formData: FormData) {
   const patientId = String(formData.get("patient_id") || "");
   const title = String(formData.get("title") || "").trim();
-  const dueAtLocal = String(formData.get("due_at") || "");
+  const dueAt = String(formData.get("due_at") || "");
   const assignedUserId = String(formData.get("assigned_user_id") || "");
   const executionMode = String(formData.get("execution_mode") || "ai") === "human" ? "human" : "ai";
   const conversationId = String(formData.get("conversation_id") || "");
   const description = String(formData.get("description") || "").trim();
-  if (!patientId || !title || !dueAtLocal) return;
+  if (!patientId || !title || !dueAt) return;
 
-  await tiaRequest("/crm/followups", {
+  await tiaRequest("/crm/tasks", {
     method: "POST",
     body: JSON.stringify({
       patient_id: patientId,
       conversation_id: conversationId || null,
       assigned_user_id: executionMode === "human" ? (assignedUserId || null) : null,
+      task_type: "follow_up",
       execution_mode: executionMode,
+      priority: "normal",
       title,
       description: description || null,
-      due_at_local: dueAtLocal,
+      due_at: dueAt,
     }),
   });
   revalidatePatient(patientId);
