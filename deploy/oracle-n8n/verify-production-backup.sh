@@ -92,7 +92,7 @@ docker exec -i "$VERIFY_CONTAINER" \
 
 WORKFLOW_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc 'SELECT count(*) FROM workflow_entity;')"
 CREDENTIAL_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc 'SELECT count(*) FROM credentials_entity;')"
-ACTIVE_TIA_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc \"SELECT count(*) FROM workflow_entity WHERE id IN ('tiaAutoSched0001','tiaWAInbound0001','tiaWAOutbox00001') AND active = true;\")"
+ACTIVE_TIA_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc "SELECT count(*) FROM workflow_entity WHERE id IN ('tiaAutoSched0001','tiaWAInbound0001','tiaWAOutbox00001') AND active = true;")"
 
 if [[ "$WORKFLOW_COUNT" -lt 3 ]]; then
   echo "Restored backup has too few workflows: $WORKFLOW_COUNT" >&2
