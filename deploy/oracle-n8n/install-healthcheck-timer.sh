@@ -7,8 +7,6 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_USER="${SUDO_USER:-ubuntu}"
-RUN_GROUP="$(id -gn "$RUN_USER")"
 
 SERVICE_PATH="/etc/systemd/system/tia-n8n-healthcheck.service"
 TIMER_PATH="/etc/systemd/system/tia-n8n-healthcheck.timer"
@@ -21,8 +19,6 @@ After=docker.service network-online.target
 
 [Service]
 Type=oneshot
-User=$RUN_USER
-Group=$RUN_GROUP
 WorkingDirectory=$DEPLOY_DIR
 ExecStart=/usr/bin/bash $DEPLOY_DIR/healthcheck-production.sh
 TimeoutStartSec=120
@@ -44,6 +40,7 @@ EOF
 
 chmod 644 "$SERVICE_PATH" "$TIMER_PATH"
 systemctl daemon-reload
+systemctl reset-failed tia-n8n-healthcheck.service 2>/dev/null || true
 systemctl enable --now tia-n8n-healthcheck.timer
 
 # Run once now so installation also verifies the current production state.
