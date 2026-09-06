@@ -48,6 +48,20 @@ if [[ "$ACTIVE_TIA_COUNT" -ne 3 ]]; then
   exit 1
 fi
 
+# Guard against disk exhaustion. 80% is a warning; 90% makes the health check fail
+# so the issue is visible in systemd/journal before PostgreSQL or Docker run out of space.
+DISK_USED_PERCENT="$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')"
+if [[ ! "$DISK_USED_PERCENT" =~ ^[0-9]+$ ]]; then
+  echo "Could not determine root disk usage." >&2
+  exit 1
+fi
+if (( DISK_USED_PERCENT >= 90 )); then
+  echo "Root disk usage is critically high: ${DISK_USED_PERCENT}%" >&2
+  exit 1
+elif (( DISK_USED_PERCENT >= 80 )); then
+  echo "WARNING: root disk usage is ${DISK_USED_PERCENT}%"
+fi
+
 # Check the public n8n endpoint. If containers are running but the endpoint is
 # unavailable, restart only n8n + Caddy once, then retry. This does not touch DB data.
 if ! curl -fsS --max-time 15 "https://$N8N_HOST_VALUE/" >/dev/null; then
@@ -71,4 +85,5 @@ echo "PostgreSQL: ready"
 echo "n8n: running"
 echo "Caddy: running"
 echo "Active Tia workflows: $ACTIVE_TIA_COUNT/3"
+echo "Disk used: ${DISK_USED_PERCENT}%"
 echo "HTTPS: https://$N8N_HOST_VALUE/ OK"
