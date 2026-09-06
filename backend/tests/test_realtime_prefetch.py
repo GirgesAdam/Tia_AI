@@ -1,3 +1,4 @@
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -99,6 +100,52 @@ def test_booking_prefetch_uses_high_level_read_and_never_executes_write(monkeypa
         )
     ]
     assert all(tool_name != "book_appointment" for tool_name, _ in calls)
+
+
+
+def test_next_availability_prefetch_starts_after_rejected_date(monkeypatch) -> None:
+    decision = _decision(
+        capabilities=["availability_discovery"],
+        service_query="ليزر إزالة الشعر",
+        not_before_time="17:00",
+    )
+    policy = resolve_capability_policy(decision)
+    calls: list[tuple[str, dict]] = []
+
+    def fake_invoke_authorized_tool(*, tool_context, policy, tool_name, arguments):
+        calls.append((tool_name, arguments))
+        return {
+            "ok": True,
+            "date": arguments["booking_date"],
+            "slots": [{"start_time_24h": "20:00"}],
+        }
+
+    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke_authorized_tool)
+    monkeypatch.setattr(
+        agent_chat,
+        "_workspace_clock",
+        lambda workspace: ("Africa/Cairo", datetime(2026, 9, 6, 12, 0)),
+    )
+
+    flow = SimpleNamespace(
+        entity_state={
+            "service_id": str(uuid4()),
+            "availability_search_after_date": "2026-09-08",
+        }
+    )
+    agent_chat._prefetch_read_tools(
+        tool_context=SimpleNamespace(
+            run_id=uuid4(),
+            workspace=SimpleNamespace(id=uuid4()),
+        ),
+        policy=policy,
+        decision=decision,
+        flow=flow,
+        grounded_mode=True,
+    )
+
+    assert calls
+    assert calls[0][1]["booking_date"] == "2026-09-09"
 
 
 def test_successful_booking_prefetch_covers_lower_level_booking_reads(monkeypatch) -> None:
