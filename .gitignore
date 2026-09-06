@@ -35,6 +35,7 @@ logs/
 .tmp/
 tmp/
 .runtime-secrets/
+deploy/oracle-n8n/backups/
 
 *.db
 *.sqlite
