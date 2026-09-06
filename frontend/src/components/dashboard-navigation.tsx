@@ -35,7 +35,7 @@ const primaryItems = [
 
 const adminItems = [
   { href: "/setup", label: "إعدادات العيادة", icon: Settings2 },
-  { href: "/automations", label: "الأتمتة", icon: Workflow },
+  { href: "/automations", label: "Automation", icon: Workflow },
   { href: "/channels", label: "قنوات التواصل", icon: MessageCircleMore },
   { href: "/team", label: "الفريق", icon: UsersRound },
   { href: "/activity", label: "سجل النشاط", icon: History },
