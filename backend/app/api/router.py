@@ -11,6 +11,7 @@ from app.api.routes.channels import router as channels_router
 from app.api.routes.clinic import router as clinic_router
 from app.api.routes.clinic_setup_v2 import router as clinic_setup_v2_router
 from app.api.routes.crm import router as crm_router
+from app.api.routes.crm_task_executor import router as crm_task_executor_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.health import router as health_router
@@ -32,6 +33,7 @@ api_router.include_router(channels_router, prefix="/channels", tags=["channels"]
 api_router.include_router(clinic_router, prefix="/clinic", tags=["clinic"])
 api_router.include_router(clinic_setup_v2_router, prefix="/clinic", tags=["clinic-setup"])
 api_router.include_router(crm_router, prefix="/crm", tags=["crm"])
+api_router.include_router(crm_task_executor_router, prefix="/crm", tags=["crm"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 api_router.include_router(inbox_router, prefix="/inbox", tags=["inbox"])
