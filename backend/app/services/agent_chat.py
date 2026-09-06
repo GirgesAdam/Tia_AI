@@ -399,6 +399,15 @@ def _merge_flow_entity_state(
     clear_fields = set(turn.clear_entity_fields)
     for field_name in clear_fields:
         merged.pop(field_name, None)
+    if "requested_date" in clear_fields:
+        # A presented availability date is stored separately from the customer's
+        # requested date. When the customer rejects that offer, remove the
+        # presented date and remember it as the boundary for the next search.
+        # The boundary is operational state; no customer wording is inspected here.
+        previous_date = existing_state.get("date") or existing_state.get("requested_date")
+        if isinstance(previous_date, str) and previous_date.strip():
+            merged["availability_search_after_date"] = previous_date.strip()
+        merged.pop("date", None)
     time_fields = {"requested_start_time", "not_before_time", "not_after_time"}
     hints = turn.entity_hints.model_dump(mode="json")
     time_changed = bool(clear_fields.intersection(time_fields)) or any(
@@ -423,6 +432,8 @@ def _merge_flow_entity_state(
         "doctor_candidate_ids",
     }
     for field_name, value in hints.items():
+        if field_name in clear_fields:
+            continue
         if value is None:
             continue
         # Empty candidate lists are schema defaults, not semantic instructions.
@@ -847,6 +858,7 @@ def _prefetch_read_tools(
     branch_id = text_value("branch_id")
     doctor_id = text_value("doctor_id")
     requested_date = text_value("requested_date") or text_value("date")
+    availability_search_after_date = text_value("availability_search_after_date")
     requested_start_time = text_value("requested_start_time")
     not_before_time = text_value("not_before_time")
     not_after_time = text_value("not_after_time")
@@ -1025,6 +1037,16 @@ def _prefetch_read_tools(
         _timezone_name, local_now = _workspace_clock(tool_context.workspace)
         horizon_days = max(1, int(getattr(settings, "booking_horizon_days", 60)))
         first_date = local_now.date()
+        if availability_search_after_date:
+            try:
+                boundary = datetime.fromisoformat(availability_search_after_date).date()
+                first_date = max(first_date, boundary + timedelta(days=1))
+            except ValueError:
+                logger.warning(
+                    "Tia turn run_id=%s ignored invalid availability search boundary=%s",
+                    tool_context.run_id,
+                    availability_search_after_date,
+                )
         last_checked = first_date
         selected_result: dict | None = None
         for offset in range(horizon_days + 1):
@@ -1367,6 +1389,11 @@ def _sync_flow_from_verified_prefetch(
     for key in ("service", "branch", "current_appointment", "date", "requested_time_window"):
         if key in output:
             entity_state[key] = output[key]
+    search_metadata = output.get("next_available_search")
+    if isinstance(search_metadata, dict):
+        search_boundary = search_metadata.get("matched_date") or search_metadata.get("through_date")
+        if isinstance(search_boundary, str) and search_boundary.strip():
+            entity_state["availability_search_after_date"] = search_boundary.strip()
     package_payload = prefetched_results.get("customer_packages")
     if isinstance(package_payload, dict):
         usable_packages = package_payload.get("usable_packages")
