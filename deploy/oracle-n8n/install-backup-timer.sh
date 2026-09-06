@@ -7,8 +7,6 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_USER="${SUDO_USER:-ubuntu}"
-RUN_GROUP="$(id -gn "$RUN_USER")"
 
 SERVICE_PATH="/etc/systemd/system/tia-n8n-backup.service"
 TIMER_PATH="/etc/systemd/system/tia-n8n-backup.timer"
@@ -21,13 +19,12 @@ After=docker.service network-online.target
 
 [Service]
 Type=oneshot
-User=$RUN_USER
-Group=$RUN_GROUP
 WorkingDirectory=$DEPLOY_DIR
 ExecStart=/usr/bin/bash $DEPLOY_DIR/backup-production.sh
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+UMask=0077
 EOF
 
 cat > "$TIMER_PATH" <<'EOF'
@@ -46,6 +43,7 @@ EOF
 
 chmod 644 "$SERVICE_PATH" "$TIMER_PATH"
 systemctl daemon-reload
+systemctl reset-failed tia-n8n-backup.service 2>/dev/null || true
 systemctl enable --now tia-n8n-backup.timer
 
 echo
