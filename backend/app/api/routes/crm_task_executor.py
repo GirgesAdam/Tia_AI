@@ -3,20 +3,37 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
 from app.models.automation_job import AutomationJob
 from app.models.crm_task import CRMTask
 from app.services.activity import record_activity_event
-from app.services.crm_tasks import validate_assignee
+from app.services.crm_tasks import create_crm_task, validate_assignee
 
 router = APIRouter()
+
+
+class CRMFollowUpCreate(BaseModel):
+    patient_id: UUID
+    conversation_id: UUID | None = None
+    assigned_user_id: UUID | None = None
+    execution_mode: Literal["ai", "human"] = "ai"
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    due_at_local: str = Field(min_length=1, max_length=64)
+
+
+class CRMFollowUpCreated(BaseModel):
+    task_id: UUID
+    due_at: datetime
+    execution_mode: Literal["ai", "human"]
 
 
 class CRMTaskExecutorUpdate(BaseModel):
@@ -28,6 +45,32 @@ class CRMTaskExecutorRead(BaseModel):
     task_id: UUID
     execution_mode: Literal["ai", "human"]
     assigned_user_id: UUID | None
+
+
+def _workspace_timezone(access: WorkspaceAccess) -> ZoneInfo:
+    try:
+        return ZoneInfo((access.workspace.timezone or "Africa/Cairo").strip())
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("Africa/Cairo")
+
+
+def _parse_local_due_at(value: str, access: WorkspaceAccess) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid follow-up date/time.",
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        parsed = parsed.replace(tzinfo=_workspace_timezone(access))
+    due_at = parsed.astimezone(UTC)
+    if due_at <= datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Follow-up time must be in the future.",
+        )
+    return due_at
 
 
 def _follow_up_job(db: Session, *, workspace_id: UUID, task_id: UUID) -> AutomationJob | None:
@@ -83,6 +126,42 @@ def _queue_ai_job(db: Session, *, task: CRMTask, job: AutomationJob | None) -> N
             payload_json={"crm_task_id": str(task.id)},
             result_json={},
         )
+    )
+
+
+@router.post("/followups", response_model=CRMFollowUpCreated, status_code=status.HTTP_201_CREATED)
+def create_follow_up(
+    payload: CRMFollowUpCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CRMFollowUpCreated:
+    due_at = _parse_local_due_at(payload.due_at_local, access)
+    assigned_user_id = payload.assigned_user_id if payload.execution_mode == "human" else None
+    try:
+        task = create_crm_task(
+            db,
+            workspace_id=access.workspace.id,
+            patient_id=payload.patient_id,
+            conversation_id=payload.conversation_id,
+            assigned_user_id=assigned_user_id,
+            created_by_user_id=access.user.id,
+            task_type="follow_up",
+            execution_mode=payload.execution_mode,
+            priority="normal",
+            title=payload.title,
+            description=payload.description,
+            due_at=due_at,
+            source="manual",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return CRMFollowUpCreated(
+        task_id=task.id,
+        due_at=task.due_at,
+        execution_mode=task.execution_mode,
     )
 
 
