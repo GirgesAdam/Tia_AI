@@ -23,7 +23,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
       <form className="mb-4 flex max-w-xl gap-2">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-3.5 text-slate-400" size={16} />
-          <Input name="q" defaultValue={q} placeholder="ابحث بالاسم أو رقم الهاتف أو البريد" className="pr-9" />
+          <Input name="q" defaultValue={q} placeholder="ابحث بالاسم أو رقم الهاتف" className="pr-9" />
         </div>
         <Button type="submit" className="px-5">بحث</Button>
       </form>

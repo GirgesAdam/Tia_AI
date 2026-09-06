@@ -34,7 +34,7 @@ export default async function DashboardPage() {
           <CircleAlert className="mt-0.5 shrink-0 text-amber-700" size={19} />
           <div>
             <div className="text-sm font-black">فيه {summary.failed_automation_jobs} عملية تلقائية محتاجة مراجعة</div>
-            <div className="mt-1 text-xs leading-5 text-amber-800">افتح صفحة الأتمتة لإعادة المحاولة أو مراجعة الحالة.</div>
+            <div className="mt-1 text-xs leading-5 text-amber-800">افتح صفحة Automation لإعادة المحاولة أو مراجعة الحالة.</div>
           </div>
         </Link>
       )}
@@ -91,7 +91,7 @@ export default async function DashboardPage() {
                     <div className="min-w-0">
                       <div className="truncate font-bold text-slate-900">{appointment.patient_name}</div>
                       <div className="mt-1 truncate text-xs text-[var(--muted)]">
-                        {appointment.service_name} · {appointment.branch_name} · {appointment.doctor_name}
+                        {appointment.service_name} · {appointment.doctor_name}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">

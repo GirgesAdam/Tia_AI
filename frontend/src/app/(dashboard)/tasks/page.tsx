@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
 import { Select } from "@/components/ui/select";
 import { formatDateTime } from "@/lib/format";
-import { labelForPriority, labelForStatus, toneForStatus } from "@/lib/status";
+import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import type { CRMTask, WorkspaceMember } from "@/lib/types";
@@ -26,7 +26,6 @@ function hrefFor(current: TaskSearchParams, key: keyof TaskSearchParams, value: 
   const query = params.toString();
   return query ? `/tasks?${query}` : "/tasks";
 }
-
 
 export default async function TasksPage({ searchParams }: { searchParams: Promise<TaskSearchParams> }) {
   const raw = await searchParams;
@@ -52,7 +51,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="المتابعات"
-        description="المهام التي يحتاج الفريق أو Tia تنفيذها لمتابعة العملاء، مرتبة حسب الموعد والحالة."
+        description="حدد موعد المتابعة ومن المسؤول عنها: Tia ترسلها تلقائيًا، أو موظف من الفريق يتولاها يدويًا."
       />
 
       <div className="surface-toolbar mb-4">
@@ -84,20 +83,24 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
               {tasks.map((task) => {
                 const canManage = task.execution_mode === "human" && (ctx.workspace.role === "admin" || task.assigned_user_id === ctx.me.user.id);
                 const active = task.status === "pending" || task.status === "in_progress";
-                const assignee = task.execution_mode === "ai" ? "Tia" : task.assigned_user_name || task.assigned_user_email;
+                const assignee = task.execution_mode === "ai" ? "Tia" : task.assigned_user_name || task.assigned_user_email || "غير مسندة";
+                const executorValue = task.execution_mode === "ai"
+                  ? "tia"
+                  : task.assigned_user_id
+                    ? `staff:${task.assigned_user_id}`
+                    : "unassigned";
+
                 return (
                   <div key={task.id} className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[1.4fr_.8fr_auto] lg:items-center">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <ListTodo size={16} className="text-teal-700" />
                         <b className="text-slate-900">{task.title}</b>
-                        <Badge tone={toneForStatus(task.priority)}>{labelForPriority(task.priority)}</Badge>
                         <Badge tone={toneForStatus(task.status)}>{labelForStatus(task.status)}</Badge>
                         {task.is_overdue && (
                           <Badge tone="red"><CircleAlert size={11} className="ml-1" />متأخرة</Badge>
                         )}
-                        {task.execution_mode === "ai" && <Badge tone="purple">تنفذها Tia</Badge>}
-                        {task.source === "ai" && task.execution_mode !== "ai" && <Badge tone="purple">أنشأتها Tia</Badge>}
+                        {task.execution_mode === "ai" && <Badge tone="purple">Tia سترسلها تلقائيًا</Badge>}
                       </div>
                       {task.description && <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{task.description}</p>}
                       <div className="mt-2 flex flex-wrap gap-3 text-xs text-[var(--muted)]">
@@ -115,16 +118,16 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                         <Clock3 size={14} /> {formatDateTime(task.due_at)}
                       </div>
                       <div className="flex items-center gap-2 text-[var(--muted)]">
-                        <UserRound size={14} /> {assignee || "غير مسندة"}
+                        <UserRound size={14} /> {assignee}
                       </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
-                      {active && !task.assigned_user_id && (
+                      {active && !task.assigned_user_id && task.execution_mode === "human" && (
                         <form action={claimTask}>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
-                          <Button size="sm" variant="outline">{task.execution_mode === "ai" ? "استلام من Tia" : "استلام"}</Button>
+                          <Button size="sm" variant="outline">استلام</Button>
                         </form>
                       )}
                       {canManage && task.status === "pending" && (
@@ -155,13 +158,14 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                         <form action={assignTask} className="flex gap-1">
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
-                          <Select name="assigned_user_id" defaultValue={task.assigned_user_id || ""} className="h-8 max-w-40 rounded-lg px-2 text-xs">
-                            <option value="">غير مسندة</option>
+                          <Select name="executor" defaultValue={executorValue} className="h-8 max-w-48 rounded-lg px-2 text-xs">
+                            {task.status === "pending" && <option value="tia">Tia</option>}
+                            <option value="unassigned">غير مسندة</option>
                             {members.filter((member) => member.is_active).map((member) => (
-                              <option key={member.user_id} value={member.user_id}>{member.full_name || member.email}</option>
+                              <option key={member.user_id} value={`staff:${member.user_id}`}>{member.full_name || member.email}</option>
                             ))}
                           </Select>
-                          <Button size="sm" variant="outline">إسناد</Button>
+                          <Button size="sm" variant="outline">حفظ الإسناد</Button>
                         </form>
                       )}
                     </div>

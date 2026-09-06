@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { tiaRequest } from "@/lib/tia/api";
 import type { AnalyticsCatalog, AnalyticsSavedView, CRMCohort } from "@/lib/types";
 import { AnalyticsCatalogPanel } from "./catalog";
+import { AnalyticsOverviewPanel } from "./overview";
 
 export default async function AnalyticsPage() {
   const [cohorts, catalog, savedViews] = await Promise.all([
@@ -18,11 +19,19 @@ export default async function AnalyticsPage() {
     <>
       <PageHeader
         title="التقارير والتحليلات"
-        description="اختر التقرير الذي تحتاجه وحدد الفترة أو الفئة، وستظهر النتيجة في رسم أو جدول واضح قابل للحفظ والتصدير."
+        description="ملخص أداء العيادة أولًا، وبعده التقارير التفصيلية التي تقدر تشغلها وتحفظها وقت ما تحتاج."
         action={<Link href="/analytics/campaigns" className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-bold"><Megaphone size={16}/>أداء الحملات</Link>}
       />
 
-      <AnalyticsCatalogPanel catalog={catalog} savedViews={savedViews} />
+      <AnalyticsOverviewPanel />
+
+      <section>
+        <div className="mb-3">
+          <h2 className="text-lg font-black text-slate-950">التقارير التفصيلية</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">اختر التقرير والفترة أو الفئة المطلوبة، وستظهر النتيجة من الحسابات الموثوقة داخل Tia.</p>
+        </div>
+        <AnalyticsCatalogPanel catalog={catalog} savedViews={savedViews} />
+      </section>
 
       <Card className="mb-5">
         <CardHeader className="flex-row items-center justify-between gap-3">

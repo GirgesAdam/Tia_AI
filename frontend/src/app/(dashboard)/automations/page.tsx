@@ -67,8 +67,8 @@ function timingLabel(rule: AutomationRule): string {
 }
 
 function automationWarning(state: AutomationOperationsOverview["worker_state"]) {
-  if (state === "stale") return "محرك تنفيذ الأتمتة غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
-  if (state === "missing") return "لم يتم ربط محرك تنفيذ الأتمتة بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
+  if (state === "stale") return "محرك تنفيذ Automation غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
+  if (state === "missing") return "لم يتم ربط محرك تنفيذ Automation بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
   return null;
 }
 
@@ -87,7 +87,7 @@ export default async function AutomationsPage() {
   return (
     <>
       <PageHeader
-        title="الأتمتة"
+        title="Automation"
         description="فعّل فقط المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
       />
 

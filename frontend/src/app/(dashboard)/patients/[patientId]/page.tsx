@@ -11,7 +11,6 @@ import {
   CircleDollarSign,
   ListTodo,
   MessageSquareMore,
-  Pin,
   StickyNote,
   Tag,
 } from "lucide-react";
@@ -23,10 +22,9 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
-import { appointmentLabels, labelForChannel, labelForPriority, labelForSource, labelForStatus, toneForStatus } from "@/lib/status";
+import { formatDateTime, formatMoney } from "@/lib/format";
+import { appointmentLabels, labelForChannel, labelForSource, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import { getAppContext } from "@/lib/tia/workspace";
 import type { PatientProfile, PatientTimelineEvent } from "@/lib/types";
 
 const noteLabels: Record<string, string> = {
@@ -82,7 +80,7 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
     title = `حجز ${appointment.service_name}`;
     body = (
       <div className="space-y-1 text-sm text-[var(--muted)]">
-        <div>{formatDateTime(appointment.start_at)} · {appointment.branch_name} · {appointment.doctor_name}</div>
+        <div>{formatDateTime(appointment.start_at)} · {appointment.doctor_name}</div>
         <div>{formatMoney(appointment.price_minor, appointment.currency)}</div>
       </div>
     );
@@ -115,9 +113,8 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
       <div className="space-y-2 text-sm">
         <div className="text-[var(--muted)]">موعد المتابعة: {formatDateTime(task.due_at)}</div>
         <div className="flex flex-wrap gap-2">
-          <Badge tone={toneForStatus(task.priority)}>{labelForPriority(task.priority)}</Badge>
           <Badge tone={toneForStatus(task.status)}>{labelForStatus(task.status)}</Badge>
-          <Link href={`/tasks?scope=all`} className="self-center text-xs font-bold text-teal-700">فتح المتابعات</Link>
+          <Link href="/tasks?scope=all" className="self-center text-xs font-bold text-teal-700">فتح المتابعات</Link>
         </div>
       </div>
     );
@@ -126,10 +123,7 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
     body = (
       <div className="space-y-2 text-sm">
         <p className="leading-6">{handoff.reason}</p>
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={toneForStatus(handoff.priority)}>{labelForPriority(handoff.priority)}</Badge>
-          <Link href={`/inbox/${handoff.conversation_id}`} className="self-center text-xs font-bold text-teal-700">فتح المحادثة</Link>
-        </div>
+        <Link href={`/inbox/${handoff.conversation_id}`} className="text-xs font-bold text-teal-700">فتح المحادثة</Link>
       </div>
     );
   } else if (payment) {
@@ -147,7 +141,6 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <div className="font-bold">{title}</div>
-            {note?.is_pinned && <Pin size={13} className="text-amber-600" />}
             {appointment && <Badge tone={toneForStatus(appointment.to_status || appointment.status)}>{appointmentLabels[appointment.to_status || appointment.status] || appointment.to_status || appointment.status}</Badge>}
           </div>
           <div className="text-xs text-[var(--muted)]">{formatDateTime(event.occurred_at)}</div>
@@ -162,20 +155,9 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
   );
 }
 
-function languageLabel(value: string | null | undefined) {
-  if (!value) return "غير محددة";
-  const normalized = value.toLowerCase();
-  if (normalized.startsWith("ar")) return "العربية";
-  if (normalized.startsWith("en")) return "الإنجليزية";
-  return "لغة أخرى";
-}
-
 export default async function PatientProfilePage({ params }: { params: Promise<{ patientId: string }> }) {
   const { patientId } = await params;
-  const [profile, ctx] = await Promise.all([
-    tiaRequest<PatientProfile>(`/crm/patients/${patientId}/profile?timeline_limit=75`),
-    getAppContext(),
-  ]);
+  const profile = await tiaRequest<PatientProfile>(`/crm/patients/${patientId}/profile?timeline_limit=75`);
   const { patient, stats } = profile;
   const patientName = `${patient.first_name} ${patient.last_name || ""}`.trim();
 
@@ -235,8 +217,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
             <CardHeader><CardTitle>بيانات العميل</CardTitle></CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">رقم الهاتف</span><b className="text-left" dir="ltr">{patient.phone || "—"}</b></div>
-              <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">اللغة المفضلة</span><b>{languageLabel(patient.preferred_language)}</b></div>
-              <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">تاريخ الميلاد</span><b>{formatDate(patient.birth_date)}</b></div>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">مصدر العميل</span><b>{labelForSource(patient.source)}</b></div>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">آخر تواصل</span><b className="text-left">{formatDateTime(patient.last_contact_at)}</b></div>
             </CardContent>
@@ -245,28 +225,34 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
           <Card>
             <CardHeader>
               <CardTitle>إجراءات سريعة</CardTitle>
-              <p className="text-xs leading-5 text-[var(--muted)]">أضف متابعة أو ملاحظة عند الحاجة بدون ازدحام الصفحة بنماذج مفتوحة.</p>
+              <p className="text-xs leading-5 text-[var(--muted)]">أضف متابعة أو ملاحظة من ملف العميل مباشرة.</p>
             </CardHeader>
             <CardContent className="space-y-3">
               <details className="rounded-xl border border-[var(--border)] p-3">
                 <summary className="cursor-pointer text-sm font-bold text-slate-800">جدولة متابعة</summary>
                 <form action={createPatientTask} className="mt-4 space-y-3">
                   <input type="hidden" name="patient_id" value={patient.id} />
-                  <input type="hidden" name="assigned_user_id" value={ctx.me.user.id} />
                   <input type="hidden" name="conversation_id" value={profile.latest_conversation_id || ""} />
-                  <Input name="title" required maxLength={200} placeholder="مثال: التواصل بعد الاستشارة" />
-                  <Input name="due_at" type="datetime-local" required />
-                  <select name="execution_mode" defaultValue="ai" className="form-control h-10 min-h-10">
-                    <option value="ai">Tia ترسل المتابعة تلقائيًا</option>
-                    <option value="human">متابعة يدوية للفريق</option>
-                  </select>
-                  <select name="priority" defaultValue="normal" className="form-control h-10 min-h-10">
-                    <option value="low">أولوية منخفضة</option>
-                    <option value="normal">أولوية عادية</option>
-                    <option value="high">أولوية مرتفعة</option>
-                    <option value="urgent">أولوية عاجلة</option>
-                  </select>
-                  <Textarea name="description" maxLength={5000} placeholder="تفاصيل تساعد على تنفيذ المتابعة بشكل مناسب..." />
+                  <label className="block text-xs font-bold text-slate-700">
+                    سبب المتابعة
+                    <Input name="title" required maxLength={200} placeholder="مثال: متابعة نتيجة الاستشارة" className="mt-1" />
+                  </label>
+                  <label className="block text-xs font-bold text-slate-700">
+                    موعد المتابعة
+                    <Input name="due_at" type="datetime-local" required className="mt-1" />
+                  </label>
+                  <label className="block text-xs font-bold text-slate-700">
+                    المسؤول عن المتابعة
+                    <select name="execution_mode" defaultValue="ai" className="form-control mt-1 h-10 min-h-10">
+                      <option value="ai">Tia — ترسل المتابعة تلقائيًا في الموعد</option>
+                      <option value="human">الفريق — متابعة يدوية</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs font-bold text-slate-700">
+                    ماذا تريد أن تقول Tia للعميل؟
+                    <Textarea name="description" maxLength={5000} className="mt-1" placeholder="مثال: اسأليه إذا كان مناسب له نثبت ميعاد الجلسة القادمة، ولو محتاج يغير الموعد ساعديه." />
+                    <span className="mt-1 block font-normal leading-5 text-[var(--muted)]">Tia تستخدم التعليمات دي مع سياق المحادثة وتصيغ الرسالة بشكل طبيعي وقت الإرسال.</span>
+                  </label>
                   <Button className="w-full"><ListTodo size={15} /> حفظ المتابعة</Button>
                 </form>
               </details>
@@ -282,10 +268,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                     <option value="follow_up">متابعة</option>
                   </select>
                   <Textarea name="content" required placeholder="اكتب المعلومة المهمة للفريق..." />
-                  <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                    <input type="checkbox" name="is_pinned" />
-                    تثبيت الملاحظة ضمن الملاحظات المهمة
-                  </label>
                   <Button variant="secondary" className="w-full"><StickyNote size={15} /> حفظ الملاحظة</Button>
                 </form>
               </details>
@@ -293,13 +275,13 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>الملاحظات المهمة</CardTitle></CardHeader>
+            <CardHeader><CardTitle>ملاحظات العميل</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               {profile.notes.length ? profile.notes.slice(0, 5).map((note) => (
                 <div key={note.id} className="rounded-xl border border-[var(--border)] p-3">
                   <div className="flex items-center justify-between gap-2">
                     <Badge>{noteLabels[note.note_type] || "ملاحظة"}</Badge>
-                    <div className="flex items-center gap-1 text-[11px] text-[var(--muted)]">{note.is_pinned && <Pin size={11} />} {formatDateTime(note.created_at)}</div>
+                    <div className="text-[11px] text-[var(--muted)]">{formatDateTime(note.created_at)}</div>
                   </div>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{note.content}</p>
                 </div>

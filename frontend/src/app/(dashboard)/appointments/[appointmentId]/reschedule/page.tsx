@@ -56,7 +56,7 @@ export default async function RescheduleAppointmentPage({
             <Button type="submit" size="sm" className="mt-3 w-full">اختيار الموعد</Button>
           </form>)}
         </div>
-        {!availability.slots.length && <div className="mt-6 rounded-xl bg-[var(--surface-2)] p-8 text-center text-sm text-[var(--muted)]">مفيش مواعيد متاحة مع نفس الدكتور والفرع في اليوم ده.</div>}
+        {!availability.slots.length && <div className="mt-6 rounded-xl bg-[var(--surface-2)] p-8 text-center text-sm text-[var(--muted)]">مفيش مواعيد متاحة مع نفس الدكتور في اليوم ده.</div>}
       </CardContent>
     </Card>
   </>;

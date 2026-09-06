@@ -31,11 +31,18 @@ export async function setTaskStatus(formData: FormData) {
 export async function assignTask(formData: FormData) {
   const taskId = String(formData.get("task_id") || "");
   const patientId = String(formData.get("patient_id") || "");
-  const rawUserId = String(formData.get("assigned_user_id") || "");
+  const executor = String(formData.get("executor") || "unassigned");
   if (!taskId) return;
-  await tiaRequest(`/crm/tasks/${taskId}`, {
+
+  const body = executor === "tia"
+    ? { executor: "tia" }
+    : executor.startsWith("staff:")
+      ? { executor: "staff", assigned_user_id: executor.slice("staff:".length) }
+      : { executor: "unassigned" };
+
+  await tiaRequest(`/crm/tasks/${taskId}/executor`, {
     method: "PATCH",
-    body: JSON.stringify({ assigned_user_id: rawUserId || null }),
+    body: JSON.stringify(body),
   });
   refreshTaskViews(patientId || undefined);
 }
