@@ -15,7 +15,7 @@ from app.database.session import get_db
 from app.models.automation_job import AutomationJob
 from app.models.crm_task import CRMTask
 from app.services.activity import record_activity_event
-from app.services.crm_tasks import create_crm_task, validate_assignee
+from app.services.crm_tasks import CRMTaskError, create_crm_task, validate_assignee
 
 router = APIRouter()
 
@@ -75,16 +75,18 @@ def _parse_local_due_at(value: str, access: WorkspaceAccess) -> datetime:
 
 def _follow_up_job(db: Session, *, workspace_id: UUID, task_id: UUID) -> AutomationJob | None:
     return db.scalar(
-        select(AutomationJob).where(
+        select(AutomationJob)
+        .where(
             AutomationJob.workspace_id == workspace_id,
             AutomationJob.crm_task_id == task_id,
             AutomationJob.job_kind == "crm_follow_up",
         )
+        .with_for_update()
     )
 
 
 def _cancel_pending_ai_job(job: AutomationJob | None, *, reason: str) -> None:
-    if job is None or job.status == "dispatched":
+    if job is None:
         return
     job.status = "cancelled"
     job.locked_at = None
@@ -95,11 +97,6 @@ def _cancel_pending_ai_job(job: AutomationJob | None, *, reason: str) -> None:
 
 def _queue_ai_job(db: Session, *, task: CRMTask, job: AutomationJob | None) -> None:
     if job is not None:
-        if job.status == "dispatched":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This follow-up was already dispatched and cannot be scheduled again.",
-            )
         job.status = "queued"
         job.scheduled_for = task.due_at
         job.locked_at = None
@@ -173,10 +170,12 @@ def update_task_executor(
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMTaskExecutorRead:
     task = db.scalar(
-        select(CRMTask).where(
+        select(CRMTask)
+        .where(
             CRMTask.workspace_id == access.workspace.id,
             CRMTask.id == task_id,
         )
+        .with_for_update()
     )
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
@@ -194,6 +193,11 @@ def update_task_executor(
     previous_mode = task.execution_mode
     previous_assignee = task.assigned_user_id
     job = _follow_up_job(db, workspace_id=task.workspace_id, task_id=task.id)
+    if job is not None and job.status in {"processing", "dispatched"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This follow-up is already being sent or was already dispatched, so its executor cannot be changed.",
+        )
 
     if payload.executor == "tia":
         if task.status != "pending":
@@ -210,11 +214,17 @@ def update_task_executor(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Select a team member before assigning this follow-up.",
             )
-        validate_assignee(
-            db,
-            workspace_id=task.workspace_id,
-            user_id=payload.assigned_user_id,
-        )
+        try:
+            validate_assignee(
+                db,
+                workspace_id=task.workspace_id,
+                user_id=payload.assigned_user_id,
+            )
+        except CRMTaskError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
         task.execution_mode = "human"
         task.assigned_user_id = payload.assigned_user_id
         _cancel_pending_ai_job(job, reason="staff_assignment")
