@@ -82,6 +82,27 @@ def test_omitted_fields_do_not_clear_known_requirements_without_semantic_clear()
     assert _merge_flow_entity_state(existing, turn) == existing
 
 
+
+def test_rejecting_presented_date_advances_next_availability_search() -> None:
+    existing = {
+        "service_query": "ليزر إزالة الشعر",
+        "requested_date": "2026-09-08",
+        "date": "2026-09-08",
+        "not_before_time": "17:00",
+    }
+    turn = _turn(
+        hints=_hints(requested_date="2026-09-08", not_before_time="17:00"),
+        clear_entity_fields=["requested_date"],
+    )
+
+    merged = _merge_flow_entity_state(existing, turn)
+
+    assert merged["availability_search_after_date"] == "2026-09-08"
+    assert "requested_date" not in merged
+    assert "date" not in merged
+    assert merged["not_before_time"] == "17:00"
+
+
 def test_new_time_requirement_invalidates_derived_old_time_window() -> None:
     existing = {
         "requested_date": "2026-08-25",
