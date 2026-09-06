@@ -29,7 +29,15 @@ if ! docker compose exec -T n8n_db pg_isready -U n8n -d n8n >/dev/null 2>&1; the
   exit 1
 fi
 
-sleep 8
+N8N_HOST_VALUE="$(sed -n 's/^N8N_HOST=//p' .env 2>/dev/null | head -1)"
+READY_URL="https://$N8N_HOST_VALUE/healthz/readiness"
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 5 "$READY_URL" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
 bash ./healthcheck-production.sh
 
 echo
