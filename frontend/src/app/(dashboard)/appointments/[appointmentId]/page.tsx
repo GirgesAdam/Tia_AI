@@ -6,7 +6,6 @@ import {
   CircleDollarSign,
   CircleX,
   History,
-  MapPin,
   ReceiptText,
   Stethoscope,
   UserRound,
@@ -76,7 +75,7 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
               <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-[var(--surface-2)] p-4">
                   <div className="flex items-center gap-2 text-xs text-[var(--muted)]"><UserRound size={14} /> العميل</div>
                   <Link href={`/patients/${detail.patient.id}`} className="mt-1 block font-black text-teal-800 hover:underline">{detail.patient.name}</Link>
@@ -90,12 +89,7 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
                 <div className="rounded-xl bg-[var(--surface-2)] p-4">
                   <div className="flex items-center gap-2 text-xs text-[var(--muted)]"><Stethoscope size={14} /> الخدمة والطبيب</div>
                   <div className="mt-1 font-black">{detail.service.name}</div>
-                  <div className="mt-1 text-xs text-[var(--muted)]">{detail.doctor.name}</div>
-                </div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-4">
-                  <div className="flex items-center gap-2 text-xs text-[var(--muted)]"><MapPin size={14} /> الفرع</div>
-                  <div className="mt-1 font-black">{detail.branch.name}</div>
-                  <div className="mt-1 text-xs text-[var(--muted)]">{formatMoney(appointment.price_minor, appointment.currency)}</div>
+                  <div className="mt-1 text-xs text-[var(--muted)]">{detail.doctor.name} · {formatMoney(appointment.price_minor, appointment.currency)}</div>
                 </div>
               </div>
 
@@ -277,7 +271,7 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
                         <Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge>
                       </div>
                       <div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div>
-                      {job.last_error && <div className="mt-2 text-xs font-semibold text-red-700">لم تكتمل الرسالة تلقائيًا. يمكن مراجعتها من صفحة الأتمتة.</div>}
+                      {job.last_error && <div className="mt-2 text-xs font-semibold text-red-700">لم تكتمل الرسالة تلقائيًا. يمكن مراجعتها من صفحة Automation.</div>}
                     </div>
                   ))}
                   {!detail.automations.length && <div className="text-sm text-[var(--muted)]">لا توجد رسائل تلقائية مرتبطة بهذا الموعد.</div>}
