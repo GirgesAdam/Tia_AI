@@ -432,6 +432,8 @@ def _merge_flow_entity_state(
         "doctor_candidate_ids",
     }
     for field_name, value in hints.items():
+        if field_name in clear_fields:
+            continue
         if value is None:
             continue
         # Empty candidate lists are schema defaults, not semantic instructions.
