@@ -111,6 +111,9 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   const doctorMap = new Map(doctors.map((item) => [item.id, staffMap.get(item.staff_id) || "دكتور"]));
   const selectedPatient = patientId ? patients[0] : null;
   const canOverrideCancellation = ctx.workspace.role === "admin";
+  // This async Server Component takes one request-time snapshot for UI hints only.
+  // Every write is revalidated by the backend appointment state machine.
+  // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
 
   return (
