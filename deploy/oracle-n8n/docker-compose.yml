@@ -13,6 +13,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
 
   n8n:
     image: n8nio/n8n:2.38.2
@@ -40,6 +46,9 @@ services:
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       N8N_DIAGNOSTICS_ENABLED: "false"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: "10000"
       GENERIC_TIMEZONE: Africa/Cairo
       TZ: Africa/Cairo
       TIA_API_BASE_URL: ${TIA_API_BASE_URL}
@@ -47,6 +56,12 @@ services:
       - n8n_data:/home/node/.n8n
     expose:
       - "5678"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
 
   caddy:
     image: caddy:2.10-alpine
@@ -62,6 +77,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
 
 volumes:
   n8n_db_data:
