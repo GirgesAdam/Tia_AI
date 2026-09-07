@@ -51,7 +51,7 @@ RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
 LEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {
     "appointment_reminder_6h": frozenset(
-        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}
+        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar"}
     ),
     "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),
 }
@@ -882,6 +882,12 @@ def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:
             if not name or not language:
                 continue
             candidate = (name, language)
+            if (
+                rule.key == "appointment_reminder_6h"
+                and name == "tia_reminder_6h_01"
+                and rule.offset_minutes != -360
+            ):
+                continue
             if candidate not in candidates:
                 candidates.append(candidate)
     return candidates
@@ -896,7 +902,9 @@ def _select_rule_template(rule: AutomationRule, appointment_id: UUID) -> tuple[s
     return name, language, len(candidates)
 
 
-def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str]:
+def _appointment_template_body_parameters(
+    rule_key: str, data: dict, *, template_name: str | None = None
+) -> list[str]:
     """Return the exact positional variables required by each approved Meta template."""
     patient_name = str(data.get("patient_name") or "العميل")[:256]
     service_name = str(data.get("service_name") or "الخدمة")[:256]
@@ -905,6 +913,10 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
+        # Temporary compatibility for the already-approved Meta template while
+        # the timing-neutral 3-variable replacement is still under review.
+        if template_name == "tia_reminder_6h_01":
+            return [patient_name, service_name, time, branch_name]
         return [patient_name, service_name, time]
     if rule_key == "cancellation_recovery":
         return [patient_name, service_name, date, time]
@@ -2210,7 +2222,9 @@ def execute_job(
         "whatsapp_template": {
             "name": template_name,
             "language_code": template_language,
-            "body_parameters": _appointment_template_body_parameters(rule.key, display),
+            "body_parameters": _appointment_template_body_parameters(
+                rule.key, display, template_name=template_name
+            ),
             "variant_count": template_variant_count,
         },
         "appointment": display,

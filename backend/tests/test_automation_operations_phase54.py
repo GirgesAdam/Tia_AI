@@ -111,3 +111,10 @@ def test_reminder_and_post_visit_fallback_copy_match_current_template_contract()
     assert "كل حاجة تمام؟" in post
     assert "جلسة {{2}}" in setup
     assert "بعد {{2}}" in setup
+
+
+def test_fixed_six_hour_meta_template_blocks_incompatible_admin_timing() -> None:
+    route = (_root() / "backend/app/api/routes/automations.py").read_text(encoding="utf-8")
+    assert 'rule.template_name == "tia_reminder_6h_01"' in route
+    assert 'changes["offset_minutes"] != -360' in route
+    assert 'Switch to the timing-neutral reminder template' in route

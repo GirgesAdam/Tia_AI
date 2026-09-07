@@ -103,6 +103,21 @@ def update_rule(
     changes = payload.model_dump(exclude_unset=True)
     changed_fields = sorted(changes)
     previous_enabled = rule.enabled
+
+    if (
+        rule.key == "appointment_reminder_6h"
+        and rule.template_name == "tia_reminder_6h_01"
+        and "offset_minutes" in changes
+        and changes["offset_minutes"] != -360
+        and changes.get("template_name", rule.template_name) == "tia_reminder_6h_01"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The currently approved tia_reminder_6h_01 template explicitly says 6 hours. "
+                "Switch to the timing-neutral reminder template before changing this timing."
+            ),
+        )
     if "config" in changes:
         rule.config_json = changes.pop("config") or {}
     if "template_variants" in changes:

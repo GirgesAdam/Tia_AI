@@ -55,3 +55,39 @@ def test_known_legacy_default_names_are_migrated_without_overwriting_custom_temp
     assert "tia_reminder_6h_01" in source
     assert "tia_post_visit_followup_ar" in source
     assert "if row.template_name in legacy_names" in source
+
+
+def test_active_legacy_reminder_keeps_approved_four_parameter_contract() -> None:
+    params = _appointment_template_body_parameters(
+        "appointment_reminder_6h",
+        {
+            "patient_name": "سارة",
+            "service_name": "ليزر",
+            "date": "08/09/2026",
+            "time": "15:00",
+            "branch_name": "Main",
+        },
+        template_name="tia_reminder_6h_01",
+    )
+    assert params == ["سارة", "ليزر", "15:00", "Main"]
+
+
+def test_timing_neutral_reminder_keeps_three_parameter_contract() -> None:
+    params = _appointment_template_body_parameters(
+        "appointment_reminder_6h",
+        {
+            "patient_name": "سارة",
+            "service_name": "ليزر",
+            "date": "08/09/2026",
+            "time": "15:00",
+            "branch_name": "Main",
+        },
+        template_name="tia_reminder_01",
+    )
+    assert params == ["سارة", "ليزر", "15:00"]
+
+
+def test_legacy_active_template_is_not_auto_migrated_before_new_meta_approval() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")
+    legacy_block = source.split("LEGACY_DEFAULT_TEMPLATE_NAMES", 1)[1].split("@dataclass", 1)[0]
+    assert "tia_reminder_6h_01" not in legacy_block
