@@ -18,7 +18,9 @@ of a workflow builder:
   for database compatibility, but the admin controls the timing.
 - `post_visit_followup` — optional post-visit message that checks in, offers help
   or the next booking, and asks for feedback in one message.
-- `no_show_followup` — optional no-show recovery message.
+- `cancellation_recovery` — optional recovery after a cancelled/no-show appointment.
+- `lead_not_booked_followup` — optional follow-up for an interested lead that has
+  not completed a booking yet.
 
 Only the appointment reminder is enabled by default for new workspaces. Optional
 features stay opt-in and can be enabled or disabled independently by the admin.
@@ -27,8 +29,9 @@ The admin can configure reminder/follow-up timing in minutes, hours, or days fro
 the Automations page. Tia stores the resulting `offset_minutes` on the rule and
 replans pending jobs deterministically.
 
-Legacy 24-hour and 2-hour reminder rules may still exist in old data/history,
-but they are not part of the current product UI or default rule set.
+Legacy 24-hour, 2-hour, and standalone no-show reminder rules may still exist in
+old data/history, but they are not part of the current product UI or default rule
+set.
 
 ## Worker authentication
 
@@ -75,7 +78,7 @@ Current default template names:
 - `tia_booking_confirmation_ar`
 - `tia_appointment_reminder_ar`
 - `tia_post_visit_followup_ar`
-- `tia_no_show_followup_ar`
+- `tia_cancellation_recovery_ar`
 
 The WhatsApp outbox sends the exact number of positional body parameters required
 by the selected template. Current variable contracts are:
@@ -83,7 +86,9 @@ by the selected template. Current variable contracts are:
 - appointment reminder — **4 parameters**: customer name, service, appointment
   date, appointment time.
 - post-visit follow-up — **3 parameters**: customer name, service, session date.
-- booking/no-show templates retain their existing appointment variable contract.
+- cancellation recovery — **4 parameters**: customer name, service, cancelled/no-show
+  appointment date, appointment time.
+- booking confirmation retains its existing five-variable appointment contract.
 
 The reminder copy must stay timing-neutral because the admin controls when it is
 sent. Do not hardcode "6 hours" or any other delay inside the approved template.
@@ -105,14 +110,23 @@ Existing AI CRM follow-ups use free-form text only while WhatsApp's 24-hour
 customer-service window is open. Outside that window, Tia does not try to bypass
 Meta policy with free-form text.
 
-For an existing CRM follow-up that needs proactive delivery outside the window,
-configure a Meta-approved template on the WhatsApp channel connection under
-`config.ai_followup_template`. If that approved template is not configured, the
-existing CRM follow-up path falls back to a human CRM task rather than attempting
-a provider-rejected send.
+For a CRM follow-up that needs proactive delivery outside the window, configure
+one or more Meta-approved template names from the Automations page. They are
+stored on the WhatsApp connection under `config.ai_followup_templates` as a list
+of `{name, language_code}` objects. Tia keeps the legacy
+`config.ai_followup_template` key for backward compatibility with older workers.
+
+When more than one approved template is configured, Tia selects a stable template
+for the patient/task and avoids immediately repeating the last AI follow-up
+template when another approved option is available. This rotation does not add
+an LLM call.
+
+If no approved template is configured, the existing CRM follow-up path falls back
+to a human CRM task rather than attempting a provider-rejected send.
 
 This is transport safety for the existing CRM runtime; it is not a new admin task
-automation feature.
+automation feature. Do not store Meta tokens, API keys, or other secrets in the
+template-name configuration.
 
 ## WhatsApp outbox worker
 
@@ -130,6 +144,8 @@ avoid duplicate messages after ambiguous provider responses.
 
 - cancelled/rescheduled appointments cancel pending reminders when they can still
   be safely recalled before provider send;
+- no-show appointments use the same cancellation-recovery behavior instead of a
+  second no-show automation;
 - changing a rule timing replans queued jobs;
 - disabling a rule cancels pending jobs;
 - manual cancellation stays terminal;
@@ -141,18 +157,17 @@ avoid duplicate messages after ambiguous provider responses.
 
 There is no Gmail automation worker in the current product runtime.
 
-
 ## Cancellation recovery
 
 `cancellation_recovery` is an optional WhatsApp automation and is disabled by default.
 The admin can enable it and choose how long after `appointments.cancelled_at` it should run.
-It reuses the normal appointment automation job/outbox path; there is no separate cancellation workflow or state machine.
-The Meta template is `tia_cancellation_recovery_ar` with four positional body parameters: customer name, service, cancelled appointment date, and cancelled appointment time.
-
+A no-show is treated as a cancellation-recovery case using `appointments.no_show_at`.
+It reuses the normal appointment automation job/outbox path; there is no separate cancellation or no-show workflow/state machine.
+The Meta template is `tia_cancellation_recovery_ar` with four positional body parameters: customer name, service, original appointment date, and original appointment time.
 
 ## Lead not-booked follow-up
 
 `lead_not_booked_followup` is optional and disabled by default. The admin chooses the delay after the lead's latest recorded contact, falling back to lead creation time.
 The planner creates one idempotent system AI CRM follow-up task per lead and reuses the existing `crm_follow_up` AutomationJob runtime; there is no lead-specific job type or workflow engine.
 Before sending, Tia verifies that the rule is still enabled, the lead is still `new`, `contacted`, or `qualified`, and no other active follow-up task is already handling that lead. `booked`, `won`, `lost`, and `spam` leads are not contacted by this automation.
-Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the existing connection-level approved `ai_followup_template` policy still applies.
+Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the connection-level approved `ai_followup_templates` pool applies, with legacy `ai_followup_template` compatibility.
