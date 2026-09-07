@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Facebook, LoaderCircle } from "lucide-react";
 
@@ -48,6 +48,7 @@ declare global {
 const FACEBOOK_ORIGINS = new Set([
   "https://www.facebook.com",
   "https://web.facebook.com",
+  "https://business.facebook.com",
 ]);
 
 function parseSessionMessage(value: unknown): SignupSession | null {
@@ -87,7 +88,7 @@ export function MetaEmbeddedSignup({ config }: { config: EmbeddedSignupConfig })
   const sessionRef = useRef<SignupSession | null>(null);
   const submittingRef = useRef(false);
 
-  function submitIfReady() {
+  const submitIfReady = useCallback(() => {
     const code = codeRef.current;
     const session = sessionRef.current;
     if (!code || !session || submittingRef.current) return;
@@ -105,7 +106,7 @@ export function MetaEmbeddedSignup({ config }: { config: EmbeddedSignupConfig })
           submittingRef.current = false;
         });
     });
-  }
+  }, [router]);
 
   useEffect(() => {
     if (!config.available || !config.app_id || !config.graph_api_version) return;
@@ -146,7 +147,7 @@ export function MetaEmbeddedSignup({ config }: { config: EmbeddedSignupConfig })
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [config.app_id, config.available, config.graph_api_version]);
+  }, [config.app_id, config.available, config.graph_api_version, submitIfReady]);
 
   function launch() {
     setError(null);
