@@ -1,0 +1,55 @@
+name: Patch timing neutral reminder copy
+on:
+  pull_request:
+    paths:
+      - .github/workflows/patch-timing-neutral-copy.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Remove relative-day wording from reminder
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'backend/app/services/automations.py': [
+                  ('f"النهارده الساعة {data[\'time\']}. مستنيينك 💛"', 'f"الساعة {data[\'time\']}. مستنيينك 💛"'),
+              ],
+              'backend/tests/test_appointment_reminder_6h.py': [
+                  ('    assert "النهارده" in reminder\n', '    assert "النهارده" not in reminder\n'),
+              ],
+              'n8n/AUTOMATIONS_SETUP.md': [
+                  ('`أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} النهارده الساعة {{3}}. مستنيينك 💛`', '`أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} الساعة {{3}}. مستنيينك 💛`'),
+                  ('The current single-location experience also omits branch and appointment-date placeholders;\nthe reminder says "today" and sends only the appointment time.', 'The current single-location experience also omits branch and appointment-date placeholders;\nthe reminder sends only the appointment time and stays valid if the admin changes the lead time.'),
+              ],
+          }
+
+          for path_str, pairs in replacements.items():
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'{path_str}: expected text not found: {old!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+
+          test_path = Path('backend/tests/test_meta_template_contracts.py')
+          test = test_path.read_text(encoding='utf-8')
+          marker = '    assert params == ["سارة", "إزالة الشعر", "15:00"]\n'
+          replacement = marker + '\n    source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")\n    reminder_copy = source.split(\'if rule_key == "appointment_reminder_6h":\', 1)[1].split("# Legacy rules", 1)[0]\n    assert "6 ساعات" not in reminder_copy\n    assert "النهارده" not in reminder_copy\n    assert "branch_name" not in reminder_copy\n'
+          if marker not in test:
+              raise SystemExit('meta template contract marker not found')
+          test_path.write_text(test.replace(marker, replacement, 1), encoding='utf-8')
+          PY
+          git add backend/app/services/automations.py backend/tests/test_appointment_reminder_6h.py backend/tests/test_meta_template_contracts.py n8n/AUTOMATIONS_SETUP.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Keep reminder copy timing neutral'
+          git push origin HEAD:${{ github.head_ref }}
