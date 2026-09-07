@@ -53,6 +53,16 @@ def upgrade() -> None:
         ["workspace_id"],
         unique=False,
     )
+    op.execute(
+        sa.text(
+            'ALTER TABLE public."channel_provider_credentials" ENABLE ROW LEVEL SECURITY'
+        )
+    )
+    op.execute(
+        sa.text(
+            'REVOKE ALL ON TABLE public."channel_provider_credentials" FROM anon, authenticated'
+        )
+    )
 
 
 def downgrade() -> None:
