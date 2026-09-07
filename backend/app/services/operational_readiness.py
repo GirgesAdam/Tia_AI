@@ -25,7 +25,7 @@ from app.models.service import Service
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.operations import OperationalCheck, WorkspaceOperationalReadiness
 
-EXPECTED_MIGRATION_HEAD = "0059_channel_provider_credentials"
+EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"
 STALE_LOCK_MINUTES = 15
 AUTOMATION_WORKER_HEARTBEAT_MINUTES = 5
 TEST_RULE_KEY_PREFIXES = ("staging_regression_", "final_gate_")

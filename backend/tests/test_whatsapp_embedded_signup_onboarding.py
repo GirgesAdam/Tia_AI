@@ -23,6 +23,8 @@ def _configure_meta(monkeypatch: pytest.MonkeyPatch) -> str:
         "789012",
     )
     monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v25.0")
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_webhook_verify_token", "verify-secret")
+    monkeypatch.setattr(meta_whatsapp_settings, "channel_transport_worker_token", "worker-secret")
     monkeypatch.setattr(meta_whatsapp_settings, "channel_credential_encryption_key", key)
     return key
 

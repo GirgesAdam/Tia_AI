@@ -740,6 +740,7 @@ def claim_dispatches(
     *,
     connection: ChannelConnection,
     limit: int,
+    allow_templates: bool = True,
 ) -> list[DispatchClaimItem]:
     if settings.demo_mode and not settings.demo_allow_external_dispatch:
         return []
@@ -822,6 +823,9 @@ def claim_dispatches(
         if message is None:
             dispatch.status = "failed"
             dispatch.last_error = "Outbound message no longer exists."
+            continue
+
+        if not allow_templates and message.message_type == "template":
             continue
 
         if _whatsapp_dispatch_requires_opt_in(connection, message):

@@ -85,4 +85,4 @@ def test_whatsapp_safety_migration_is_current_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
     assert 'revision: str = "0058_whatsapp_safety"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0057_expense_type"' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"' in readiness

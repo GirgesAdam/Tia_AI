@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0059_channel_provider_credentials"
+revision: str = "0059_channel_credentials"
 down_revision: str | Sequence[str] | None = "0058_whatsapp_safety"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

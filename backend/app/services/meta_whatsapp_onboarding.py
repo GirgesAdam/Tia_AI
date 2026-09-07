@@ -53,6 +53,8 @@ def embedded_signup_available() -> bool:
             _clean_optional(settings.meta_app_secret),
             _clean_optional(settings.meta_whatsapp_embedded_signup_config_id),
             _clean_optional(settings.meta_graph_api_version),
+            _clean_optional(settings.meta_webhook_verify_token),
+            _clean_optional(settings.channel_transport_worker_token),
             provider_credential_encryption_ready(),
         )
     )
@@ -250,7 +252,10 @@ def build_whatsapp_setup_state(
             "سجّل الدخول إلى Meta واختَر Business العيادة ورقم واتساب. "
             "Tia ستتعامل مع IDs وTokens وإعداد الاتصال تلقائيًا."
         )
-    elif provider_health_state in {"disabled", "degraded"} or provider_error_code == "131031":
+    elif str(health.get("action_required") or "") == "reconnect_meta":
+        admin_action = "connect_meta"
+        admin_message = "جلسة Meta انتهت أو بيانات الربط لم تعد صالحة. أعد ربط واتساب من نفس الزر؛ لن تحتاج لإدخال IDs أو Tokens."
+    elif provider_health_state == "disabled" or provider_error_code == "131031":
         admin_action = "resolve_meta_restriction"
         admin_message = (
             "Meta أوقفت أو قيّدت حساب واتساب. افتح Business Support Home ونفّذ المراجعة المطلوبة."
@@ -258,7 +263,14 @@ def build_whatsapp_setup_state(
     elif not transport_ready:
         system_message = "Tia بتجهز مسار الإرسال الآمن لهذا الرقم."
     elif not templates_ready:
-        system_message = "Tia بتتحقق من القوالب المطلوبة للـAutomations المفعلة."
+        rejected_templates = [
+            name for name in required_templates if statuses.get(name, "").lower() == "rejected"
+        ]
+        if rejected_templates:
+            admin_action = "wait_for_template_review"
+            admin_message = "Meta رفضت قالب رسالة مطلوب للـAutomation. Tia ستعرض القالب المطلوب تعديله أو إعادة مراجعته."
+        else:
+            system_message = "Tia بتتحقق من القوالب المطلوبة للـAutomations المفعلة."
 
     return WhatsAppSetupState(
         connection_id=connection.id if connection else None,
@@ -396,4 +408,8 @@ def complete_embedded_signup(
 
     db.commit()
     db.refresh(connection)
+    if provider_error is None:
+        from app.services.meta_whatsapp_transport import refresh_meta_connection_readiness
+
+        refresh_meta_connection_readiness(db, connection)
     return build_whatsapp_setup_state(db, workspace_id=workspace_id)

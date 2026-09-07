@@ -655,7 +655,19 @@ def run_meta_transport_tick(
         if not token or error:
             continue
         ready_connections += 1
-        for item in claim_dispatches(db, connection=connection, limit=limit_per_connection):
+        required_templates = _required_template_names(db, connection)
+        raw_statuses = (connection.config_json or {}).get("template_statuses")
+        template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
+        allow_templates = not required_templates or all(
+            str(template_statuses.get(name) or "").lower() == "approved"
+            for name in required_templates
+        )
+        for item in claim_dispatches(
+            db,
+            connection=connection,
+            limit=limit_per_connection,
+            allow_templates=allow_templates,
+        ):
             if _send_claimed_dispatch(db, connection=connection, token=token, item=item):
                 sent += 1
             else:
