@@ -1,4 +1,5 @@
 name: CI
+# Validates clean PostgreSQL migrations plus complete backend/frontend checks.
 on:
   pull_request:
   push:
