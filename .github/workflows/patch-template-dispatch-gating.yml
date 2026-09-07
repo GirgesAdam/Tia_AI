@@ -1,0 +1,68 @@
+name: Patch Per-Template Dispatch Gating
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+    paths: [.github/workflows/patch-template-dispatch-gating.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+      - name: Patch per-template gating
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          channels_path = Path('backend/app/services/channels.py')
+          channels = channels_path.read_text(encoding='utf-8')
+
+          marker = '''def _dispatch_is_claimable(\n    dispatch: MessageDispatch,\n    *,\n    now: datetime,\n    stale_before: datetime,\n) -> bool:\n'''
+          helper = '''def _whatsapp_template_name(message: Message) -> str | None:\n    metadata = message.metadata_json or {}\n    template = metadata.get("whatsapp_template")\n    if not isinstance(template, dict):\n        return None\n    raw_name = template.get("name")\n    if not isinstance(raw_name, str):\n        return None\n    return raw_name.strip() or None\n\n\ndef _template_dispatch_is_allowed(\n    message: Message,\n    *,\n    approved_template_names: frozenset[str] | set[str] | None,\n) -> bool:\n    if message.message_type != "template" or approved_template_names is None:\n        return True\n    template_name = _whatsapp_template_name(message)\n    # Malformed template metadata is intentionally claimed so the provider-payload\n    # builder can fail it deterministically instead of leaving it queued forever.\n    return template_name is None or template_name in approved_template_names\n\n\n'''
+          if marker not in channels:
+              raise SystemExit('claim helper marker not found')
+          channels = channels.replace(marker, helper + marker, 1)
+
+          old_signature = '''def claim_dispatches(\n    db: Session,\n    *,\n    connection: ChannelConnection,\n    limit: int,\n    allow_templates: bool = True,\n) -> list[DispatchClaimItem]:'''
+          new_signature = '''def claim_dispatches(\n    db: Session,\n    *,\n    connection: ChannelConnection,\n    limit: int,\n    allow_templates: bool = True,\n    approved_template_names: frozenset[str] | set[str] | None = None,\n) -> list[DispatchClaimItem]:'''
+          if old_signature not in channels:
+              raise SystemExit('claim signature marker not found')
+          channels = channels.replace(old_signature, new_signature, 1)
+
+          old_gate = '''        if not allow_templates and message.message_type == "template":\n            continue\n\n        if _whatsapp_dispatch_requires_opt_in(connection, message):'''
+          new_gate = '''        if not allow_templates and message.message_type == "template":\n            continue\n        if not _template_dispatch_is_allowed(\n            message,\n            approved_template_names=approved_template_names,\n        ):\n            # Do not burn provider retry budget while Meta is still reviewing this\n            # particular template. Deferring it also lets later approved/text\n            # messages move through the bounded candidate window.\n            dispatch.next_attempt_at = now + timedelta(minutes=2)\n            continue\n\n        if _whatsapp_dispatch_requires_opt_in(connection, message):'''
+          if old_gate not in channels:
+              raise SystemExit('claim template gate marker not found')
+          channels = channels.replace(old_gate, new_gate, 1)
+          channels_path.write_text(channels, encoding='utf-8')
+
+          transport_path = Path('backend/app/services/meta_whatsapp_transport.py')
+          transport = transport_path.read_text(encoding='utf-8')
+          old_block = '''        required_templates = _required_template_names(db, connection)\n        raw_statuses = (connection.config_json or {}).get("template_statuses")\n        template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}\n        allow_templates = not required_templates or all(\n            str(template_statuses.get(name) or "").lower() == "approved"\n            for name in required_templates\n        )\n        claims = claim_dispatches(\n            db,\n            connection=connection,\n            limit=limit_per_connection,\n            allow_templates=allow_templates,\n        )\n'''
+          new_block = '''        raw_statuses = (connection.config_json or {}).get("template_statuses")\n        template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}\n        approved_template_names = frozenset(\n            str(name)\n            for name, status in template_statuses.items()\n            if str(status or "").lower() == "approved"\n        )\n        claims = claim_dispatches(\n            db,\n            connection=connection,\n            limit=limit_per_connection,\n            approved_template_names=approved_template_names,\n        )\n'''
+          if old_block not in transport:
+              raise SystemExit('transport global template gate marker not found')
+          transport = transport.replace(old_block, new_block, 1)
+          transport_path.write_text(transport, encoding='utf-8')
+
+          test_path = Path('backend/tests/test_whatsapp_template_dispatch_gating.py')
+          test_path.write_text('''from pathlib import Path\nfrom types import SimpleNamespace\n\nfrom app.services.channels import _template_dispatch_is_allowed\n\n\ndef _message(*, message_type: str = "template", name: str | None = "approved_one"):\n    metadata = {}\n    if name is not None:\n        metadata["whatsapp_template"] = {"name": name}\n    return SimpleNamespace(message_type=message_type, metadata_json=metadata)\n\n\ndef test_approved_template_is_not_blocked_by_other_pending_templates() -> None:\n    approved = frozenset({"approved_one", "approved_followup"})\n\n    assert _template_dispatch_is_allowed(\n        _message(name="approved_one"),\n        approved_template_names=approved,\n    ) is True\n    assert _template_dispatch_is_allowed(\n        _message(name="still_pending"),\n        approved_template_names=approved,\n    ) is False\n\n\ndef test_text_dispatch_is_never_blocked_by_template_approval_pool() -> None:\n    assert _template_dispatch_is_allowed(\n        _message(message_type="text", name=None),\n        approved_template_names=frozenset(),\n    ) is True\n\n\ndef test_malformed_template_is_claimed_for_deterministic_failure() -> None:\n    assert _template_dispatch_is_allowed(\n        _message(name=None),\n        approved_template_names=frozenset(),\n    ) is True\n\n\ndef test_none_approval_pool_preserves_legacy_generic_claim_behavior() -> None:\n    assert _template_dispatch_is_allowed(\n        _message(name="anything"),\n        approved_template_names=None,\n    ) is True\n\n\ndef test_native_transport_gates_each_template_individually() -> None:\n    root = Path(__file__).resolve().parents[2]\n    channels = (root / "backend/app/services/channels.py").read_text(encoding="utf-8")\n    transport = (\n        root / "backend/app/services/meta_whatsapp_transport.py"\n    ).read_text(encoding="utf-8")\n\n    assert "approved_template_names: frozenset[str] | set[str] | None = None" in channels\n    assert "dispatch.next_attempt_at = now + timedelta(minutes=2)" in channels\n    assert "approved_template_names = frozenset(" in transport\n    assert "approved_template_names=approved_template_names" in transport\n    assert "allow_templates = not required_templates or all(" not in transport\n''', encoding='utf-8')
+          PY
+      - name: Validate patched files
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip >/dev/null
+          pip install -r requirements.txt >/dev/null
+          ruff check app/services/channels.py app/services/meta_whatsapp_transport.py tests/test_whatsapp_template_dispatch_gating.py
+          python -m compileall -q app/services/channels.py app/services/meta_whatsapp_transport.py tests/test_whatsapp_template_dispatch_gating.py
+          python -m pytest -q tests/test_whatsapp_template_dispatch_gating.py tests/test_meta_native_whatsapp_transport.py
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/channels.py backend/app/services/meta_whatsapp_transport.py backend/tests/test_whatsapp_template_dispatch_gating.py
+          git commit -m "fix: gate WhatsApp templates individually"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
