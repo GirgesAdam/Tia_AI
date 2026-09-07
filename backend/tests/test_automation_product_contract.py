@@ -22,7 +22,7 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
     assert reminder.name == "Appointment reminder"
     assert reminder.trigger_kind == "before_appointment"
     assert reminder.offset_minutes == -360
-    assert reminder.template_name == "tia_appointment_reminder_ar"
+    assert reminder.template_name == "tia_reminder_01"
     assert reminder.enabled_by_default is True
 
     assert rules["booking_confirmation"].enabled_by_default is False

@@ -76,15 +76,14 @@ runtime.
 Current default template names:
 
 - `tia_booking_confirmation_ar`
-- `tia_appointment_reminder_ar`
-- `tia_post_visit_followup_ar`
+- `tia_reminder_01`
+- `tia_post_visit_01`
 - `tia_cancellation_recovery_ar`
 
 The WhatsApp outbox sends the exact number of positional body parameters required
 by the selected template. Current variable contracts are:
 
-- appointment reminder — **4 parameters**: customer name, service, appointment
-  date, appointment time.
+- appointment reminder — **3 parameters**: customer name, service, appointment time.
 - post-visit follow-up — **3 parameters**: customer name, service, session date.
 - cancellation recovery — **4 parameters**: customer name, service, cancelled/no-show
   appointment date, appointment time.
@@ -92,13 +91,13 @@ by the selected template. Current variable contracts are:
 
 The reminder copy must stay timing-neutral because the admin controls when it is
 sent. Do not hardcode "6 hours" or any other delay inside the approved template.
-It also does not need a branch placeholder in the current single-location patient
-experience.
+The current single-location experience also omits branch and appointment-date placeholders;
+the reminder says "today" and sends only the appointment time.
 
 Recommended natural Arabic copy:
 
-- `tia_appointment_reminder_ar`: `أهلًا {{1}} 👋 بفكرك بموعدك لـ{{2}} يوم {{3}} الساعة {{4}}. لو محتاجة تعدّلي الموعد ابعتيلي هنا.`
-- `tia_post_visit_followup_ar`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟ لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، ويسعدنا نعرف تقييمك للجلسة.`
+- `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} النهارده الساعة {{3}}. مستنيينك 💛`
+- `tia_post_visit_01`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟`
 
 The post-visit intent is intentionally one concise message: check how the visit
 went, offer help or the next booking, and invite feedback. Do not split these

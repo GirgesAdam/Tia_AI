@@ -19,7 +19,7 @@ def test_default_lifecycle_has_one_configurable_appointment_reminder() -> None:
     assert reminder.trigger_kind == "before_appointment"
     assert reminder.offset_minutes == -360
     assert reminder.name == "Appointment reminder"
-    assert reminder.template_name == "tia_appointment_reminder_ar"
+    assert reminder.template_name == "tia_reminder_01"
 
     assert rules["post_visit_followup"].enabled_by_default is False
 
@@ -79,9 +79,10 @@ def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_is_merged()
     )[0]
 
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "{data['date']}" in reminder
+    assert "{data['date']}" not in reminder
+    assert "{data['branch_name']}" not in reminder
     assert "{data['time']}" in reminder
-    assert "تعدّلي الموعد" in reminder
+    assert "النهارده" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
     assert "تحجزي الجلسة الجاية" in post_visit
     assert "تقييمك للجلسة" in post_visit
@@ -109,21 +110,21 @@ def test_automation_ui_exposes_configurable_reminder_timing() -> None:
 def test_setup_documents_timing_neutral_template_contract() -> None:
     setup = (_root() / "n8n/AUTOMATIONS_SETUP.md").read_text(encoding="utf-8")
 
-    assert "tia_appointment_reminder_ar" in setup
+    assert "tia_reminder_01" in setup
     assert "admin controls the timing" in setup
     assert 'Do not hardcode "6 hours"' in setup
     reminder_line = next(
         line for line in setup.splitlines()
-        if "tia_appointment_reminder_ar" in line and "أهلًا" in line
+        if "tia_reminder_01" in line and "أهلًا" in line
     )
-    assert "بموعدك لـ{{2}}" in reminder_line
-    assert "{{3}}" in reminder_line and "{{4}}" in reminder_line
-    assert "{{5}}" not in reminder_line
-    assert "تعدّلي الموعد" in reminder_line
+    assert "جلسة {{2}}" in reminder_line
+    assert "{{3}}" in reminder_line
+    assert "{{4}}" not in reminder_line and "{{5}}" not in reminder_line
+    assert "فاضل" not in reminder_line
 
     post_visit_line = next(
         line for line in setup.splitlines()
-        if "tia_post_visit_followup_ar" in line and "إزيك" in line
+        if "tia_post_visit_01" in line and "إزيك" in line
     )
     assert "{{1}}" in post_visit_line and "{{2}}" in post_visit_line and "{{3}}" in post_visit_line
     assert "{{4}}" not in post_visit_line and "{{5}}" not in post_visit_line

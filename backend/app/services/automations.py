@@ -49,6 +49,13 @@ LEAD_FOLLOWUP_DEDUPE_PREFIX = "automation:lead-not-booked:"
 LEAD_FOLLOWUP_ELIGIBLE_STATUSES = frozenset({"new", "contacted", "qualified"})
 RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
+LEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {
+    "appointment_reminder_6h": frozenset(
+        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}
+    ),
+    "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),
+}
+
 
 @dataclass(frozen=True)
 class PlanningResult:
@@ -100,6 +107,12 @@ def ensure_default_rules(
 
     for definition in DEFAULT_AUTOMATION_RULES:
         if definition.key in existing:
+            row = existing[definition.key]
+            legacy_names = LEGACY_DEFAULT_TEMPLATE_NAMES.get(definition.key, frozenset())
+            if row.template_name in legacy_names and row.template_name != definition.template_name:
+                row.template_name = definition.template_name
+                row.template_language = definition.template_language
+                changed = True
             continue
         row = AutomationRule(
             workspace_id=workspace_id,
@@ -819,9 +832,8 @@ def _fallback_text(rule_key: str, data: dict) -> str:
         )
     if rule_key == "appointment_reminder_6h":
         return (
-            f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-            f"يوم {data['date']} الساعة {data['time']}. "
-            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
+            f"أهلًا {data['patient_name']} 👋 بفكرك إن عندك جلسة {data['service_name']} "
+            f"النهارده الساعة {data['time']}. مستنيينك 💛"
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.
@@ -893,7 +905,7 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
-        return [patient_name, service_name, date, time]
+        return [patient_name, service_name, time]
     if rule_key == "cancellation_recovery":
         return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
