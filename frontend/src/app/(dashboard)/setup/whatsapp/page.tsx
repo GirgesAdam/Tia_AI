@@ -21,6 +21,7 @@ import type {
   AutomationRule,
   ChannelConnection,
 } from "@/lib/types";
+import { MetaEmbeddedSignup, type EmbeddedSignupConfig } from "./meta-embedded-signup";
 
 const META_SUPPORT_URL = "https://business.facebook.com/business-support-home/";
 
@@ -44,10 +45,11 @@ function statusLabel(status: "done" | "pending" | "attention") {
 }
 
 export default async function WhatsAppSetupPage() {
-  const [connections, rules, overview, ctx] = await Promise.all([
+  const [connections, rules, overview, signupConfig, ctx] = await Promise.all([
     tiaRequest<ChannelConnection[]>("/channels/connections"),
     tiaRequest<AutomationRule[]>("/automations/rules"),
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
+    tiaRequest<EmbeddedSignupConfig>("/channels/whatsapp/setup/embedded-signup/config"),
     getAppContext(),
   ]);
 
@@ -261,9 +263,10 @@ export default async function WhatsAppSetupPage() {
                 <Card className="border-teal-200 bg-teal-50/60">
                   <CardContent className="p-5">
                     <div className="flex items-center gap-2 font-bold text-slate-950"><Smartphone size={18} /> الخطوة التالية</div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      زر الربط المباشر مع Meta سيظهر هنا عند تفعيل Embedded Signup على منصة Tia. لن يحتاج مدير العيادة لنسخ أي IDs أو Tokens يدويًا.
+                    <p className="mt-2 mb-3 text-sm leading-6 text-[var(--muted)]">
+                      افتح شاشة Meta الرسمية واختار Business العيادة ورقم واتساب فقط.
                     </p>
+                    <MetaEmbeddedSignup config={signupConfig} />
                   </CardContent>
                 </Card>
               )}
