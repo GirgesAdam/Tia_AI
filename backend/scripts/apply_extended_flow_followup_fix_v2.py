@@ -16,24 +16,18 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 def main() -> int:
     replace_once(
-        "backend/app/services/agent_chat.py",
-        '''    for field_name in clear_fields:\n        merged.pop(field_name, None)\n    if "requested_date" in clear_fields:\n''',
-        '''    for field_name in clear_fields:\n        merged.pop(field_name, None)\n    if clear_fields.intersection({"service_query", "service_id", "service_candidate_ids"}):\n        merged.pop("service", None)\n    if clear_fields.intersection({"doctor_query", "doctor_id", "doctor_candidate_ids"}):\n        merged.pop("doctor", None)\n    if "requested_date" in clear_fields:\n''',
+        "backend/app/agents/turn_interpreter.py",
+        '''            "Recent conversation for reference resolution only:\\n"\n            f"{_recent_conversation_excerpt(history)}\\n\\n"\n            "Latest customer turn (authoritative):\\n"\n            f"{_latest_customer_turn(history)}"\n''',
+        '''            "Recent conversation for reference resolution only:\\n"\n            f"{_recent_conversation_excerpt(history)}\\n\\n"\n            "Latest-turn consistency reminder: if presented booking/reschedule options exist and "\n            "the latest customer turn explicitly chooses one option or exact clock time and authorizes "\n            "the action, capture that choice in selection_index/selection_time or requested_start_time "\n            "and include the matching write capability. Never infer a choice the customer did not state.\\n\\n"\n            "Latest customer turn (authoritative):\\n"\n            f"{_latest_customer_turn(history)}"\n''',
     )
 
     replace_once(
-        "backend/app/services/agent_chat.py",
-        '''        if selected_value:\n            merged.pop(candidates_key, None)\n        elif candidates_value:\n            merged.pop(selected_key, None)\n    return merged\n''',
-        '''        if selected_value:\n            merged.pop(candidates_key, None)\n        elif candidates_value:\n            merged.pop(selected_key, None)\n            if entity_name in {"service", "doctor"}:\n                merged.pop(entity_name, None)\n    return merged\n''',
+        "backend/scripts/run_extended_booking_conversation_review.py",
+        '''                f"شوفلي {second_service.get('name')} مع {second_doctor.get('name')} يوم {second_day.isoformat()}.",\n                f"الساعة {final_time} مناسبة، احجزها.",\n                "أكدلي إن الحجز للخدمة الجديدة مش الأولى.",\n''',
+        '''                f"شوفلي {second_service.get('name')} مع {second_doctor.get('name')} يوم {second_day.isoformat()}.",\n                f"عايز النسخة اللي مدتها {int(second_service.get('duration_minutes') or 0)} دقيقة.",\n                f"الساعة {final_time} مناسبة، احجزها.",\n                "أكدلي إن الحجز للخدمة الجديدة مش الأولى.",\n''',
     )
 
-    replace_once(
-        "backend/app/services/agent_chat.py",
-        '''    appointment_id = text_value("appointment_id")\n    requested_date = text_value("requested_date") or text_value("date")\n''',
-        '''    appointment_id = text_value("appointment_id")\n    if not appointment_id and flow is not None and flow.flow_type == "appointment_reschedule":\n        appointment_reference = text_value("appointment_reference")\n        if appointment_reference:\n            try:\n                referenced_start = datetime.fromisoformat(\n                    appointment_reference.replace("Z", "+00:00")\n                )\n            except ValueError:\n                referenced_start = None\n            if referenced_start is not None:\n                timezone_name = tool_context.workspace.timezone or "Africa/Cairo"\n                try:\n                    clinic_tz = ZoneInfo(timezone_name)\n                except ZoneInfoNotFoundError:\n                    clinic_tz = ZoneInfo("Africa/Cairo")\n                if referenced_start.tzinfo is not None:\n                    referenced_start = referenced_start.astimezone(clinic_tz)\n                reference_key = referenced_start.strftime("%Y-%m-%d %H:%M")\n                candidates = list(\n                    tool_context.db.scalars(\n                        select(Appointment).where(\n                            Appointment.workspace_id == tool_context.workspace.id,\n                            Appointment.patient_id == tool_context.patient.id,\n                            Appointment.status.notin_(("cancelled", "no_show")),\n                        )\n                    )\n                )\n                matches = [\n                    row\n                    for row in candidates\n                    if row.start_at.astimezone(clinic_tz).strftime("%Y-%m-%d %H:%M")\n                    == reference_key\n                ]\n                if len(matches) == 1:\n                    appointment_id = str(matches[0].id)\n    requested_date = text_value("requested_date") or text_value("date")\n''',
-    )
-
-    print("Applied minimal stale-entity cleanup and exact appointment reference resolution.")
+    print("Applied latest-turn selection reminder and completed the ambiguous-service fixture.")
     return 0
 
 
