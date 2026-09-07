@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# One-shot helper; workflow removes this file after the guarded runtime edit.
 path = Path("backend/app/services/agent_chat.py")
 text = path.read_text(encoding="utf-8")
 old = '''    if turn.action != "select_option":
