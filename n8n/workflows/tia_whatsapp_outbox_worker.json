@@ -361,6 +361,87 @@
       "id": "6fc575b7-39b7-4555-8dcf-d71cba45af6a",
       "name": "WhatsApp Send Template 4 Params",
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7c08ce3b-f613-48b7-bb27-70fdb8aeb201",
+              "leftValue": "={{ String(($json.metadata && $json.metadata.whatsapp_interactive && $json.metadata.whatsapp_interactive.type) || '') }}",
+              "rightValue": "button",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -180,
+        260
+      ],
+      "id": "9ea9ea44-711f-448c-9a31-6bc2b4606a15",
+      "name": "Interactive Message?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/' + $json.external_account_id + '/messages' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({messaging_product:'whatsapp',to:$json.external_user_id,type:'interactive',interactive:{type:'button',body:{text:$json.content},action:{buttons:[($json.metadata.whatsapp_interactive.buttons[0] ? {type:'reply',reply:$json.metadata.whatsapp_interactive.buttons[0]} : null),($json.metadata.whatsapp_interactive.buttons[1] ? {type:'reply',reply:$json.metadata.whatsapp_interactive.buttons[1]} : null),($json.metadata.whatsapp_interactive.buttons[2] ? {type:'reply',reply:$json.metadata.whatsapp_interactive.buttons[2]} : null)].filter(Boolean)}}}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        300
+      ],
+      "id": "8dc89fe0-444d-4dde-bf4b-a41d82f26cb7",
+      "name": "WhatsApp Send Interactive",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.TIA_API_BASE_URL || 'http://host.docker.internal:8000') + '/api/v1/channels/adapter/outbox/' + $('Expand Dispatches').item.json.dispatch_id + '/result' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({status: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? 'sent' : 'failed'), provider_message_id: (($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id || null), error: (((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id)) ? null : (($json.error && ($json.error.message || $json.error.description || $json.error.toString())) || $json.message || $json.errorDescription || 'WhatsApp interactive send failed in n8n')), retry_after_seconds: ((($json.messages && $json.messages[0] && $json.messages[0].id) || $json.id) ? null : 30), metadata: {transport:'n8n', provider:'meta_cloud', message_type:'interactive', attempt:$('Expand Dispatches').item.json.attempt}}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "id": "f71836ce-99ad-40ed-9668-807b927cc7ef",
+      "name": "Tia Record Interactive Result",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     }
   ],
   "connections": {
@@ -390,7 +471,7 @@
       "main": [
         [
           {
-            "node": "Template Message?",
+            "node": "Interactive Message?",
             "type": "main",
             "index": 0
           }
@@ -489,6 +570,35 @@
         [
           {
             "node": "Tia Record Template Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interactive Message?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Interactive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Template Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Send Interactive": {
+      "main": [
+        [
+          {
+            "node": "Tia Record Interactive Result",
             "type": "main",
             "index": 0
           }

@@ -1265,6 +1265,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
     @tool
     def get_reschedule_options(
         booking_date: str,
+        appointment_id: str = "",
         service_id: str = "",
         doctor_id: str = "",
         service_search: str = "",
@@ -1280,6 +1281,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         """
         inputs = {
             "booking_date": booking_date,
+            "appointment_id": appointment_id or None,
             "service_id": service_id,
             "doctor_id": doctor_id or None,
             "service_search": service_search,
@@ -1307,6 +1309,12 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 for appointment in appointment_result.appointments
                 if appointment.status in {"pending", "confirmed"}
             ]
+            if appointment_id:
+                appointments = [
+                    appointment
+                    for appointment in appointments
+                    if appointment.appointment_id == appointment_id
+                ]
 
             if service_id:
                 appointments = [

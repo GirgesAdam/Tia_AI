@@ -857,6 +857,7 @@ def _prefetch_read_tools(
     service_id = text_value("service_id")
     branch_id = text_value("branch_id")
     doctor_id = text_value("doctor_id")
+    appointment_id = text_value("appointment_id")
     requested_date = text_value("requested_date") or text_value("date")
     availability_search_after_date = text_value("availability_search_after_date")
     requested_start_time = text_value("requested_start_time")
@@ -1105,6 +1106,7 @@ def _prefetch_read_tools(
     if "appointment_reschedule" in capabilities and requested_date:
         reschedule_arguments = {
             "booking_date": requested_date,
+            "appointment_id": appointment_id,
             "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
             "not_after_time": not_after_time,
@@ -1890,7 +1892,7 @@ def _structured_flow_write(
         )
         return (
             _package_booking_success_reply(appointment, package_result),
-            "flow-interpreter:deterministic-booking",
+            "flow-interpreter:verified-booking",
         )
     complete_flow(
         db,
