@@ -1,6 +1,7 @@
 name: Booking Follow-up Diagnostic
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - test/daily-clinic-conversation-review
