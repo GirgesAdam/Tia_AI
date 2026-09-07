@@ -1,0 +1,276 @@
+name: WhatsApp safety patch
+
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+    paths: [.github/workflows/whatsapp-safety-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply focused WhatsApp safety hardening
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              if old not in text:
+                  raise SystemExit(f'Missing patch anchor in {path}: {old[:120]!r}')
+              if text.count(old) != 1:
+                  raise SystemExit(f'Patch anchor not unique in {path}: {old[:120]!r}')
+              write(path, text.replace(old, new, 1))
+
+          # 0058 migration: explicit WhatsApp opt-in belongs to Tia, not marketing consent.
+          migration = Path('backend/alembic/versions/0058_whatsapp_safety.py')
+          if not migration.exists():
+              migration.write_text('''"""Add explicit WhatsApp opt-in fields for proactive messaging safety.\n\nRevision ID: 0058_whatsapp_safety\nRevises: 0057_expense_type\nCreate Date: 2026-09-07\n"""\n\nfrom collections.abc import Sequence\n\nimport sqlalchemy as sa\n\nfrom alembic import op\n\nrevision: str = "0058_whatsapp_safety"\ndown_revision: str | Sequence[str] | None = "0057_expense_type"\nbranch_labels: str | Sequence[str] | None = None\ndepends_on: str | Sequence[str] | None = None\n\n\ndef upgrade() -> None:\n    op.add_column(\n        "patients",\n        sa.Column("whatsapp_opt_in", sa.Boolean(), nullable=False, server_default=sa.text("false")),\n    )\n    op.add_column(\n        "patients",\n        sa.Column("whatsapp_opt_in_at", sa.DateTime(timezone=True), nullable=True),\n    )\n    op.add_column(\n        "patients",\n        sa.Column("whatsapp_opt_in_source", sa.String(length=32), nullable=True),\n    )\n\n\ndef downgrade() -> None:\n    op.drop_column("patients", "whatsapp_opt_in_source")\n    op.drop_column("patients", "whatsapp_opt_in_at")\n    op.drop_column("patients", "whatsapp_opt_in")\n''', encoding='utf-8')
+
+          replace_once(
+              'backend/app/models/patient.py',
+              '''    marketing_consent_at: Mapped[datetime | None] = mapped_column(\n        DateTime(timezone=True),\n        nullable=True,\n    )\n    source_created_at: Mapped[datetime | None] = mapped_column(''',
+              '''    marketing_consent_at: Mapped[datetime | None] = mapped_column(\n        DateTime(timezone=True),\n        nullable=True,\n    )\n    whatsapp_opt_in: Mapped[bool] = mapped_column(\n        Boolean,\n        nullable=False,\n        default=False,\n        server_default=text("false"),\n    )\n    whatsapp_opt_in_at: Mapped[datetime | None] = mapped_column(\n        DateTime(timezone=True),\n        nullable=True,\n    )\n    whatsapp_opt_in_source: Mapped[str | None] = mapped_column(String(32), nullable=True)\n    source_created_at: Mapped[datetime | None] = mapped_column(''',
+          )
+
+          replace_once(
+              'backend/app/schemas/crm.py',
+              '    marketing_consent: bool = False\n\n    @field_validator("first_name")',
+              '    marketing_consent: bool = False\n    whatsapp_opt_in: bool = False\n\n    @field_validator("first_name")',
+          )
+          replace_once(
+              'backend/app/schemas/crm.py',
+              '    marketing_consent: bool | None = None\n\n    @field_validator("first_name")',
+              '    marketing_consent: bool | None = None\n    whatsapp_opt_in: bool | None = None\n\n    @field_validator("first_name")',
+          )
+          replace_once(
+              'backend/app/schemas/crm.py',
+              '    marketing_consent: bool\n    marketing_consent_at: datetime | None\n    source_created_at: datetime | None = None',
+              '    marketing_consent: bool\n    marketing_consent_at: datetime | None\n    whatsapp_opt_in: bool\n    whatsapp_opt_in_at: datetime | None\n    whatsapp_opt_in_source: str | None\n    source_created_at: datetime | None = None',
+          )
+
+          replace_once(
+              'backend/app/api/routes/crm.py',
+              '    data = payload.model_dump(exclude={"phone", "marketing_consent"})\n    patient = Patient(\n        workspace_id=access.workspace.id,\n        marketing_consent=payload.marketing_consent,\n        **data,\n    )',
+              '    data = payload.model_dump(exclude={"phone", "marketing_consent", "whatsapp_opt_in"})\n    patient = Patient(\n        workspace_id=access.workspace.id,\n        marketing_consent=payload.marketing_consent,\n        whatsapp_opt_in=payload.whatsapp_opt_in,\n        **data,\n    )',
+          )
+          replace_once(
+              'backend/app/api/routes/crm.py',
+              '    if payload.marketing_consent:\n        patient.marketing_consent_at = datetime.now(UTC)\n    db.add(patient)',
+              '    if payload.marketing_consent:\n        patient.marketing_consent_at = datetime.now(UTC)\n    if payload.whatsapp_opt_in:\n        patient.whatsapp_opt_in_at = datetime.now(UTC)\n        patient.whatsapp_opt_in_source = "staff_recorded"\n    db.add(patient)',
+          )
+          replace_once(
+              'backend/app/api/routes/crm.py',
+              '    required_fields = {"first_name", "preferred_language", "source", "status", "marketing_consent"}',
+              '    required_fields = {"first_name", "preferred_language", "source", "status", "marketing_consent", "whatsapp_opt_in"}',
+          )
+          replace_once(
+              'backend/app/api/routes/crm.py',
+              '''    if "marketing_consent" in updates:\n        new_consent = updates["marketing_consent"]\n        if new_consent and not patient.marketing_consent:\n            patient.marketing_consent_at = datetime.now(UTC)\n        elif not new_consent:\n            patient.marketing_consent_at = None\n\n    for key, value in updates.items():''',
+              '''    if "marketing_consent" in updates:\n        new_consent = updates["marketing_consent"]\n        if new_consent and not patient.marketing_consent:\n            patient.marketing_consent_at = datetime.now(UTC)\n        elif not new_consent:\n            patient.marketing_consent_at = None\n    if "whatsapp_opt_in" in updates:\n        new_whatsapp_opt_in = updates["whatsapp_opt_in"]\n        if new_whatsapp_opt_in and not patient.whatsapp_opt_in:\n            patient.whatsapp_opt_in_at = datetime.now(UTC)\n            patient.whatsapp_opt_in_source = "staff_recorded"\n        elif not new_whatsapp_opt_in:\n            patient.whatsapp_opt_in_at = None\n            patient.whatsapp_opt_in_source = None\n\n    for key, value in updates.items():''',
+          )
+
+          # Channel adapter: paused connections can still report in-flight delivery callbacks,
+          # but inbound/process/claim remain guarded by _require_active.
+          replace_once(
+              'backend/app/services/channels.py',
+              '''        select(ChannelConnection).where(\n            ChannelConnection.adapter_token_hash == hash_adapter_token(token),\n            ChannelConnection.status == "active",\n        )''',
+              '''        select(ChannelConnection).where(\n            ChannelConnection.adapter_token_hash == hash_adapter_token(token),\n            ChannelConnection.status.in_(("active", "paused")),\n        )''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              'class ChannelConflictError(ChannelError):\n    pass\n\n\n@dataclass(frozen=True)',
+              '''class ChannelConflictError(ChannelError):\n    pass\n\n\nMETA_CONNECTION_PAUSE_ERROR_CODES = frozenset({131031})\n\n\ndef _meta_error_details(metadata: dict) -> tuple[int | None, str | None]:\n    raw_errors = metadata.get("errors") if isinstance(metadata, dict) else None\n    if not isinstance(raw_errors, list):\n        return None, None\n    for raw in raw_errors:\n        if not isinstance(raw, dict):\n            continue\n        raw_code = raw.get("code")\n        try:\n            code = int(raw_code) if raw_code is not None else None\n        except (TypeError, ValueError):\n            code = None\n        details = raw.get("title") or raw.get("message")\n        error_data = raw.get("error_data")\n        if not details and isinstance(error_data, dict):\n            details = error_data.get("details")\n        return code, str(details)[:2000] if details else None\n    return None, None\n\n\ndef _provider_failure_is_permanent(error: str | None, metadata: dict) -> bool:\n    code, details = _meta_error_details(metadata)\n    text = " ".join(part for part in (error, details) if part).lower()\n    return code in META_CONNECTION_PAUSE_ERROR_CODES or "business account locked" in text\n\n\ndef _record_connection_provider_health(\n    connection: ChannelConnection,\n    *,\n    provider_status: str,\n    error: str | None,\n    metadata: dict,\n    occurred_at: datetime | None = None,\n) -> bool:\n    now = occurred_at or datetime.now(UTC)\n    config = dict(connection.config_json or {})\n    raw_health = config.get("provider_health")\n    health = dict(raw_health) if isinstance(raw_health, dict) else {}\n    permanent = False\n\n    if provider_status in {"sent", "delivered", "read"}:\n        health["last_accepted_at"] = now.isoformat()\n        if provider_status in {"delivered", "read"}:\n            health["last_delivery_at"] = now.isoformat()\n        if connection.status == "active":\n            health["state"] = "healthy"\n            health["current_error"] = None\n            health["current_error_code"] = None\n            health.pop("action_required", None)\n    elif provider_status == "failed":\n        code, details = _meta_error_details(metadata)\n        failure = (error or details or "Provider reported message delivery failure.")[:2000]\n        permanent = _provider_failure_is_permanent(failure, metadata)\n        health["last_error_at"] = now.isoformat()\n        health["current_error"] = failure\n        health["current_error_code"] = code\n        if permanent:\n            connection.status = "paused"\n            health["state"] = "disabled"\n            health["action_required"] = "meta_account_review"\n        elif connection.status == "active":\n            health["state"] = "degraded"\n\n    config["provider_health"] = health\n    connection.config_json = config\n    return permanent\n\n\n@dataclass(frozen=True)''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '''    _, patient = _resolve_identity(\n        db,\n        connection=connection,\n        payload=payload,\n    )\n    conversation = _resolve_conversation(''',
+              '''    _, patient = _resolve_identity(\n        db,\n        connection=connection,\n        payload=payload,\n    )\n    if connection.channel == "whatsapp" and not patient.whatsapp_opt_in:\n        patient.whatsapp_opt_in = True\n        patient.whatsapp_opt_in_at = datetime.now(UTC)\n        patient.whatsapp_opt_in_source = "customer_inbound"\n    conversation = _resolve_conversation(''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '''def _dispatch_is_claimable(\n    dispatch: MessageDispatch,\n    *,\n    now: datetime,\n    stale_before: datetime,\n) -> bool:''',
+              '''def _whatsapp_dispatch_requires_opt_in(\n    connection: ChannelConnection, message: Message\n) -> bool:\n    if connection.channel != "whatsapp":\n        return False\n    metadata = message.metadata_json or {}\n    source = str(metadata.get("source") or "")\n    return message.message_type == "template" or source in {\n        "automation_engine",\n        "ai_followup",\n        "crm_campaign",\n    }\n\n\ndef _dispatch_is_claimable(\n    dispatch: MessageDispatch,\n    *,\n    now: datetime,\n    stale_before: datetime,\n) -> bool:''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '''        if message is None:\n            dispatch.status = "failed"\n            dispatch.last_error = "Outbound message no longer exists."\n            continue\n\n        # Only one provider send may be in flight per conversation.''',
+              '''        if message is None:\n            dispatch.status = "failed"\n            dispatch.last_error = "Outbound message no longer exists."\n            continue\n\n        if _whatsapp_dispatch_requires_opt_in(connection, message):\n            patient = db.get(Patient, conversation.patient_id)\n            if patient is None or not patient.whatsapp_opt_in:\n                _mark_dispatch_failed(\n                    dispatch,\n                    message,\n                    error="WhatsApp opt-in is required before proactive messaging.",\n                )\n                dispatch.metadata_json = {\n                    **(dispatch.metadata_json or {}),\n                    "policy_block": "whatsapp_opt_in_required",\n                }\n                reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)\n                reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)\n                continue\n\n        # Only one provider send may be in flight per conversation.''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '''    dispatch = db.scalar(\n        select(MessageDispatch)\n        .where(\n            MessageDispatch.workspace_id == connection.workspace_id,\n            MessageDispatch.channel_connection_id == connection.id,\n            MessageDispatch.provider_message_id == provider_message_id,\n        )\n        .with_for_update()\n    )\n\n    if dispatch is not None:''',
+              '''    dispatch = db.scalar(\n        select(MessageDispatch)\n        .where(\n            MessageDispatch.workspace_id == connection.workspace_id,\n            MessageDispatch.channel_connection_id == connection.id,\n            MessageDispatch.provider_message_id == provider_message_id,\n        )\n        .with_for_update()\n    )\n\n    _record_connection_provider_health(\n        connection,\n        provider_status=provider_status,\n        error=error,\n        metadata=metadata,\n        occurred_at=occurred_at,\n    )\n\n    if dispatch is not None:''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '''    dispatch.metadata_json = {**(dispatch.metadata_json or {}), **metadata}\n    dispatch.locked_at = None\n\n    if result_status in {"sent", "delivered", "read"}:''',
+              '''    dispatch.metadata_json = {**(dispatch.metadata_json or {}), **metadata}\n    dispatch.locked_at = None\n    permanent_provider_failure = _record_connection_provider_health(\n        connection,\n        provider_status=result_status,\n        error=error,\n        metadata=metadata,\n        occurred_at=now,\n    )\n\n    if result_status in {"sent", "delivered", "read"}:''',
+          )
+          replace_once(
+              'backend/app/services/channels.py',
+              '        if retry_after_seconds and _dispatch_has_retry_budget(dispatch):\n',
+              '        if retry_after_seconds and _dispatch_has_retry_budget(dispatch) and not permanent_provider_failure:\n',
+          )
+
+          # Automatic follow-ups: no proactive WhatsApp without explicit opt-in.
+          replace_once(
+              'backend/app/services/automations.py',
+              '''    if patient.status != "active":\n        task.status = "cancelled"\n        task.completed_at = now\n        job.status = "skipped"\n        job.completed_at = now\n        job.locked_at = None\n        job.result_json = {"reason": "patient_not_active"}\n        db.commit()\n        return ExecutionResult(job=job, reason="patient_not_active")\n\n    route = _resolve_followup_route(db, task=task, now=now)''',
+              '''    if patient.status != "active":\n        task.status = "cancelled"\n        task.completed_at = now\n        job.status = "skipped"\n        job.completed_at = now\n        job.locked_at = None\n        job.result_json = {"reason": "patient_not_active"}\n        db.commit()\n        return ExecutionResult(job=job, reason="patient_not_active")\n    if not patient.whatsapp_opt_in:\n        result = _handoff_followup_to_staff(\n            task=task, job=job, conversation=None, reason="whatsapp_opt_in_required", now=now\n        )\n        db.commit()\n        return result\n\n    route = _resolve_followup_route(db, task=task, now=now)''',
+          )
+          replace_once(
+              'backend/app/services/automations.py',
+              '''    conversation, connection = route\n    display = _appointment_display_data(''',
+              '''    conversation, connection = route\n    if connection.channel == "whatsapp" and not patient.whatsapp_opt_in:\n        job.status = "skipped"\n        job.completed_at = now\n        job.locked_at = None\n        job.result_json = {"reason": "whatsapp_opt_in_required"}\n        db.commit()\n        return ExecutionResult(job=job, reason="whatsapp_opt_in_required")\n\n    display = _appointment_display_data(''',
+          )
+
+          # Frontend types and patient UI.
+          replace_once(
+              'frontend/src/lib/types.ts',
+              '  marketing_consent: boolean; marketing_consent_at: string | null; last_contact_at: string | null;',
+              '  marketing_consent: boolean; marketing_consent_at: string | null; whatsapp_opt_in: boolean; whatsapp_opt_in_at: string | null; whatsapp_opt_in_source: string | null; last_contact_at: string | null;',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/patients/actions.ts',
+              'export async function createPatientTask(formData: FormData) {',
+              '''export async function setPatientWhatsappOptIn(formData: FormData) {\n  const patientId = String(formData.get("patient_id") || "").trim();\n  const whatsappOptIn = String(formData.get("whatsapp_opt_in") || "false") === "true";\n  if (!patientId) return;\n  await tiaRequest(`/crm/patients/${patientId}`, {\n    method: "PATCH",\n    body: JSON.stringify({ whatsapp_opt_in: whatsappOptIn }),\n  });\n  revalidatePatient(patientId);\n}\n\nexport async function createPatientTask(formData: FormData) {''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/patients/[patientId]/page.tsx',
+              'import { addPatientNote, createPatientTask } from "../actions";',
+              'import { addPatientNote, createPatientTask, setPatientWhatsappOptIn } from "../actions";',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/patients/[patientId]/page.tsx',
+              '''        <Badge tone={toneForStatus(patient.status)}>{labelForStatus(patient.status)}</Badge>\n        <Badge>{labelForSource(patient.source)}</Badge>\n        {patient.marketing_consent && <Badge tone="green">موافق على الرسائل التسويقية</Badge>}''',
+              '''        <Badge tone={toneForStatus(patient.status)}>{labelForStatus(patient.status)}</Badge>\n        <Badge>{labelForSource(patient.source)}</Badge>\n        <Badge tone={patient.whatsapp_opt_in ? "green" : "gray"}>\n          {patient.whatsapp_opt_in ? "موافق على تواصل واتساب" : "موافقة واتساب غير مسجلة"}\n        </Badge>''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/patients/[patientId]/page.tsx',
+              '''              <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">آخر تواصل</span><b className="text-left">{formatDateTime(patient.last_contact_at)}</b></div>\n            </CardContent>''',
+              '''              <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">آخر تواصل</span><b className="text-left">{formatDateTime(patient.last_contact_at)}</b></div>\n              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">\n                <div className="flex items-center justify-between gap-3">\n                  <div>\n                    <div className="text-xs font-bold text-slate-700">موافقة تواصل واتساب</div>\n                    <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">\n                      {patient.whatsapp_opt_in\n                        ? `مسجلة${patient.whatsapp_opt_in_at ? ` · ${formatDateTime(patient.whatsapp_opt_in_at)}` : ""}`\n                        : "لا تبدأ Tia رسائل واتساب تلقائية لهذا العميل حتى تُسجل موافقته."}\n                    </div>\n                  </div>\n                  <form action={setPatientWhatsappOptIn}>\n                    <input type="hidden" name="patient_id" value={patient.id} />\n                    <input type="hidden" name="whatsapp_opt_in" value={String(!patient.whatsapp_opt_in)} />\n                    <Button type="submit" size="sm" variant="outline">\n                      {patient.whatsapp_opt_in ? "سحب الموافقة" : "تسجيل الموافقة"}\n                    </Button>\n                  </form>\n                </div>\n              </div>\n            </CardContent>''',
+          )
+
+          # Manual phone/walk-in booking can record explicit consent for a new patient.
+          replace_once(
+              'frontend/src/app/(dashboard)/appointments/actions.ts',
+              '          preferred_language: "ar",\n        }),',
+              '          preferred_language: "ar",\n          whatsapp_opt_in: formData.get("whatsapp_opt_in") === "on",\n        }),',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/appointments/manual-appointment-form.tsx',
+              '''        <div className="grid gap-3 sm:grid-cols-2">\n          <label>\n            <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العميل</span>\n            <Input name="first_name" required maxLength={120} placeholder="الاسم" />\n          </label>\n          <label>\n            <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>\n            <Input name="phone" required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />\n          </label>\n        </div>''',
+              '''        <>\n          <div className="grid gap-3 sm:grid-cols-2">\n            <label>\n              <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العميل</span>\n              <Input name="first_name" required maxLength={120} placeholder="الاسم" />\n            </label>\n            <label>\n              <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>\n              <Input name="phone" required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />\n            </label>\n          </div>\n          <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-700">\n            <input name="whatsapp_opt_in" type="checkbox" className="mt-0.5" />\n            <span>العميل وافق بوضوح أن العيادة تبدأ معه رسائل واتساب مثل تذكير الموعد والمتابعة.</span>\n          </label>\n        </>''',
+          )
+
+          # Automation page: show provider health even when the connection is paused.
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/actions.ts',
+              '  const languageCode = String(formData.get("template_language") || "ar").trim() || "ar";',
+              '  const languageCode = String(formData.get("template_language") || "ar_EG").trim() || "ar_EG";',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/actions.ts',
+              'export async function retryAutomationJob(formData: FormData) {',
+              '''export async function resumeWhatsappConnection(formData: FormData) {\n  const id = String(formData.get("connection_id") || "").trim();\n  if (!id) return;\n  await tiaRequest(`/channels/connections/${id}`, {\n    method: "PATCH",\n    body: JSON.stringify({ status: "active" }),\n  });\n  revalidatePath("/automations");\n}\n\nexport async function retryAutomationJob(formData: FormData) {''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '  retryAutomationJob,\n  saveAiFollowupTemplates,',
+              '  retryAutomationJob,\n  resumeWhatsappConnection,\n  saveAiFollowupTemplates,',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '''function followupTemplateEntries(connection: ChannelConnection) {''',
+              '''function providerHealth(connection: ChannelConnection) {\n  const raw = connection.config_json?.provider_health;\n  return raw && typeof raw === "object" && !Array.isArray(raw)\n    ? (raw as Record<string, unknown>)\n    : null;\n}\n\nfunction followupTemplateEntries(connection: ChannelConnection) {''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '''  const whatsappConnections = connections.filter(\n    (connection) => connection.channel === "whatsapp" && connection.status === "active",\n  );''',
+              '''  const whatsappConnections = connections.filter(\n    (connection) => connection.channel === "whatsapp" && connection.status !== "disconnected",\n  );\n  const whatsappAttention = whatsappConnections.filter((connection) => {\n    const health = providerHealth(connection);\n    return connection.status === "paused" || health?.state === "degraded" || health?.state === "disabled";\n  });''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '''      <div className="mb-6 grid gap-3 sm:grid-cols-3">''',
+              '''      {whatsappAttention.map((connection) => {\n        const health = providerHealth(connection);\n        const error = typeof health?.current_error === "string" ? health.current_error : null;\n        const errorCode = health?.current_error_code == null ? null : String(health.current_error_code);\n        const lastDelivery = typeof health?.last_delivery_at === "string" ? health.last_delivery_at : null;\n        return (\n          <div key={connection.id} className="mb-4 flex items-start justify-between gap-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-950">\n            <div>\n              <div className="flex flex-wrap items-center gap-2">\n                <b>{connection.display_name || "WhatsApp"}</b>\n                <Badge tone="red">{connection.status === "paused" ? "متوقف تلقائيًا" : "يحتاج مراجعة"}</Badge>\n              </div>\n              <p className="mt-2 leading-6">\n                Tia أوقفت الإرسال التلقائي لهذا الاتصال لحماية العيادة من retries غير المفيدة.\n              </p>\n              {error && <p className="mt-1 text-xs">آخر خطأ: {error}{errorCode ? ` · ${errorCode}` : ""}</p>}\n              {lastDelivery && <p className="mt-1 text-xs">آخر تسليم ناجح: {formatDateTime(lastDelivery)}</p>}\n            </div>\n            {ctx.workspace.role === "admin" && connection.status === "paused" && (\n              <form action={resumeWhatsappConnection}>\n                <input type="hidden" name="connection_id" value={connection.id} />\n                <Button type="submit" size="sm" variant="outline">إعادة التفعيل بعد حل مشكلة Meta</Button>\n              </form>\n            )}\n          </div>\n        );\n      })}\n\n      <div className="mb-6 grid gap-3 sm:grid-cols-3">''',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '                const language = templates[0]?.language_code || "ar";',
+              '                const language = templates[0]?.language_code || "ar_EG";',
+          )
+          replace_once(
+              'frontend/src/app/(dashboard)/automations/page.tsx',
+              '                لا يوجد اتصال واتساب نشط حاليًا. القواعد ستبقى آمنة ولن ترسل متابعة خارج نافذة الـ24 ساعة بدون route حقيقي وقالب معتمد.',
+              '                لا يوجد اتصال واتساب متصل حاليًا. القواعد ستبقى آمنة ولن ترسل متابعة خارج نافذة الـ24 ساعة بدون route حقيقي وقالب معتمد.',
+          )
+
+          # Current schema head moves to 0058.
+          replace_once(
+              '.github/workflows/ci.yml',
+              'test "$(python -m alembic heads)" = "0057_expense_type (head)"',
+              'test "$(python -m alembic heads)" = "0058_whatsapp_safety (head)"',
+          )
+          replace_once(
+              'backend/app/services/operational_readiness.py',
+              'EXPECTED_MIGRATION_HEAD = "0057_expense_type"',
+              'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"',
+          )
+          for test_path in Path('backend/tests').rglob('*.py'):
+              text = test_path.read_text(encoding='utf-8')
+              changed = text.replace(
+                  'EXPECTED_MIGRATION_HEAD == "0057_expense_type"',
+                  'EXPECTED_MIGRATION_HEAD == "0058_whatsapp_safety"',
+              ).replace(
+                  'EXPECTED_MIGRATION_HEAD = "0057_expense_type"',
+                  'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"',
+              )
+              if changed != text:
+                  test_path.write_text(changed, encoding='utf-8')
+
+          # Meta Arabic (EGY) exact locale contract.
+          meta_test = Path('backend/tests/test_meta_template_contracts.py')
+          text = meta_test.read_text(encoding='utf-8')
+          anchor = '''    assert rules["appointment_reminder_6h"].template_name == "tia_reminder_01"\n    assert rules["post_visit_followup"].template_name == "tia_post_visit_01"'''
+          replacement = anchor + '''\n    assert rules["appointment_reminder_6h"].template_language == "ar_EG"\n    assert rules["post_visit_followup"].template_language == "ar_EG"'''
+          if anchor not in text:
+              raise SystemExit('Missing Meta locale test anchor')
+          meta_test.write_text(text.replace(anchor, replacement, 1), encoding='utf-8')
+
+          safety_test = Path('backend/tests/test_whatsapp_safety_hardening.py')
+          safety_test.write_text('''from pathlib import Path\n\nfrom app.schemas.crm import PatientCreate\nfrom app.services.channels import _provider_failure_is_permanent\n\n\ndef _root() -> Path:\n    return Path(__file__).resolve().parents[2]\n\n\ndef test_whatsapp_opt_in_is_separate_and_defaults_off() -> None:\n    patient = PatientCreate(first_name="Adam")\n    assert patient.whatsapp_opt_in is False\n    model = (_root() / "backend/app/models/patient.py").read_text(encoding="utf-8")\n    assert "whatsapp_opt_in" in model\n    assert "whatsapp_opt_in_at" in model\n    assert "whatsapp_opt_in_source" in model\n\n\ndef test_customer_inbound_whatsapp_records_opt_in() -> None:\n    service = (_root() / "backend/app/services/channels.py").read_text(encoding="utf-8")\n    assert 'connection.channel == "whatsapp" and not patient.whatsapp_opt_in' in service\n    assert 'patient.whatsapp_opt_in_source = "customer_inbound"' in service\n\n\ndef test_proactive_whatsapp_is_blocked_without_opt_in() -> None:\n    channels = (_root() / "backend/app/services/channels.py").read_text(encoding="utf-8")\n    automations = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")\n    assert "_whatsapp_dispatch_requires_opt_in" in channels\n    assert '"policy_block": "whatsapp_opt_in_required"' in channels\n    assert automations.count('"whatsapp_opt_in_required"') >= 2\n\n\ndef test_meta_account_lock_is_permanent_and_pauses_connection() -> None:\n    metadata = {"errors": [{"code": 131031, "title": "Business Account locked"}]}\n    assert _provider_failure_is_permanent("Business Account locked", metadata) is True\n    assert _provider_failure_is_permanent("temporary provider failure", {}) is False\n    service = (_root() / "backend/app/services/channels.py").read_text(encoding="utf-8")\n    assert "META_CONNECTION_PAUSE_ERROR_CODES = frozenset({131031})" in service\n    assert 'connection.status = "paused"' in service\n    assert 'health["action_required"] = "meta_account_review"' in service\n    assert 'and not permanent_provider_failure' in service\n\n\ndef test_paused_adapter_can_report_delivery_but_cannot_claim_outbox() -> None:\n    service = (_root() / "backend/app/services/channels.py").read_text(encoding="utf-8")\n    routes = (_root() / "backend/app/api/routes/channels.py").read_text(encoding="utf-8")\n    assert 'ChannelConnection.status.in_(("active", "paused"))' in service\n    assert "_require_active(adapter.connection)" in routes\n    assert '"/adapter/outbox/provider-status"' in routes\n\n\ndef test_automation_ui_surfaces_provider_health_and_recovery() -> None:\n    page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")\n    actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(encoding="utf-8")\n    assert "providerHealth" in page\n    assert "متوقف تلقائيًا" in page\n    assert "resumeWhatsappConnection" in page\n    assert 'body: JSON.stringify({ status: "active" })' in actions\n\n\ndef test_whatsapp_safety_migration_is_current_head() -> None:\n    migration = (_root() / "backend/alembic/versions/0058_whatsapp_safety.py").read_text(encoding="utf-8")\n    readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")\n    assert 'revision: str = "0058_whatsapp_safety"' in migration\n    assert 'down_revision: str | Sequence[str] | None = "0057_expense_type"' in migration\n    assert 'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"' in readiness\n''', encoding='utf-8')
+
+          # Document the safety contract near the WhatsApp worker notes.
+          setup_path = Path('n8n/AUTOMATIONS_SETUP.md')
+          setup = setup_path.read_text(encoding='utf-8')
+          marker = '## WhatsApp outbox worker\n'
+          safety_docs = '''## WhatsApp proactive-message safety\n\nTia stores WhatsApp opt-in separately from marketing consent. A customer inbound WhatsApp message records opt-in automatically; staff can also record or withdraw explicit WhatsApp consent from the patient profile. Proactive templates and automation sends are blocked when opt-in is missing.\n\nProvider account-level failures such as Meta error `131031` pause only that clinic\'s WhatsApp connection. The Automation page shows provider health and the last provider error. AI CRM follow-ups fall back to staff work instead of retrying indefinitely, and a paused connection must be explicitly re-enabled after the Meta-side issue is resolved. Each clinic should use its own WABA/phone connection so one clinic restriction does not stop other tenants.\n\n'''
+          if safety_docs not in setup:
+              if marker not in setup:
+                  raise SystemExit('Missing setup docs anchor')
+              setup_path.write_text(setup.replace(marker, safety_docs + marker, 1), encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend frontend n8n .github/workflows/ci.yml
+          git diff --cached --check
+          git commit -m "Harden WhatsApp opt-in and provider failure handling"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
