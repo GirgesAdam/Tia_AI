@@ -48,7 +48,7 @@ jobs:
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0057_expense_type (head)"
+        run: test "$(python -m alembic heads)" = "0058_whatsapp_safety (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
