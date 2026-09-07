@@ -401,6 +401,10 @@ def _merge_flow_entity_state(
     clear_fields = set(turn.clear_entity_fields)
     for field_name in clear_fields:
         merged.pop(field_name, None)
+    if clear_fields.intersection({"service_query", "service_id", "service_candidate_ids"}):
+        merged.pop("service", None)
+    if clear_fields.intersection({"doctor_query", "doctor_id", "doctor_candidate_ids"}):
+        merged.pop("doctor", None)
     if "requested_date" in clear_fields:
         # A presented availability date is stored separately from the customer's
         # requested date. When the customer rejects that offer, remove the
@@ -459,6 +463,8 @@ def _merge_flow_entity_state(
             merged.pop(candidates_key, None)
         elif candidates_value:
             merged.pop(selected_key, None)
+            if entity_name in {"service", "doctor"}:
+                merged.pop(entity_name, None)
     return merged
 
 
@@ -969,6 +975,41 @@ def _prefetch_read_tools(
     branch_id = text_value("branch_id")
     doctor_id = text_value("doctor_id")
     appointment_id = text_value("appointment_id")
+    if not appointment_id and flow is not None and flow.flow_type == "appointment_reschedule":
+        appointment_reference = text_value("appointment_reference")
+        if appointment_reference:
+            try:
+                referenced_start = datetime.fromisoformat(
+                    appointment_reference.replace("Z", "+00:00")
+                )
+            except ValueError:
+                referenced_start = None
+            if referenced_start is not None:
+                timezone_name = tool_context.workspace.timezone or "Africa/Cairo"
+                try:
+                    clinic_tz = ZoneInfo(timezone_name)
+                except ZoneInfoNotFoundError:
+                    clinic_tz = ZoneInfo("Africa/Cairo")
+                if referenced_start.tzinfo is not None:
+                    referenced_start = referenced_start.astimezone(clinic_tz)
+                reference_key = referenced_start.strftime("%Y-%m-%d %H:%M")
+                candidates = list(
+                    tool_context.db.scalars(
+                        select(Appointment).where(
+                            Appointment.workspace_id == tool_context.workspace.id,
+                            Appointment.patient_id == tool_context.patient.id,
+                            Appointment.status.notin_(("cancelled", "no_show")),
+                        )
+                    )
+                )
+                matches = [
+                    row
+                    for row in candidates
+                    if row.start_at.astimezone(clinic_tz).strftime("%Y-%m-%d %H:%M")
+                    == reference_key
+                ]
+                if len(matches) == 1:
+                    appointment_id = str(matches[0].id)
     requested_date = text_value("requested_date") or text_value("date")
     availability_search_after_date = text_value("availability_search_after_date")
     requested_start_time = text_value("requested_start_time")
