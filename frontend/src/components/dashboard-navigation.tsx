@@ -11,7 +11,6 @@ import {
   History,
   Inbox,
   ListTodo,
-  MessageCircleMore,
   Settings2,
   Sparkles,
   UsersRound,
@@ -36,7 +35,6 @@ const primaryItems = [
 const adminItems = [
   { href: "/setup", label: "إعدادات العيادة", icon: Settings2 },
   { href: "/automations", label: "Automation", icon: Workflow },
-  { href: "/channels", label: "قنوات التواصل", icon: MessageCircleMore },
   { href: "/team", label: "الفريق", icon: UsersRound },
   { href: "/activity", label: "سجل النشاط", icon: History },
 ] as const;
