@@ -70,9 +70,9 @@ export default async function WhatsAppSetupPage() {
   );
   const connectionNeedsAttention = Boolean(
     connection &&
-      (connection.status === "paused" ||
-        providerState === "disabled" ||
-        providerState === "degraded"),
+      (providerState === "disabled" ||
+        providerState === "degraded" ||
+        providerErrorCode === "131031"),
   );
   const connectionReady = Boolean(connection && connection.status === "active" && !connectionNeedsAttention);
   const workerReady = overview.worker_state === "healthy" || overview.worker_state === "not_required";
