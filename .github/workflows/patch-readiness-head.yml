@@ -1,0 +1,33 @@
+name: Patch readiness migration head
+on:
+  pull_request:
+    paths:
+      - .github/workflows/patch-readiness-head.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Update readiness head and commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/services/operational_readiness.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"'
+          new = 'EXPECTED_MIGRATION_HEAD = "0057_expense_type"'
+          if old not in text and new not in text:
+              raise SystemExit('Expected readiness migration constant not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git add backend/app/services/operational_readiness.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Track expense type migration in readiness'
+          git push origin HEAD:${{ github.head_ref }}
