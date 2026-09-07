@@ -1,0 +1,231 @@
+name: Branch patch follow-up pool
+on:
+  pull_request:
+    paths:
+      - .github/workflows/branch-patch-followup-pool.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply minimal follow-up template pool patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/automations.py')
+          text = path.read_text(encoding='utf-8')
+          marker = 'def _ai_followup_template_candidates('
+          if marker in text:
+              print('Template pool patch already present.')
+              raise SystemExit(0)
+
+          old = '''def _ai_followup_template_config(connection: ChannelConnection) -> tuple[str, str] | None:
+              raw = (connection.config_json or {}).get("ai_followup_template")
+              if not isinstance(raw, dict):
+                  return None
+              name = str(raw.get("name") or "").strip()
+              language_code = str(raw.get("language_code") or "ar").strip() or "ar"
+              if not name:
+                  return None
+              return name[:512], language_code[:32]
+          '''.replace('          ', '')
+
+          new = '''def _ai_followup_template_candidates(connection: ChannelConnection) -> list[tuple[str, str]]:
+              config = connection.config_json or {}
+              candidates: list[tuple[str, str]] = []
+
+              raw_pool = config.get("ai_followup_templates")
+              if isinstance(raw_pool, list):
+                  for raw in raw_pool:
+                      if not isinstance(raw, dict):
+                          continue
+                      name = str(raw.get("name") or "").strip()
+                      language_code = str(raw.get("language_code") or "ar").strip() or "ar"
+                      candidate = (name[:512], language_code[:32])
+                      if name and candidate not in candidates:
+                          candidates.append(candidate)
+
+              legacy = config.get("ai_followup_template")
+              if isinstance(legacy, dict):
+                  name = str(legacy.get("name") or "").strip()
+                  language_code = str(legacy.get("language_code") or "ar").strip() or "ar"
+                  candidate = (name[:512], language_code[:32])
+                  if name and candidate not in candidates:
+                      candidates.append(candidate)
+              return candidates
+
+
+          def _latest_ai_followup_template_name(
+              db: Session,
+              *,
+              workspace_id: UUID,
+              conversation_id: UUID,
+          ) -> str | None:
+              messages = db.scalars(
+                  select(Message)
+                  .where(
+                      Message.workspace_id == workspace_id,
+                      Message.conversation_id == conversation_id,
+                      Message.direction == "outbound",
+                      Message.message_type == "template",
+                  )
+                  .order_by(Message.created_at.desc())
+                  .limit(10)
+              )
+              for message in messages:
+                  metadata = message.metadata_json or {}
+                  if metadata.get("source") != "ai_followup":
+                      continue
+                  raw = metadata.get("whatsapp_template")
+                  if isinstance(raw, dict):
+                      name = str(raw.get("name") or "").strip()
+                      if name:
+                          return name
+              return None
+
+
+          def _select_ai_followup_template(
+              connection: ChannelConnection,
+              *,
+              task_id: UUID,
+              patient_id: UUID,
+              previous_template: str | None = None,
+          ) -> tuple[str, str] | None:
+              candidates = _ai_followup_template_candidates(connection)
+              if not candidates:
+                  return None
+              digest = hashlib.sha256(f"{patient_id}:{task_id}".encode()).digest()
+              index = int.from_bytes(digest[:8], "big") % len(candidates)
+              if (
+                  len(candidates) > 1
+                  and previous_template
+                  and candidates[index][0] == previous_template
+              ):
+                  index = (index + 1) % len(candidates)
+              return candidates[index]
+          '''.replace('          ', '')
+
+          if old not in text:
+              raise SystemExit('Expected single-template helper not found; refusing broad rewrite.')
+          text = text.replace(old, new, 1)
+
+          old_call = '''        template = _ai_followup_template_config(connection)
+          if template is None:
+          '''.replace('          ', '')
+          new_call = '''        previous_template = _latest_ai_followup_template_name(
+              db,
+              workspace_id=workspace_id,
+              conversation_id=conversation.id,
+          )
+          template = _select_ai_followup_template(
+              connection,
+              task_id=task.id,
+              patient_id=patient.id,
+              previous_template=previous_template,
+          )
+          if template is None:
+          '''.replace('          ', '')
+          if old_call not in text:
+              raise SystemExit('Expected follow-up template call not found; refusing broad rewrite.')
+          text = text.replace(old_call, new_call, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Add focused tests
+        run: |
+          cat > backend/tests/test_ai_followup_template_pool.py <<'PY'
+          from types import SimpleNamespace
+          from uuid import UUID
+
+          from app.services.automations import (
+              _ai_followup_template_candidates,
+              _select_ai_followup_template,
+          )
+
+
+          TASK_ID = UUID("38d2d461-73ce-4fab-87e6-c7cf25fefe56")
+          PATIENT_ID = UUID("9cac0792-37aa-4e4c-864f-c29ebc51d96e")
+
+
+          def connection(config: dict):
+              return SimpleNamespace(config_json=config)
+
+
+          def test_followup_template_pool_keeps_legacy_compatibility() -> None:
+              row = connection({"ai_followup_template": {"name": "legacy_ar", "language_code": "ar"}})
+              assert _ai_followup_template_candidates(row) == [("legacy_ar", "ar")]
+
+
+          def test_followup_template_pool_is_deduplicated_and_deterministic() -> None:
+              row = connection(
+                  {
+                      "ai_followup_templates": [
+                          {"name": "tia_followup_01_ar", "language_code": "ar"},
+                          {"name": "tia_followup_02_ar", "language_code": "ar"},
+                          {"name": "tia_followup_01_ar", "language_code": "ar"},
+                      ],
+                      "ai_followup_template": {"name": "tia_followup_03_ar", "language_code": "ar"},
+                  }
+              )
+              candidates = _ai_followup_template_candidates(row)
+              assert candidates == [
+                  ("tia_followup_01_ar", "ar"),
+                  ("tia_followup_02_ar", "ar"),
+                  ("tia_followup_03_ar", "ar"),
+              ]
+              first = _select_ai_followup_template(row, task_id=TASK_ID, patient_id=PATIENT_ID)
+              second = _select_ai_followup_template(row, task_id=TASK_ID, patient_id=PATIENT_ID)
+              assert first == second
+
+
+          def test_followup_template_pool_avoids_immediate_repeat_when_possible() -> None:
+              row = connection(
+                  {
+                      "ai_followup_templates": [
+                          {"name": "tia_followup_01_ar", "language_code": "ar"},
+                          {"name": "tia_followup_02_ar", "language_code": "ar"},
+                      ]
+                  }
+              )
+              selected = _select_ai_followup_template(row, task_id=TASK_ID, patient_id=PATIENT_ID)
+              assert selected is not None
+              rotated = _select_ai_followup_template(
+                  row,
+                  task_id=TASK_ID,
+                  patient_id=PATIENT_ID,
+                  previous_template=selected[0],
+              )
+              assert rotated is not None
+              assert rotated[0] != selected[0]
+          PY
+      - name: Validate patch
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          ruff check app/services/automations.py tests/test_ai_followup_template_pool.py
+          python -m pytest -q tests/test_ai_followup_template_pool.py
+      - name: Commit branch patch
+        run: |
+          if git diff --quiet && git diff --cached --quiet && [ -f backend/tests/test_ai_followup_template_pool.py ]; then
+            git add backend/tests/test_ai_followup_template_pool.py
+          else
+            git add backend/app/services/automations.py backend/tests/test_ai_followup_template_pool.py
+          fi
+          if git diff --cached --quiet; then
+            echo 'Nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Add deterministic WhatsApp follow-up template pool'
+          git push origin HEAD:${{ github.head_ref }}
