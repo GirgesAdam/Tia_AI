@@ -1,17 +1,17 @@
 import { CircleAlert, Clock3, Workflow } from "lucide-react";
 
+import { AutomationTimingForm } from "@/components/automation-timing-form";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import type { AutomationJob, AutomationOperationsOverview, AutomationRule } from "@/lib/types";
-import { cancelAutomationJob, retryAutomationJob, saveAutomationTiming, toggleAutomation } from "./actions";
+import { cancelAutomationJob, retryAutomationJob, toggleAutomation } from "./actions";
 
 const names: Record<string, string> = {
   booking_confirmation: "تأكيد الحجز",
@@ -88,7 +88,7 @@ export default async function AutomationsPage() {
     <>
       <PageHeader
         title="Automation"
-        description="فعّل فقط المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
+        description="فعّل المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
       />
 
       {warning && (
@@ -105,25 +105,9 @@ export default async function AutomationsPage() {
       )}
 
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-[var(--muted)]">القواعد المفعّلة</div>
-            <div className="mt-1 text-2xl font-black text-slate-950">{overview.enabled_rules}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-[var(--muted)]">تحتاج تدخلًا</div>
-            <div className="mt-1 text-2xl font-black text-slate-950">{overview.attention_count}</div>
-            <div className="mt-1 text-[11px] text-[var(--muted)]">تظهر التفاصيل فقط عند وجود مشكلة</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-[var(--muted)]">التنفيذ التالي</div>
-            <div className="mt-1 font-bold text-slate-900">{overview.next_job_at ? formatDateTime(overview.next_job_at) : "لا يوجد إجراء قريب"}</div>
-          </CardContent>
-        </Card>
+        <Card><CardContent className="p-4"><div className="text-xs font-semibold text-[var(--muted)]">القواعد المفعّلة</div><div className="mt-1 text-2xl font-black text-slate-950">{overview.enabled_rules}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs font-semibold text-[var(--muted)]">تحتاج تدخلًا</div><div className="mt-1 text-2xl font-black text-slate-950">{overview.attention_count}</div><div className="mt-1 text-[11px] text-[var(--muted)]">تظهر التفاصيل فقط عند وجود مشكلة</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs font-semibold text-[var(--muted)]">التنفيذ التالي</div><div className="mt-1 font-bold text-slate-900">{overview.next_job_at ? formatDateTime(overview.next_job_at) : "لا يوجد إجراء قريب"}</div></CardContent></Card>
       </div>
 
       <div className="mb-3">
@@ -145,56 +129,25 @@ export default async function AutomationsPage() {
                       <Badge tone={rule.enabled ? "green" : "gray"}>{rule.enabled ? "مفعّلة" : "متوقفة"}</Badge>
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{descriptions[rule.key] || "تنفذ إجراءً تلقائيًا عند تحقق شروط هذه القاعدة."}</p>
-                    <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                      <Clock3 size={13} /> واتساب
-                    </div>
+                    <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500"><Clock3 size={13} /> واتساب</div>
                   </div>
-
                   {ctx.workspace.role === "admin" && (
                     <form action={toggleAutomation}>
                       <input type="hidden" name="rule_id" value={rule.id} />
                       <input type="hidden" name="enabled" value={String(!rule.enabled)} />
-                      <Button size="sm" variant={rule.enabled ? "outline" : "default"}>
-                        {rule.enabled ? "إيقاف" : "تفعيل"}
-                      </Button>
+                      <Button size="sm" variant={rule.enabled ? "outline" : "default"}>{rule.enabled ? "إيقاف" : "تفعيل"}</Button>
                     </form>
                   )}
                 </div>
 
                 {ctx.workspace.role === "admin" && hasTiming && (
-                  <form action={saveAutomationTiming} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                    <input type="hidden" name="rule_id" value={rule.id} />
-                    <input type="hidden" name="trigger_kind" value={rule.trigger_kind} />
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                      <label className="min-w-0 flex-1 text-xs font-bold text-slate-700">
-                        {timingLabel(rule)}
-                        <Input
-                          name="timing_value"
-                          type="number"
-                          min="0"
-                          max="10080"
-                          step="1"
-                          defaultValue={timing.value}
-                          required
-                          className="mt-1"
-                        />
-                      </label>
-                      <label className="text-xs font-bold text-slate-700">
-                        الوحدة
-                        <select
-                          name="timing_unit"
-                          defaultValue={timing.unit}
-                          className="mt-1 h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
-                        >
-                          <option value="minutes">دقيقة</option>
-                          <option value="hours">ساعة</option>
-                          <option value="days">يوم</option>
-                        </select>
-                      </label>
-                      <Button type="submit" size="sm" variant="outline">حفظ التوقيت</Button>
-                    </div>
-                    <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">الحد الأقصى الحالي 7 أيام حتى تظل المتابعات قريبة من الحدث ومفهومة.</p>
-                  </form>
+                  <AutomationTimingForm
+                    ruleId={rule.id}
+                    triggerKind={rule.trigger_kind}
+                    label={timingLabel(rule)}
+                    initialValue={timing.value}
+                    initialUnit={timing.unit}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -216,27 +169,14 @@ export default async function AutomationsPage() {
               return (
                 <div key={job.id} className="flex flex-col gap-3 rounded-xl bg-amber-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <b className="text-sm text-slate-950">{jobKindLabel(job)}</b>
-                      <Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge>
-                    </div>
+                    <div className="flex flex-wrap items-center gap-2"><b className="text-sm text-slate-950">{jobKindLabel(job)}</b><Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge></div>
                     <p className="mt-1 text-xs font-semibold text-amber-800">{attention}</p>
                     <div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div>
                   </div>
                   {ctx.workspace.role === "admin" && (canRetry || canCancel) && (
                     <div className="flex gap-2">
-                      {canRetry && (
-                        <form action={retryAutomationJob}>
-                          <input type="hidden" name="job_id" value={job.id} />
-                          <Button size="sm" variant="outline">إعادة المحاولة</Button>
-                        </form>
-                      )}
-                      {canCancel && (
-                        <form action={cancelAutomationJob}>
-                          <input type="hidden" name="job_id" value={job.id} />
-                          <Button size="sm" variant="ghost">إلغاء</Button>
-                        </form>
-                      )}
+                      {canRetry && <form action={retryAutomationJob}><input type="hidden" name="job_id" value={job.id} /><Button size="sm" variant="outline">إعادة المحاولة</Button></form>}
+                      {canCancel && <form action={cancelAutomationJob}><input type="hidden" name="job_id" value={job.id} /><Button size="sm" variant="ghost">إلغاء</Button></form>}
                     </div>
                   )}
                 </div>
@@ -253,10 +193,7 @@ export default async function AutomationsPage() {
             <div className="divide-y divide-[var(--border)]">
               {recentJobs.map((job) => (
                 <div key={job.id} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <b className="text-sm">{jobKindLabel(job)}</b>
-                    <div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div>
-                  </div>
+                  <div><b className="text-sm">{jobKindLabel(job)}</b><div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div></div>
                   <Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge>
                 </div>
               ))}
