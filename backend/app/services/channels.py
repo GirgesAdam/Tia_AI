@@ -28,10 +28,6 @@ from app.schemas.agent import AgentChatResponse
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.schemas.crm import normalize_phone
 from app.services.agent_chat import run_agent_for_existing_inbound
-from app.services.whatsapp_interactions import (
-    process_whatsapp_booking_action,
-    whatsapp_booking_dispatch_metadata,
-)
 from app.services.conversation_ownership import (
     DISPATCH_SEND_LEASE,
     OWNER_HUMAN,
@@ -45,6 +41,10 @@ from app.services.crm_campaigns import (
     reconcile_campaign_dispatch,
 )
 from app.services.crm_tasks import reconcile_ai_followup_dispatch
+from app.services.whatsapp_interactions import (
+    process_whatsapp_booking_action,
+    whatsapp_booking_dispatch_metadata,
+)
 
 
 class ChannelError(ValueError):
