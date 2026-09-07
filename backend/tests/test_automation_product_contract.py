@@ -72,12 +72,16 @@ def test_admin_ui_keeps_optional_rules_and_timing_simple() -> None:
     actions = (root / "frontend" / "src" / "app" / "(dashboard)" / "automations" / "actions.ts").read_text(
         encoding="utf-8"
     )
+    component = (root / "frontend" / "src" / "components" / "automation-timing-form.tsx").read_text(
+        encoding="utf-8"
+    )
 
     assert '"cancellation_recovery"' in page
     assert '"lead_not_booked_followup"' in page
     assert '"no_show_followup"' not in page
-    assert "saveAutomationTiming" in page
-    assert 'name="timing_value"' in page
-    assert 'name="timing_unit"' in page
+    assert "AutomationTimingForm" in page
+    assert "saveAutomationTiming" in component
+    assert 'name="timing_value"' in component
+    assert 'name="timing_unit"' in component
     assert "saveAutomationTiming" in actions
     assert "timing_unit" in actions
