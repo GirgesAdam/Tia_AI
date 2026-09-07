@@ -23,6 +23,7 @@ jobs:
               ('            if not isinstance(raw, dict):\n  continue\n', '            if not isinstance(raw, dict):\n                continue\n'),
               ('            if name and candidate not in candidates:\n  candidates.append(candidate)\n', '            if name and candidate not in candidates:\n                candidates.append(candidate)\n'),
               ('            if name:\n  return name\n', '            if name:\n                return name\n'),
+              ('    return candidates[index]\ndef _dispatch_ai_followup_template(', '    return candidates[index]\n\n\ndef _dispatch_ai_followup_template('),
           ]
           for old, new in replacements:
               text = text.replace(old, new, 1)
@@ -32,5 +33,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'Fix follow-up template pool indentation'
+          git commit -m 'Polish follow-up template pool formatting'
           git push origin HEAD:${{ github.head_ref }}
