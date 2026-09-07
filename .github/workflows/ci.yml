@@ -49,6 +49,22 @@ jobs:
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
         run: test "$(python -m alembic heads)" = "0057_expense_type (head)"
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
       - name: Apply migrations on clean PostgreSQL
         run: python -m alembic upgrade head
       - run: python -m pytest -q
