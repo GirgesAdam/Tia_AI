@@ -211,5 +211,5 @@ def test_migration_preserves_original_patient_timestamp_and_head() -> None:
     assert 'revision: str = "0037_patient_history"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0036_sync_runtime"' in migration
     assert 'sa.Column("source_created_at", sa.DateTime(timezone=True), nullable=True)' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0057_expense_type"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"' in readiness
     assert len("0037_patient_history") <= 32

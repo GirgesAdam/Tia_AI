@@ -64,6 +64,7 @@ export async function createManualAppointment(
           source: "phone",
           status: "active",
           preferred_language: "ar",
+          whatsapp_opt_in: formData.get("whatsapp_opt_in") === "on",
         }),
       });
       patientId = patient.id;

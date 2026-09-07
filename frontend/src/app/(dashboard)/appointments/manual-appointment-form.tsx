@@ -38,16 +38,22 @@ export function ManualAppointmentForm({
       {mode === "existing" && <input type="hidden" name="patient_id" value={patientId} />}
 
       {mode === "new" ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label>
-            <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العميل</span>
-            <Input name="first_name" required maxLength={120} placeholder="الاسم" />
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label>
+              <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العميل</span>
+              <Input name="first_name" required maxLength={120} placeholder="الاسم" />
+            </label>
+            <label>
+              <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>
+              <Input name="phone" required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
+            </label>
+          </div>
+          <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-700">
+            <input name="whatsapp_opt_in" type="checkbox" className="mt-0.5" />
+            <span>العميل وافق بوضوح أن العيادة تبدأ معه رسائل واتساب مثل تذكير الموعد والمتابعة.</span>
           </label>
-          <label>
-            <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>
-            <Input name="phone" required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
-          </label>
-        </div>
+        </>
       ) : (
         <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800">
           العميل: {patientName || "عميل"}

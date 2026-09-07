@@ -126,6 +126,12 @@ This is transport safety for the existing CRM runtime; it is not a new admin tas
 automation feature. Do not store Meta tokens, API keys, or other secrets in the
 template-name configuration.
 
+## WhatsApp proactive-message safety
+
+Tia stores WhatsApp opt-in separately from marketing consent. A customer inbound WhatsApp message records the WhatsApp-contact opt-in, while staff can explicitly record or withdraw it from the patient profile. Proactive templates and automation sends are blocked when opt-in is missing.
+
+Provider account-level failures such as Meta error `131031` pause only that clinic's WhatsApp connection. The Automation page surfaces provider health and the last provider error. AI CRM follow-ups fall back to staff work instead of retrying indefinitely, and a paused connection must be explicitly re-enabled after the Meta-side issue is resolved. Production onboarding should connect each clinic to its own WABA/phone so a restriction on one clinic does not stop other tenants.
+
 ## WhatsApp outbox worker
 
 Import:

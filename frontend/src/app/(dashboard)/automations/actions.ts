@@ -48,7 +48,7 @@ export async function saveAutomationTiming(formData: FormData) {
 
 export async function saveAiFollowupTemplates(formData: FormData) {
   const connectionId = String(formData.get("connection_id") || "").trim();
-  const languageCode = String(formData.get("template_language") || "ar").trim() || "ar";
+  const languageCode = String(formData.get("template_language") || "ar_EG").trim() || "ar_EG";
   const names = Array.from(
     new Set(
       String(formData.get("template_names") || "")
@@ -80,6 +80,16 @@ export async function saveAiFollowupTemplates(formData: FormData) {
   await tiaRequest(`/channels/connections/${connectionId}`, {
     method: "PATCH",
     body: JSON.stringify({ config }),
+  });
+  revalidatePath("/automations");
+}
+
+export async function resumeWhatsappConnection(formData: FormData) {
+  const id = String(formData.get("connection_id") || "").trim();
+  if (!id) return;
+  await tiaRequest(`/channels/connections/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "active" }),
   });
   revalidatePath("/automations");
 }

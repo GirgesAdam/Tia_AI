@@ -20,6 +20,7 @@ import type {
 import {
   cancelAutomationJob,
   retryAutomationJob,
+  resumeWhatsappConnection,
   saveAiFollowupTemplates,
   toggleAutomation,
 } from "./actions";
@@ -99,6 +100,13 @@ function automationWarning(state: AutomationOperationsOverview["worker_state"]) 
   return null;
 }
 
+function providerHealth(connection: ChannelConnection) {
+  const raw = connection.config_json?.provider_health;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : null;
+}
+
 function followupTemplateEntries(connection: ChannelConnection) {
   const config = connection.config_json || {};
   const pool = config.ai_followup_templates;
@@ -136,8 +144,12 @@ export default async function AutomationsPage() {
   const recentJobs = jobs.slice(0, 12);
   const warning = automationWarning(overview.worker_state);
   const whatsappConnections = connections.filter(
-    (connection) => connection.channel === "whatsapp" && connection.status === "active",
+    (connection) => connection.channel === "whatsapp" && connection.status !== "disconnected",
   );
+  const whatsappAttention = whatsappConnections.filter((connection) => {
+    const health = providerHealth(connection);
+    return connection.status === "paused" || health?.state === "degraded" || health?.state === "disabled";
+  });
 
   return (
     <>
@@ -160,6 +172,32 @@ export default async function AutomationsPage() {
           </div>
         </div>
       )}
+
+      {whatsappAttention.map((connection) => {
+        const health = providerHealth(connection);
+        const error = typeof health?.current_error === "string" ? health.current_error : null;
+        const errorCode = health?.current_error_code == null ? null : String(health.current_error_code);
+        const lastDelivery = typeof health?.last_delivery_at === "string" ? health.last_delivery_at : null;
+        return (
+          <div key={connection.id} className="mb-4 flex items-start justify-between gap-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-950">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <b>{connection.display_name || "WhatsApp"}</b>
+                <Badge tone="red">{connection.status === "paused" ? "متوقف تلقائيًا" : "يحتاج مراجعة"}</Badge>
+              </div>
+              <p className="mt-2 leading-6">Tia أوقفت الإرسال التلقائي لهذا الاتصال لحماية العيادة من retries غير المفيدة.</p>
+              {error && <p className="mt-1 text-xs">آخر خطأ: {error}{errorCode ? ` · ${errorCode}` : ""}</p>}
+              {lastDelivery && <p className="mt-1 text-xs">آخر تسليم ناجح: {formatDateTime(lastDelivery)}</p>}
+            </div>
+            {ctx.workspace.role === "admin" && connection.status === "paused" && (
+              <form action={resumeWhatsappConnection}>
+                <input type="hidden" name="connection_id" value={connection.id} />
+                <Button type="submit" size="sm" variant="outline">إعادة التفعيل بعد حل مشكلة Meta</Button>
+              </form>
+            )}
+          </div>
+        );
+      })}
 
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <Card>
@@ -309,7 +347,7 @@ export default async function AutomationsPage() {
             {whatsappConnections.length ? (
               whatsappConnections.map((connection) => {
                 const templates = followupTemplateEntries(connection);
-                const language = templates[0]?.language_code || "ar";
+                const language = templates[0]?.language_code || "ar_EG";
                 return (
                   <form
                     key={connection.id}
@@ -342,7 +380,7 @@ export default async function AutomationsPage() {
               })
             ) : (
               <p className="rounded-xl bg-slate-50 p-3 text-xs text-[var(--muted)]">
-                لا يوجد اتصال واتساب نشط حاليًا. القواعد ستبقى آمنة ولن ترسل متابعة خارج نافذة الـ24 ساعة بدون route حقيقي وقالب معتمد.
+                لا يوجد اتصال واتساب متصل حاليًا. القواعد ستبقى آمنة ولن ترسل متابعة خارج نافذة الـ24 ساعة بدون route حقيقي وقالب معتمد.
               </p>
             )}
           </div>

@@ -247,15 +247,19 @@ def create_patient(
     db: Annotated[Session, Depends(get_db)],
 ) -> Patient:
     ensure_branch(db, access.workspace.id, payload.preferred_branch_id)
-    data = payload.model_dump(exclude={"phone", "marketing_consent"})
+    data = payload.model_dump(exclude={"phone", "marketing_consent", "whatsapp_opt_in"})
     patient = Patient(
         workspace_id=access.workspace.id,
         marketing_consent=payload.marketing_consent,
+        whatsapp_opt_in=payload.whatsapp_opt_in,
         **data,
     )
     apply_patient_contact_fields(patient, payload.phone)
     if payload.marketing_consent:
         patient.marketing_consent_at = datetime.now(UTC)
+    if payload.whatsapp_opt_in:
+        patient.whatsapp_opt_in_at = datetime.now(UTC)
+        patient.whatsapp_opt_in_source = "staff_recorded"
     db.add(patient)
     commit_or_conflict(db, "A patient with this phone already exists in this workspace.")
     db.refresh(patient)
@@ -349,7 +353,7 @@ def update_patient(
         )
     except ClinicIntegrationAuthorityError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    required_fields = {"first_name", "preferred_language", "source", "status", "marketing_consent"}
+    required_fields = {"first_name", "preferred_language", "source", "status", "marketing_consent", "whatsapp_opt_in"}
     if any(field in updates and updates[field] is None for field in required_fields):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -368,6 +372,14 @@ def update_patient(
             patient.marketing_consent_at = datetime.now(UTC)
         elif not new_consent:
             patient.marketing_consent_at = None
+    if "whatsapp_opt_in" in updates:
+        new_whatsapp_opt_in = updates["whatsapp_opt_in"]
+        if new_whatsapp_opt_in and not patient.whatsapp_opt_in:
+            patient.whatsapp_opt_in_at = datetime.now(UTC)
+            patient.whatsapp_opt_in_source = "staff_recorded"
+        elif not new_whatsapp_opt_in:
+            patient.whatsapp_opt_in_at = None
+            patient.whatsapp_opt_in_source = None
 
     for key, value in updates.items():
         setattr(patient, key, value)

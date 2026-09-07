@@ -1507,6 +1507,16 @@ def _execute_crm_followup_job(
         job.result_json = {"reason": "patient_not_active"}
         db.commit()
         return ExecutionResult(job=job, reason="patient_not_active")
+    if not patient.whatsapp_opt_in:
+        result = _handoff_followup_to_staff(
+            task=task,
+            job=job,
+            conversation=None,
+            reason="whatsapp_opt_in_required",
+            now=now,
+        )
+        db.commit()
+        return result
 
     route = _resolve_followup_route(db, task=task, now=now)
     if route is None:
@@ -2203,6 +2213,14 @@ def execute_job(
         return ExecutionResult(job=job, reason=job.result_json["reason"])
 
     conversation, connection = route
+    if connection.channel == "whatsapp" and not patient.whatsapp_opt_in:
+        job.status = "skipped"
+        job.completed_at = now
+        job.locked_at = None
+        job.result_json = {"reason": "whatsapp_opt_in_required"}
+        db.commit()
+        return ExecutionResult(job=job, reason="whatsapp_opt_in_required")
+
     display = _appointment_display_data(
         db,
         workspace=workspace,

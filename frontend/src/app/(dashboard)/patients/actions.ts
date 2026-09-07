@@ -25,6 +25,18 @@ export async function addPatientNote(formData: FormData) {
   revalidatePatient(patientId);
 }
 
+export async function setPatientWhatsappOptIn(formData: FormData) {
+  const patientId = String(formData.get("patient_id") || "").trim();
+  const whatsappOptIn = String(formData.get("whatsapp_opt_in") || "false") === "true";
+  if (!patientId) return;
+
+  await tiaRequest(`/crm/patients/${patientId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ whatsapp_opt_in: whatsappOptIn }),
+  });
+  revalidatePatient(patientId);
+}
+
 export async function createPatientTask(formData: FormData) {
   const patientId = String(formData.get("patient_id") || "");
   const title = String(formData.get("title") || "").trim();

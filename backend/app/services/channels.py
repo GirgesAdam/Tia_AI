@@ -55,6 +55,77 @@ class ChannelConflictError(ChannelError):
     pass
 
 
+META_CONNECTION_PAUSE_ERROR_CODES = frozenset({131031})
+
+
+def _meta_error_details(metadata: dict) -> tuple[int | None, str | None]:
+    raw_errors = metadata.get("errors") if isinstance(metadata, dict) else None
+    if not isinstance(raw_errors, list):
+        return None, None
+    for raw in raw_errors:
+        if not isinstance(raw, dict):
+            continue
+        raw_code = raw.get("code")
+        try:
+            code = int(raw_code) if raw_code is not None else None
+        except (TypeError, ValueError):
+            code = None
+        details = raw.get("title") or raw.get("message")
+        error_data = raw.get("error_data")
+        if not details and isinstance(error_data, dict):
+            details = error_data.get("details")
+        return code, str(details)[:2000] if details else None
+    return None, None
+
+
+def _provider_failure_is_permanent(error: str | None, metadata: dict) -> bool:
+    code, details = _meta_error_details(metadata)
+    text = " ".join(part for part in (error, details) if part).lower()
+    return code in META_CONNECTION_PAUSE_ERROR_CODES or "business account locked" in text
+
+
+def _record_connection_provider_health(
+    connection: ChannelConnection,
+    *,
+    provider_status: str,
+    error: str | None,
+    metadata: dict,
+    occurred_at: datetime | None = None,
+) -> bool:
+    now = occurred_at or datetime.now(UTC)
+    config = dict(connection.config_json or {})
+    raw_health = config.get("provider_health")
+    health = dict(raw_health) if isinstance(raw_health, dict) else {}
+    permanent = False
+
+    if provider_status in {"sent", "delivered", "read"}:
+        health["last_accepted_at"] = now.isoformat()
+        if provider_status in {"delivered", "read"}:
+            health["last_delivery_at"] = now.isoformat()
+        if connection.status == "active":
+            health["state"] = "healthy"
+            health["current_error"] = None
+            health["current_error_code"] = None
+            health.pop("action_required", None)
+    elif provider_status == "failed":
+        code, details = _meta_error_details(metadata)
+        failure = (error or details or "Provider reported message delivery failure.")[:2000]
+        permanent = _provider_failure_is_permanent(failure, metadata)
+        health["last_error_at"] = now.isoformat()
+        health["current_error"] = failure
+        health["current_error_code"] = code
+        if permanent:
+            connection.status = "paused"
+            health["state"] = "disabled"
+            health["action_required"] = "meta_account_review"
+        elif connection.status == "active":
+            health["state"] = "degraded"
+
+    config["provider_health"] = health
+    connection.config_json = config
+    return permanent
+
+
 @dataclass(frozen=True)
 class AcceptedInbound:
     event: ChannelInboundEvent
@@ -85,9 +156,9 @@ def get_connection_by_adapter_token(
     """
     Authenticate a channel adapter using the raw X-Channel-Token.
 
-    Only the SHA-256 hash is stored in PostgreSQL. Paused or disconnected
-    connections are intentionally rejected so adapters cannot ingest/process
-    traffic while a channel is disabled.
+    Only the SHA-256 hash is stored in PostgreSQL. Paused connections may
+    still authenticate so in-flight provider delivery callbacks can be recorded;
+    inbound processing and new outbox claims remain guarded by _require_active.
     """
     token = raw_token.strip() if isinstance(raw_token, str) else ""
     if not token:
@@ -96,7 +167,7 @@ def get_connection_by_adapter_token(
     return db.scalar(
         select(ChannelConnection).where(
             ChannelConnection.adapter_token_hash == hash_adapter_token(token),
-            ChannelConnection.status == "active",
+            ChannelConnection.status.in_(("active", "paused")),
         )
     )
 
@@ -314,6 +385,10 @@ def accept_normalized_inbound(
         connection=connection,
         payload=payload,
     )
+    if connection.channel == "whatsapp" and not patient.whatsapp_opt_in:
+        patient.whatsapp_opt_in = True
+        patient.whatsapp_opt_in_at = datetime.now(UTC)
+        patient.whatsapp_opt_in_source = "customer_inbound"
     conversation = _resolve_conversation(
         db,
         connection=connection,
@@ -629,6 +704,20 @@ def _fail_exhausted_dispatches(
             reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
 
 
+def _whatsapp_dispatch_requires_opt_in(
+    connection: ChannelConnection, message: Message
+) -> bool:
+    if connection.channel != "whatsapp":
+        return False
+    metadata = message.metadata_json or {}
+    source = str(metadata.get("source") or "")
+    return message.message_type == "template" or source in {
+        "automation_engine",
+        "ai_followup",
+        "crm_campaign",
+    }
+
+
 def _dispatch_is_claimable(
     dispatch: MessageDispatch,
     *,
@@ -734,6 +823,22 @@ def claim_dispatches(
             dispatch.status = "failed"
             dispatch.last_error = "Outbound message no longer exists."
             continue
+
+        if _whatsapp_dispatch_requires_opt_in(connection, message):
+            patient = db.get(Patient, conversation.patient_id)
+            if patient is None or not patient.whatsapp_opt_in:
+                _mark_dispatch_failed(
+                    dispatch,
+                    message,
+                    error="WhatsApp opt-in is required before proactive messaging.",
+                )
+                dispatch.metadata_json = {
+                    **(dispatch.metadata_json or {}),
+                    "policy_block": "whatsapp_opt_in_required",
+                }
+                reconcile_ai_followup_dispatch(db, dispatch=dispatch, message=message)
+                reconcile_campaign_dispatch(db, dispatch=dispatch, message=message)
+                continue
 
         # Only one provider send may be in flight per conversation. A later
         # dispatch waits for the earlier result instead of racing WhatsApp order.
@@ -948,6 +1053,14 @@ def record_provider_status(
         .with_for_update()
     )
 
+    _record_connection_provider_health(
+        connection,
+        provider_status=provider_status,
+        error=error,
+        metadata=metadata,
+        occurred_at=occurred_at,
+    )
+
     if dispatch is not None:
         message = db.get(Message, dispatch.message_id)
         if message is None:
@@ -1020,6 +1133,13 @@ def record_dispatch_result(
 
     dispatch.metadata_json = {**(dispatch.metadata_json or {}), **metadata}
     dispatch.locked_at = None
+    permanent_provider_failure = _record_connection_provider_health(
+        connection,
+        provider_status=result_status,
+        error=error,
+        metadata=metadata,
+        occurred_at=now,
+    )
 
     if result_status in {"sent", "delivered", "read"}:
         apply_provider_delivery_status(
@@ -1033,7 +1153,11 @@ def record_dispatch_result(
     elif result_status == "failed":
         failure = (error or "Provider dispatch failed.")[:2000]
         dispatch.last_error = failure
-        if retry_after_seconds and _dispatch_has_retry_budget(dispatch):
+        if (
+            retry_after_seconds
+            and _dispatch_has_retry_budget(dispatch)
+            and not permanent_provider_failure
+        ):
             dispatch.status = "queued"
             dispatch.next_attempt_at = now + timedelta(seconds=retry_after_seconds)
             message.delivery_status = "queued"
