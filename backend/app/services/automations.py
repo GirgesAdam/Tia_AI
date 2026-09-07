@@ -1216,16 +1216,70 @@ def _whatsapp_customer_service_window_open(
     return inbound.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=24)
 
 
-def _ai_followup_template_config(connection: ChannelConnection) -> tuple[str, str] | None:
-    raw = (connection.config_json or {}).get("ai_followup_template")
-    if not isinstance(raw, dict):
-        return None
-    name = str(raw.get("name") or "").strip()
-    language_code = str(raw.get("language_code") or "ar").strip() or "ar"
-    if not name:
-        return None
-    return name[:512], language_code[:32]
+def _ai_followup_template_candidates(connection: ChannelConnection) -> list[tuple[str, str]]:
+    config = connection.config_json or {}
+    candidates: list[tuple[str, str]] = []
+    raw_pool = config.get("ai_followup_templates")
+    if isinstance(raw_pool, list):
+        for raw in raw_pool:
+            if not isinstance(raw, dict):
+  continue
+            name = str(raw.get("name") or "").strip()
+            language = str(raw.get("language_code") or "ar").strip() or "ar"
+            candidate = (name[:512], language[:32])
+            if name and candidate not in candidates:
+  candidates.append(candidate)
+    legacy = config.get("ai_followup_template")
+    if isinstance(legacy, dict):
+        name = str(legacy.get("name") or "").strip()
+        language = str(legacy.get("language_code") or "ar").strip() or "ar"
+        candidate = (name[:512], language[:32])
+        if name and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
+
+def _latest_ai_followup_template_name(
+    db: Session, *, workspace_id: UUID, conversation_id: UUID
+) -> str | None:
+    messages = db.scalars(
+        select(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.conversation_id == conversation_id,
+            Message.direction == "outbound",
+            Message.message_type == "template",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(10)
+    )
+    for message in messages:
+        metadata = message.metadata_json or {}
+        if metadata.get("source") != "ai_followup":
+            continue
+        raw = metadata.get("whatsapp_template")
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or "").strip()
+            if name:
+  return name
+    return None
+
+
+def _select_ai_followup_template(
+    connection: ChannelConnection,
+    *,
+    task_id: UUID,
+    patient_id: UUID,
+    previous_template: str | None = None,
+) -> tuple[str, str] | None:
+    candidates = _ai_followup_template_candidates(connection)
+    if not candidates:
+        return None
+    digest = hashlib.sha256(f"{patient_id}:{task_id}".encode()).digest()
+    index = int.from_bytes(digest[:8], "big") % len(candidates)
+    if len(candidates) > 1 and previous_template and candidates[index][0] == previous_template:
+        index = (index + 1) % len(candidates)
+    return candidates[index]
 
 def _dispatch_ai_followup_template(
     db: Session,
@@ -1484,7 +1538,15 @@ def _execute_crm_followup_job(
     if not _whatsapp_customer_service_window_open(
         latest_patient_inbound_at=latest_inbound_at, now=now
     ):
-        template = _ai_followup_template_config(connection)
+        previous_template = _latest_ai_followup_template_name(
+            db, workspace_id=workspace_id, conversation_id=conversation.id
+        )
+        template = _select_ai_followup_template(
+            connection,
+            task_id=task.id,
+            patient_id=patient.id,
+            previous_template=previous_template,
+        )
         if template is None:
             result = _handoff_followup_to_staff(
                 task=task,
