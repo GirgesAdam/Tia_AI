@@ -1,0 +1,53 @@
+name: Patch current migration head tests
+on:
+  pull_request:
+    paths:
+      - .github/workflows/patch-current-head-tests.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Update stale current-head assertions and docs phrase
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          tests_root = Path('backend/tests')
+          old_const = 'assert EXPECTED_MIGRATION_HEAD == "0056_merge_automation_expenses"'
+          new_const = 'assert EXPECTED_MIGRATION_HEAD == "0057_expense_type"'
+          old_source = 'assert \'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"\' in readiness'
+          new_source = 'assert \'EXPECTED_MIGRATION_HEAD = "0057_expense_type"\' in readiness'
+
+          changed_files = 0
+          replacements = 0
+          for path in tests_root.glob('test_*.py'):
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace(old_const, new_const).replace(old_source, new_source)
+              if updated != text:
+                  replacements += text.count(old_const) + text.count(old_source)
+                  path.write_text(updated, encoding='utf-8')
+                  changed_files += 1
+
+          setup_path = Path('n8n/AUTOMATIONS_SETUP.md')
+          setup = setup_path.read_text(encoding='utf-8')
+          old_phrase = 'falls back\nto a human CRM task rather than attempting a provider-rejected send.'
+          new_phrase = 'falls back to a human CRM task rather than attempting a provider-rejected send.'
+          if old_phrase in setup:
+              setup_path.write_text(setup.replace(old_phrase, new_phrase, 1), encoding='utf-8')
+              changed_files += 1
+
+          print(f'Updated {replacements} stale readiness assertions across {changed_files} files.')
+          if replacements < 17:
+              raise SystemExit(f'Expected at least 17 stale readiness assertions, found {replacements}.')
+          PY
+          git add backend/tests n8n/AUTOMATIONS_SETUP.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update tests for expense type migration head'
+          git push origin HEAD:${{ github.head_ref }}
