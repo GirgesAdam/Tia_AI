@@ -975,7 +975,7 @@ def _prefetch_read_tools(
     branch_id = text_value("branch_id")
     doctor_id = text_value("doctor_id")
     appointment_id = text_value("appointment_id")
-    if not appointment_id and flow is not None and flow.flow_type == "appointment_reschedule":
+    if not appointment_id and flow is not None and getattr(flow, "flow_type", None) == "appointment_reschedule":
         appointment_reference = text_value("appointment_reference")
         if appointment_reference:
             try:

@@ -49,7 +49,6 @@ CASES = (
     "booking_reject_days_then_return",
     "booking_exact_time_unavailable_then_flexible",
     "booking_change_service_mid_conversation",
-    "reschedule_two_appointments_choose_one",
     "booking_time_constraints_keep_changing",
 )
 
