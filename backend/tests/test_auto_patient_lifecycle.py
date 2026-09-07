@@ -64,12 +64,14 @@ def test_new_workspaces_materialize_rules_using_definition_default() -> None:
 
 def test_appointment_templates_use_rule_specific_db_owned_parameters() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
-    assert "def _appointment_template_body_parameters(rule_key: str, data: dict)" in service
+    assert "def _appointment_template_body_parameters(" in service
+    assert "template_name: str | None = None" in service
     assert 'rule_key == "appointment_reminder_6h"' in service
     assert 'return [patient_name, service_name, time]' in service
+    assert 'return [patient_name, service_name, time, branch_name]' in service
     assert 'rule_key == "post_visit_followup"' in service
     assert 'return [patient_name, service_name, date]' in service
-    assert '"body_parameters": _appointment_template_body_parameters(rule.key, display)' in service
+    assert 'template_name=template_name' in service
 
 
 def test_lifecycle_message_copy_matches_configurable_product_spec() -> None:
