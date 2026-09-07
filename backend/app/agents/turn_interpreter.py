@@ -327,7 +327,9 @@ def _interpreter_system_prompt(
         "clear the stale exact time and encode only the new broad bound. When the customer chooses one exact "
         "clock time from a presented availability window AND explicitly asks to book it, include "
         "appointment_creation and use select_option with selection_time=HH:MM; do not ask for another "
-        "confirmation and do not keep an older rejected exact time.\n\n"
+        "confirmation and do not keep an older rejected exact time. This remains true even when the persisted "
+        "booking flow currently lists availability_discovery only; the latest explicit booking command owns "
+        "the capability for that turn.\n\n"
         "PACKAGES: distinguish one appointment from a package/course of multiple sessions by meaning, "
         "not wording. package_intent=none for an ordinary single appointment; inquire for package info or "
         "comparison; purchase when the customer wants to obtain/start a multi-session package; use_existing "
@@ -449,7 +451,7 @@ def _normalize_active_booking_decision(
 
     exact_time = decision.selection_time or decision.entity_hints.requested_start_time
     capabilities = {str(item) for item in decision.capabilities}
-    if (
+    exact_choice_is_in_snapshot = bool(
         not service_changed
         and exact_time
         and "appointment_creation" in capabilities
@@ -459,13 +461,36 @@ def _normalize_active_booking_decision(
             doctor_id=decision.entity_hints.doctor_id,
             requested_date=decision.entity_hints.requested_date,
         )
-    ):
+    )
+    if exact_choice_is_in_snapshot:
         return decision.model_copy(
             update={
                 "action": "select_option",
                 "clear_entity_fields": clear_fields,
                 "selection_index": None,
                 "selection_time": str(exact_time).strip()[:5],
+            }
+        )
+
+    if (
+        not service_changed
+        and exact_time
+        and "appointment_creation" in capabilities
+        and decision.action == "select_option"
+    ):
+        # The customer authorized one exact booking time, but the current snapshot
+        # is empty or no longer represents that choice. Re-run exact availability
+        # through the normal modify/read path in this same turn; do not inspect text
+        # and do not guess from an older snapshot.
+        for field in ("not_before_time", "not_after_time"):
+            if field not in clear_fields:
+                clear_fields.append(field)
+        return decision.model_copy(
+            update={
+                "action": "modify",
+                "clear_entity_fields": clear_fields,
+                "selection_index": None,
+                "selection_time": None,
             }
         )
 

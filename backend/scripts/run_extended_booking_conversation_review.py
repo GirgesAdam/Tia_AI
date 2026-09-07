@@ -358,7 +358,7 @@ def _setup_case(
             patient,
             [
                 "عايز أغير معادي.",
-                f"قصدي الميعاد اللي يوم {target_local.date().isoformat()}.",
+                f"قصدي الميعاد اللي يوم {target_local.date().isoformat()} الساعة {target_local.strftime('%H:%M')}.",
                 f"شوفلي بدل منه يوم {first_day.isoformat()}.",
                 "لا اليوم ده مش مناسب برضه.",
                 f"طب يوم {second_day.isoformat()}؟",
