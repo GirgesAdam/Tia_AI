@@ -83,16 +83,31 @@ class SemanticEntityHints(BaseModel):
         extra="forbid", json_schema_extra=_require_all_schema_fields
     )
 
-    service_query: str | None
+    service_query: str | None = Field(
+        default=None,
+        description=(
+            "Service wording intended by the latest customer turn. If the latest turn replaces "
+            "a service from persisted workflow state, reflect the new service wording here and "
+            "never copy the old service wording merely because it is stored in the flow."
+        ),
+    )
     branch_query: str | None
     doctor_query: str | None
     service_id: str | None = Field(
         default=None,
-        description="Canonical service UUID from the supplied clinic catalog.",
+        description=(
+            "Canonical service UUID from the supplied clinic catalog for the service intended by "
+            "the latest customer turn. If the latest wording plausibly matches multiple service "
+            "variants, leave this null and return those UUIDs in service_candidate_ids instead of "
+            "reusing a persisted older service UUID."
+        ),
     )
     service_candidate_ids: list[str] = Field(
         default_factory=list,
-        description="All plausible service UUIDs when no single service is selected.",
+        description=(
+            "All plausible service UUIDs for the latest customer turn when no single service is "
+            "selected; use this for ambiguous service variants rather than keeping an older service."
+        ),
     )
     branch_id: str | None = Field(
         default=None,
@@ -116,8 +131,9 @@ class SemanticEntityHints(BaseModel):
     requested_start_time: str | None = Field(
         default=None,
         description=(
-            "Exact local appointment start HH:MM when the customer requests one "
-            "precise start time, otherwise null."
+            "Exact local appointment start HH:MM intended by the latest customer turn. Preserve an "
+            "explicit exact clock time from the latest turn even when older exact/before/after time "
+            "constraints exist in workflow state; otherwise null."
         ),
     )
     not_before_time: str | None = Field(
