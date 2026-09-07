@@ -10,9 +10,9 @@ from uuid import uuid4
 
 import pytest
 
+import app.services.meta_whatsapp_transport as meta_transport
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.schemas.channel import DispatchClaimItem
-import app.services.meta_whatsapp_transport as meta_transport
 from app.services.meta_whatsapp_transport import (
     MetaWhatsAppTransportError,
     _readiness_refresh_due,
