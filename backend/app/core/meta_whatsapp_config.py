@@ -11,7 +11,9 @@ class MetaWhatsAppSettings(BaseSettings):
     meta_app_secret: str | None = None
     meta_whatsapp_embedded_signup_config_id: str | None = None
     meta_graph_api_version: str | None = None
+    meta_webhook_verify_token: str | None = None
     channel_credential_encryption_key: str | None = None
+    channel_transport_worker_token: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -25,7 +27,9 @@ class MetaWhatsAppSettings(BaseSettings):
         "meta_app_secret",
         "meta_whatsapp_embedded_signup_config_id",
         "meta_graph_api_version",
+        "meta_webhook_verify_token",
         "channel_credential_encryption_key",
+        "channel_transport_worker_token",
         mode="before",
     )
     @classmethod
