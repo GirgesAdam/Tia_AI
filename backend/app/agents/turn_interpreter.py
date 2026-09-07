@@ -345,6 +345,11 @@ def _interpreter_system_prompt(
         "health-based treatment recommendation. A catalog flag saying a service requires medical review does "
         "not by itself make a price, availability, booking, reschedule, or cancellation request medical; keep "
         "those operational unless the customer's actual question asks for clinical judgment.\n\n"
+        "APPOINTMENT CONFIRMATION: use appointment_confirmation only when the customer wants a pending "
+        "appointment's status changed to confirmed. A phrase like 'confirm/tell me that...' asking whether a "
+        "booking has certain service/date/doctor details is a read-only fact question, not confirmation write "
+        "authorization; use the appropriate appointment/customer read capability instead. "
+
         "CUSTOMER DATA: past visits/services/payments for the current customer use customer_history. "
         "A simple read-only question about whether the current customer's appointment is paid, how it was paid, "
         "or how much was paid is customer_history and must not set payment risk by itself. Payment disputes, "
