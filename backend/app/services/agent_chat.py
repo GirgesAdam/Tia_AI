@@ -1924,6 +1924,14 @@ def _structured_flow_write(
 ) -> tuple[str, str] | None:
     if turn.action != "select_option":
         return None
+    # Persisted flow capability is workflow context, not fresh write consent.
+    # A booking write requires the latest semantic turn itself to authorize
+    # appointment creation. This prevents choosing a service/variant from being
+    # mistaken for choosing a time from an older availability snapshot.
+    if flow.flow_type == "booking" and "appointment_creation" not in {
+        str(capability) for capability in turn.capabilities
+    }:
+        return None
     selected_doctor_id = getattr(turn.entity_hints, "doctor_id", None) or (
         (flow.entity_state or {}).get("doctor_id")
     )
