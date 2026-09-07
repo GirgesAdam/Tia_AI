@@ -1,6 +1,7 @@
 name: Extended Booking Conversation Review
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - test/daily-clinic-conversation-review
