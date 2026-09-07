@@ -1,0 +1,36 @@
+name: Apply Confirmation Question Clarification
+
+on:
+  push:
+    branches:
+      - test/daily-clinic-conversation-review
+    paths:
+      - .github/scripts/patch-confirmation-question-once.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/daily-clinic-conversation-review
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply clarification
+        run: python .github/scripts/patch-confirmation-question-once.py
+      - name: Remove one-shot patcher
+        run: |
+          rm .github/scripts/patch-confirmation-question-once.py
+          rm .github/workflows/patch-confirmation-question-once.yml
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/agents/turn_interpreter.py .github/scripts/patch-confirmation-question-once.py .github/workflows/patch-confirmation-question-once.yml
+          git commit -m "Clarify appointment confirmation fact questions"
+          git push origin HEAD:test/daily-clinic-conversation-review
