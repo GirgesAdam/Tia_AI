@@ -12,6 +12,7 @@ from app.models.channel_connection import ChannelConnection
 from app.models.channel_delivery_event import ChannelDeliveryEvent
 from app.models.channel_identity import ChannelIdentity
 from app.models.channel_inbound_event import ChannelInboundEvent
+from app.models.channel_provider_credential import ChannelProviderCredential
 from app.models.clinic_data_issue import ClinicDataIssue
 from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
 from app.models.clinic_integration_sync import (
@@ -71,6 +72,7 @@ __all__ = [
     "ChannelDeliveryEvent",
     "ChannelIdentity",
     "ChannelInboundEvent",
+    "ChannelProviderCredential",
     "ClinicDataIssue",
     "ClinicIntegration",
     "ClinicIntegrationEntityLink",
