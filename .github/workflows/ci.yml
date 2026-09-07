@@ -11,6 +11,20 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -35,6 +49,8 @@ jobs:
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
         run: test "$(python -m alembic heads)" = "0057_expense_type (head)"
+      - name: Apply migrations on clean PostgreSQL
+        run: python -m alembic upgrade head
       - run: python -m pytest -q
   frontend:
     runs-on: ubuntu-latest
