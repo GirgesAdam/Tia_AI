@@ -1,0 +1,116 @@
+name: Patch Native WhatsApp Backend
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+          fetch-depth: 0
+      - name: Apply backend wiring
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path_str, old, new, count=1):
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'Expected text not found in {path_str}: {old[:120]!r}')
+              path.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          replace(
+              'backend/app/services/meta_whatsapp_onboarding.py',
+              '            _clean_optional(settings.meta_graph_api_version),\n            provider_credential_encryption_ready(),',
+              '            _clean_optional(settings.meta_graph_api_version),\n            _clean_optional(settings.meta_webhook_verify_token),\n            _clean_optional(settings.channel_transport_worker_token),\n            provider_credential_encryption_ready(),',
+          )
+          replace(
+              'backend/app/services/meta_whatsapp_onboarding.py',
+              '    elif provider_health_state in {"disabled", "degraded"} or provider_error_code == "131031":\n        admin_action = "resolve_meta_restriction"\n        admin_message = (\n            "Meta أوقفت أو قيّدت حساب واتساب. افتح Business Support Home ونفّذ المراجعة المطلوبة."\n        )\n    elif not transport_ready:\n        system_message = "Tia بتجهز مسار الإرسال الآمن لهذا الرقم."\n    elif not templates_ready:\n        system_message = "Tia بتتحقق من القوالب المطلوبة للـAutomations المفعلة."',
+              '    elif str(health.get("action_required") or "") == "reconnect_meta":\n        admin_action = "connect_meta"\n        admin_message = "جلسة Meta انتهت أو بيانات الربط لم تعد صالحة. أعد ربط واتساب من نفس الزر؛ لن تحتاج لإدخال IDs أو Tokens."\n    elif provider_health_state == "disabled" or provider_error_code == "131031":\n        admin_action = "resolve_meta_restriction"\n        admin_message = (\n            "Meta أوقفت أو قيّدت حساب واتساب. افتح Business Support Home ونفّذ المراجعة المطلوبة."\n        )\n    elif not transport_ready:\n        system_message = "Tia بتجهز مسار الإرسال الآمن لهذا الرقم."\n    elif not templates_ready:\n        rejected_templates = [\n            name for name in required_templates if statuses.get(name, "").lower() == "rejected"\n        ]\n        if rejected_templates:\n            admin_action = "wait_for_template_review"\n            admin_message = "Meta رفضت قالب رسالة مطلوب للـAutomation. Tia ستعرض القالب المطلوب تعديله أو إعادة مراجعته."\n        else:\n            system_message = "Tia بتتحقق من القوالب المطلوبة للـAutomations المفعلة."',
+          )
+          replace(
+              'backend/app/services/meta_whatsapp_onboarding.py',
+              '    db.commit()\n    db.refresh(connection)\n    return build_whatsapp_setup_state(db, workspace_id=workspace_id)\n',
+              '    db.commit()\n    db.refresh(connection)\n    if provider_error is None:\n        from app.services.meta_whatsapp_transport import refresh_meta_connection_readiness\n\n        refresh_meta_connection_readiness(db, connection)\n    return build_whatsapp_setup_state(db, workspace_id=workspace_id)\n',
+          )
+          replace(
+              'backend/app/services/channels.py',
+              'def claim_dispatches(\n    db: Session,\n    *,\n    connection: ChannelConnection,\n    limit: int,\n) -> list[DispatchClaimItem]:',
+              'def claim_dispatches(\n    db: Session,\n    *,\n    connection: ChannelConnection,\n    limit: int,\n    allow_templates: bool = True,\n) -> list[DispatchClaimItem]:',
+          )
+          replace(
+              'backend/app/services/channels.py',
+              '        if message is None:\n            dispatch.status = "failed"\n            dispatch.last_error = "Outbound message no longer exists."\n            continue\n\n        if _whatsapp_dispatch_requires_opt_in(connection, message):',
+              '        if message is None:\n            dispatch.status = "failed"\n            dispatch.last_error = "Outbound message no longer exists."\n            continue\n\n        if not allow_templates and message.message_type == "template":\n            continue\n\n        if _whatsapp_dispatch_requires_opt_in(connection, message):',
+          )
+          replace(
+              'backend/app/services/meta_whatsapp_transport.py',
+              '        ready_connections += 1\n        for item in claim_dispatches(db, connection=connection, limit=limit_per_connection):',
+              '        ready_connections += 1\n        required_templates = _required_template_names(db, connection)\n        raw_statuses = (connection.config_json or {}).get("template_statuses")\n        template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}\n        allow_templates = not required_templates or all(\n            str(template_statuses.get(name) or "").lower() == "approved"\n            for name in required_templates\n        )\n        for item in claim_dispatches(\n            db,\n            connection=connection,\n            limit=limit_per_connection,\n            allow_templates=allow_templates,\n        ):',
+          )
+          replace(
+              'backend/alembic/versions/0059_channel_provider_credentials.py',
+              'revision: str = "0059_channel_provider_credentials"',
+              'revision: str = "0059_channel_credentials"',
+          )
+          replace(
+              'backend/app/services/operational_readiness.py',
+              'EXPECTED_MIGRATION_HEAD = "0059_channel_provider_credentials"',
+              'EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"',
+          )
+
+          for path in Path('backend/tests').glob('test*.py'):
+              text = path.read_text(encoding='utf-8')
+              text = text.replace(
+                  'EXPECTED_MIGRATION_HEAD == "0058_whatsapp_safety"',
+                  'EXPECTED_MIGRATION_HEAD == "0059_channel_credentials"',
+              )
+              text = text.replace(
+                  '\'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"\' in readiness',
+                  '\'EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"\' in readiness',
+              )
+              text = text.replace(
+                  'EXPECTED_MIGRATION_HEAD == "0059_channel_provider_credentials"',
+                  'EXPECTED_MIGRATION_HEAD == "0059_channel_credentials"',
+              )
+              text = text.replace(
+                  '\'EXPECTED_MIGRATION_HEAD = "0059_channel_provider_credentials"\' in readiness',
+                  '\'EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"\' in readiness',
+              )
+              path.write_text(text, encoding='utf-8')
+
+          test_path = Path('backend/tests/test_whatsapp_embedded_signup_onboarding.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          anchor = '    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v25.0")\n'
+          if 'meta_webhook_verify_token' not in test_text:
+              test_text = test_text.replace(
+                  anchor,
+                  anchor
+                  + '    monkeypatch.setattr(meta_whatsapp_settings, "meta_webhook_verify_token", "verify-secret")\n'
+                  + '    monkeypatch.setattr(meta_whatsapp_settings, "channel_transport_worker_token", "worker-secret")\n',
+                  1,
+              )
+          test_path.write_text(test_text, encoding='utf-8')
+          PY
+      - name: Static checks
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          ruff check app tests alembic
+          python -m compileall -q app alembic tests
+          test "$(python -m alembic heads)" = "0059_channel_credentials (head)"
+      - name: Commit backend patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend
+          git commit -m "feat: finish native WhatsApp transport wiring"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
