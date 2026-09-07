@@ -16,6 +16,7 @@ SemanticDomain = Literal[
 ]
 SemanticCapability = Literal[
     "service_information",
+    "clinic_information",
     "pricing",
     "branch_discovery",
     "doctor_discovery",

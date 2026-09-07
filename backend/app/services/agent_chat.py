@@ -42,11 +42,13 @@ from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
 from app.core.config import settings
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
+from app.models.branch import Branch
 from app.models.conversation import Conversation
 from app.models.conversation_flow_state import ConversationFlowState
 from app.models.message import Message
 from app.models.patient import Patient
 from app.models.patient_package import PatientPackage
+from app.models.working_hours import BranchWorkingHour
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest, AgentChatResponse
 from app.services.conversation_flows import (
@@ -460,6 +462,69 @@ def _merge_flow_entity_state(
     return merged
 
 
+def _clinic_public_info_payload(
+    *,
+    db: Session,
+    workspace: Workspace,
+) -> dict[str, object]:
+    """Verified customer-facing facts for the one clinic location."""
+    if workspace.primary_branch_id is None:
+        return {"ok": False, "reason": "primary_location_missing"}
+    location = db.scalar(
+        select(Branch).where(
+            Branch.workspace_id == workspace.id,
+            Branch.id == workspace.primary_branch_id,
+            Branch.is_active.is_(True),
+        )
+    )
+    if location is None:
+        return {"ok": False, "reason": "primary_location_missing"}
+
+    address_parts: list[str] = []
+    seen: set[str] = set()
+    for raw in (location.address_line1, location.address_line2, location.city, location.state):
+        value = str(raw or "").strip()
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            address_parts.append(value)
+
+    rows = list(
+        db.scalars(
+            select(BranchWorkingHour)
+            .where(
+                BranchWorkingHour.workspace_id == workspace.id,
+                BranchWorkingHour.branch_id == location.id,
+            )
+            .order_by(
+                BranchWorkingHour.weekday,
+                BranchWorkingHour.start_time,
+                BranchWorkingHour.end_time,
+            )
+        )
+    )
+    weekday_names = (
+        "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"
+    )
+    grouped: dict[int, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(int(row.weekday), []).append(
+            f"{row.start_time.strftime('%H:%M')}–{row.end_time.strftime('%H:%M')}"
+        )
+    working_hours = [
+        {"day": weekday_names[weekday], "periods": periods}
+        for weekday, periods in sorted(grouped.items())
+        if 0 <= weekday <= 6
+    ]
+    return {
+        "ok": True,
+        "address": "، ".join(address_parts) or None,
+        "phone": location.phone,
+        "email": location.email,
+        "working_hours": working_hours,
+    }
+
+
 def _customer_package_payload(
     *,
     db: Session,
@@ -696,7 +761,11 @@ def _verified_package_intent_reply(
             current = usable[0]
             remaining = int(current.get("sessions_remaining") or 0)
             name = str(current.get("name") or "الباكدج الحالية")
-            return f"عندك {name} لنفس الخدمة شغالة حالياً وفاضلك {remaining} جلسات. استخدم الجلسات المتبقية فيها الأول قبل بدء باكدج جديدة لنفس الخدمة."
+            return (
+                f"عندك {name} لنفس الخدمة شغالة حالياً وفاضلك {remaining} جلسات، "
+                "وينفع يبقى عندك باكدج تانية كمان. "
+                "بس تفاصيل أي باكدج جديدة من عدد الجلسات والسعر لازم تكون مسجلة كعرض موثوق في إعدادات العيادة."
+            )
         return (
             "فهمت إنك عايز باكدج، مش جلسة واحدة، فمش هاحجز جلسة عادية بدلها. "
             "تفاصيل الباكدجات الجديدة من عدد الجلسات والسعر لازم تكون مسجلة كعرض باكدج "
@@ -719,6 +788,24 @@ def _verified_package_intent_reply(
     )
 
 
+def _preferred_usable_package(packages: list[object]) -> object | None:
+    """Pick one usable package deterministically: earliest expiry, then oldest purchase."""
+    if not packages:
+        return None
+
+    def key(item: object) -> tuple[object, ...]:
+        expires_at = getattr(item, "expires_at", None)
+        purchased_at = getattr(item, "purchased_at", None)
+        return (
+            expires_at is None,
+            str(expires_at or "9999-12-31"),
+            str(purchased_at or ""),
+            str(getattr(item, "id", "")),
+        )
+
+    return min(packages, key=key)
+
+
 def _booking_package_requirement_reply(
     *, db: Session, workspace_id: UUID, patient_id: UUID, service_id: UUID | None,
     start_at: datetime | None, package_intent: str,
@@ -731,12 +818,13 @@ def _booking_package_requirement_reply(
         db, workspace_id=workspace_id, patient_id=patient_id, service_id=service_id,
         usable_only=True, on_date=start_at.date() if start_at is not None else None,
     )
-    if len(usable) != 1:
+    selected = _preferred_usable_package(list(usable))
+    if selected is None:
         return "مش لاقي باكدج نشطة لنفس الخدمة أقدر أحجز منها، فمش هحوّل الطلب تلقائياً لحجز عادي مدفوع."
     if start_at is not None:
         try:
             validate_package_for_booking(
-                db, workspace_id=workspace_id, package_id=usable[0].id, patient_id=patient_id,
+                db, workspace_id=workspace_id, package_id=selected.id, patient_id=patient_id,
                 service_id=service_id, appointment_start_at=start_at, sessions=1,
             )
         except ValueError:
@@ -745,11 +833,33 @@ def _booking_package_requirement_reply(
 
 
 def _package_booking_success_reply(appointment_payload: dict[str, object], package_result: dict[str, object] | None) -> str:
-    reply = format_booking_success(appointment_payload)
     if not package_result:
-        return reply
+        return format_booking_success(appointment_payload)
+
+    date_text = ""
+    time_text = ""
+    try:
+        start = datetime.fromisoformat(str(appointment_payload.get("start_local")))
+        end = datetime.fromisoformat(str(appointment_payload.get("end_local")))
+        date_text = start.strftime("%d/%m/%Y")
+        time_text = f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')}"
+    except (TypeError, ValueError):
+        pass
+    status = str(appointment_payload.get("status") or "")
+    opening = "تمام، الحجز اتأكد" if status == "confirmed" else "تمام، الحجز اتسجل ومستني التأكيد"
+    details = [
+        appointment_payload.get("service"),
+        appointment_payload.get("doctor"),
+        " ".join(part for part in (date_text, time_text) if part) or None,
+    ]
+    suffix = "، ".join(str(item) for item in details if item)
     remaining = int(package_result.get("sessions_remaining") or 0)
-    return f"{reply} الحجز اتحسب من الباكدج، وفاضلك {remaining} جلسات فيها."
+    package_name = str(package_result.get("package_name") or "الباكدج").strip()
+    return (
+        opening
+        + (f": {suffix}." if suffix else ".")
+        + f" الجلسة اتحسبت من {package_name}، وفاضلك {remaining} جلسات فيها، ومفيش مبلغ جديد مطلوب للجلسة دي."
+    )
 
 
 def _apply_single_matching_package_to_booking(
@@ -761,9 +871,9 @@ def _apply_single_matching_package_to_booking(
 ) -> dict[str, object] | None:
     """Reserve one session from the customer's only usable same-service package.
 
-    Package selection is deterministic domain logic, not an LLM decision: each
-    package belongs to one service, and the product allows at most one usable
-    package for that patient/service at a time.
+    Package selection is deterministic domain logic, not an LLM decision.
+    When several same-service packages are usable, consume the one that expires
+    first (then the oldest purchase) so entitlement is not wasted.
     """
     appointment_id = _uuid_from_metadata(
         appointment_payload.get("appointment_id") or appointment_payload.get("id")
@@ -789,13 +899,14 @@ def _apply_single_matching_package_to_booking(
         usable_only=True,
         on_date=appointment.start_at.date(),
     )
-    if len(usable) != 1:
+    selected = _preferred_usable_package(list(usable))
+    if selected is None:
         return None
 
     package = validate_package_for_booking(
         db,
         workspace_id=workspace_id,
-        package_id=usable[0].id,
+        package_id=selected.id,
         patient_id=patient_id,
         service_id=appointment.service_id,
         appointment_start_at=appointment.start_at,
@@ -1143,6 +1254,13 @@ def _prefetch_read_tools(
     if "customer_history" in capabilities:
         run("get_customer_history", {"recent_limit": 20})
 
+    if "clinic_information" in capabilities:
+        results["clinic_public_info"] = _clinic_public_info_payload(
+            db=tool_context.db,
+            workspace=tool_context.workspace,
+        )
+        prefetched.add("clinic_public_info")
+
     if capabilities.intersection({"package_information", "package_refund_quote"}):
         package_payload = _customer_package_payload(
             db=tool_context.db,
@@ -1173,6 +1291,7 @@ _DIRECT_COMPOSITE_CAPABILITIES: dict[str, frozenset[str]] = {
 _GROUNDED_RESPONSE_CAPABILITIES = frozenset(
     {
         "service_information",
+        "clinic_information",
         "pricing",
         "branch_discovery",
         "doctor_discovery",
@@ -1188,6 +1307,7 @@ _GROUNDED_RESPONSE_CAPABILITIES = frozenset(
 )
 _GROUNDED_RESPONSE_EVIDENCE: dict[str, frozenset[str]] = {
     "service_information": frozenset({"clinic_catalog"}),
+    "clinic_information": frozenset({"clinic_public_info"}),
     "pricing": frozenset({"clinic_catalog"}),
     "branch_discovery": frozenset({"clinic_catalog"}),
     "doctor_discovery": frozenset({"clinic_catalog"}),
@@ -1499,6 +1619,7 @@ def _persistent_flow_capabilities(
 _TURN_LOCAL_READ_CAPABILITIES = frozenset(
     {
         "service_information",
+        "clinic_information",
         "pricing",
         "branch_discovery",
         "doctor_discovery",
