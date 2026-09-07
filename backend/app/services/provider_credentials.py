@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.core.config import settings
+from app.core.meta_whatsapp_config import meta_whatsapp_settings
 
 
 class ProviderCredentialError(RuntimeError):
@@ -10,12 +10,12 @@ class ProviderCredentialError(RuntimeError):
 
 
 def provider_credential_encryption_ready() -> bool:
-    value = settings.channel_credential_encryption_key
+    value = meta_whatsapp_settings.channel_credential_encryption_key
     return bool(value and value.strip())
 
 
 def _fernet() -> Fernet:
-    raw = settings.channel_credential_encryption_key
+    raw = meta_whatsapp_settings.channel_credential_encryption_key
     if not raw or not raw.strip():
         raise ProviderCredentialError(
             "Provider credential encryption is not configured on the Tia platform."
