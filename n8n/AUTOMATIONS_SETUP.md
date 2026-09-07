@@ -172,8 +172,7 @@ for the patient/task and avoids immediately repeating the last AI follow-up
 template when another approved option is available. This rotation does not add
 an LLM call.
 
-If no approved template is configured, the existing CRM follow-up path falls back
-to a human CRM task rather than attempting a provider-rejected send.
+If no approved template is configured, the existing CRM follow-up path falls back to a human CRM task rather than attempting a provider-rejected send.
 
 This is transport safety for the existing CRM runtime; it is not a new admin task
 automation feature. Do not store Meta tokens, API keys, or other secrets in the

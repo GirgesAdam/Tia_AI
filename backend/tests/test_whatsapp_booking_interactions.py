@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -114,21 +113,56 @@ def test_completed_booking_uses_grounded_language_layer_with_deterministic_fallb
     assert "_package_booking_success_reply(appointment, package_result)" in source
 
 
-def test_n8n_whatsapp_workflows_support_structured_reply_buttons() -> None:
-    root = Path(__file__).resolve().parents[2] / "n8n" / "workflows"
-    inbound = json.loads((root / "tia_whatsapp_inbound_status.json").read_text(encoding="utf-8"))
-    outbox = json.loads((root / "tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8"))
+def test_native_whatsapp_transport_supports_structured_reply_buttons() -> None:
+    from app.schemas.channel import DispatchClaimItem
+    from app.services.meta_whatsapp_transport import _normalize_inbound, build_meta_message_payload
 
-    inbound_nodes = {node["name"]: node for node in inbound["nodes"]}
-    normalize_code = inbound_nodes["Normalize WhatsApp Event"]["parameters"]["jsCode"]
-    assert "button_reply" in normalize_code
-    assert "interactive_reply" in normalize_code
+    inbound = _normalize_inbound(
+        {
+            "metadata": {"phone_number_id": "123456789"},
+            "messages": [
+                {
+                    "id": "wamid.button",
+                    "from": "201001112223",
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "button_reply",
+                        "button_reply": {
+                            "id": "tia.booking.confirm:abc",
+                            "title": "تأكيد الحجز",
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    assert len(inbound) == 1
+    assert inbound[0].metadata["interactive_reply"] == {
+        "type": "button_reply",
+        "id": "tia.booking.confirm:abc",
+        "title": "تأكيد الحجز",
+    }
 
-    outbox_nodes = {node["name"]: node for node in outbox["nodes"]}
-    assert "Interactive Message?" in outbox_nodes
-    interactive = outbox_nodes["WhatsApp Send Interactive"]
-    assert interactive["type"] == "n8n-nodes-base.httpRequest"
-    assert interactive["parameters"]["authentication"] == "predefinedCredentialType"
-    assert interactive["parameters"]["nodeCredentialType"] == "whatsAppApi"
-    assert "graph.facebook.com" in interactive["parameters"]["url"]
-    assert "whatsapp_interactive" in interactive["parameters"]["jsonBody"]
+    outbound = DispatchClaimItem(
+        dispatch_id=uuid4(),
+        message_id=uuid4(),
+        channel="whatsapp",
+        provider="meta_cloud",
+        external_account_id="123456789",
+        external_user_id="201001112223",
+        external_conversation_id="201001112223",
+        message_type="text",
+        content="تم الحجز",
+        metadata={
+            "whatsapp_interactive": {
+                "type": "button",
+                "buttons": [
+                    {"id": "tia.booking.confirm:abc", "title": "تأكيد الحجز"}
+                ],
+            }
+        },
+        attempt=1,
+    )
+    payload = build_meta_message_payload(outbound)
+    assert payload["type"] == "interactive"
+    assert payload["interactive"]["action"]["buttons"][0]["reply"]["id"] == "tia.booking.confirm:abc"

@@ -58,10 +58,14 @@ def test_rule_timing_is_data_not_a_separate_rule_per_delay() -> None:
 def test_automation_runtime_is_whatsapp_only() -> None:
     root = Path(__file__).resolve().parents[2]
     workflows = root / "n8n" / "workflows"
+    route = (root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")
+
     assert not (workflows / "tia_gmail_outbox_worker.json").exists()
     assert (workflows / "tia_whatsapp_outbox_worker.json").exists()
-    assert (workflows / "tia_whatsapp_inbound_status.json").exists()
+    assert not (workflows / "tia_whatsapp_inbound_status.json").exists()
     assert (workflows / "tia_automation_scheduler.json").exists()
+    assert '@router.post("/webhook"' in route
+    assert '@router.post("/transport/tick")' in route
 
 
 def test_admin_ui_keeps_optional_rules_and_timing_simple() -> None:
