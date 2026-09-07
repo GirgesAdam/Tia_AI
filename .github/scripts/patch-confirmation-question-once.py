@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# One-shot helper; removed by the workflow after applying the prompt clarification.
 path = Path("backend/app/agents/turn_interpreter.py")
 text = path.read_text(encoding="utf-8")
 old = '''        "CUSTOMER DATA: past visits/services/payments for the current customer use customer_history. "\n'''
