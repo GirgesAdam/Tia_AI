@@ -6,7 +6,6 @@ on:
       - test/daily-clinic-conversation-review
     paths:
       - backend/scripts/apply_extended_flow_followup_fix_v2.py
-      - .github/workflows/apply-extended-flow-followup-fix-v2.yml
 
 permissions:
   contents: write
@@ -27,15 +26,16 @@ jobs:
       - name: Validate syntax
         run: |
           python -m py_compile backend/app/agents/turn_interpreter.py
+          python -m py_compile backend/app/services/agent_chat.py
           python -m py_compile backend/scripts/run_extended_booking_conversation_review.py
       - name: Commit product fix
         run: |
           git config user.name "Girges Ezzat"
           git config user.email "girgesadam1@gmail.com"
-          git add backend/app/agents/turn_interpreter.py backend/scripts/run_extended_booking_conversation_review.py
+          git add backend/app/agents/turn_interpreter.py backend/app/services/agent_chat.py backend/scripts/run_extended_booking_conversation_review.py
           if git diff --cached --quiet; then
             echo "No product changes to commit"
             exit 0
           fi
-          git commit -m "Fix structured booking follow-up state handling"
+          git commit -m "Fix ambiguous booking and reschedule reference state"
           git push origin HEAD:test/daily-clinic-conversation-review
