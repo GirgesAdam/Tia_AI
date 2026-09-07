@@ -1,0 +1,37 @@
+name: Apply Latest Turn Authority Patch
+
+on:
+  push:
+    branches:
+      - test/daily-clinic-conversation-review
+    paths:
+      - backend/scripts/patch_latest_turn_authority_once.py
+      - .github/workflows/patch-latest-turn-authority-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/daily-clinic-conversation-review
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python backend/scripts/patch_latest_turn_authority_once.py
+      - name: Validate syntax
+        run: python -m py_compile backend/app/agents/turn_interpreter.py
+      - name: Remove one-shot tooling
+        run: rm backend/scripts/patch_latest_turn_authority_once.py .github/workflows/patch-latest-turn-authority-once.yml
+      - name: Commit product change
+        run: |
+          git config user.name "Girges Ezzat"
+          git config user.email "girgesadam1@gmail.com"
+          git add backend/app/agents/turn_interpreter.py backend/scripts/patch_latest_turn_authority_once.py .github/workflows/patch-latest-turn-authority-once.yml
+          git commit -m "Clarify latest-turn authority for active flows"
+          git push origin HEAD:test/daily-clinic-conversation-review
