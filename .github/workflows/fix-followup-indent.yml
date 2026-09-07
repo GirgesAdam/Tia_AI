@@ -1,0 +1,30 @@
+name: Fix follow-up pool indentation
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fix-followup-indent.yml
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Fix and commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/services/automations.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('            if not isinstance(raw, dict):\n  continue\n', '            if not isinstance(raw, dict):\n                continue\n', 1)
+          text = text.replace('            if name and candidate not in candidates:\n  candidates.append(candidate)\n', '            if name and candidate not in candidates:\n                candidates.append(candidate)\n', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git add backend/app/services/automations.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix follow-up template pool indentation'
+          git push origin HEAD:${{ github.head_ref }}
