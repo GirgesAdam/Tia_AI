@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { MeResponse } from "@/lib/types";
 
-const API_URL = (process.env.TIA_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const RAW_API_URL = process.env.TIA_API_URL || "http://127.0.0.1:8000";
+const API_URL = (RAW_API_URL.startsWith("//") ? `https:${RAW_API_URL}` : RAW_API_URL).replace(/\/$/, "");
 
 export class TiaApiError extends Error {
   constructor(
