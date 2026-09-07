@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -15,13 +16,23 @@ from app.services.conversation_flows import get_active_flow
 from scripts.run_extended_booking_conversation_review import _setup_case
 from scripts.run_daily_clinic_conversation_review import _send
 
-# Final verification remains limited to the four booking conversations under review.
 CASES = (
     "booking_exact_time_unavailable_then_flexible",
     "booking_change_service_mid_conversation",
     "reschedule_two_appointments_choose_one",
     "booking_time_constraints_keep_changing",
 )
+
+
+def _selected_cases() -> tuple[str, ...]:
+    raw = os.getenv("BOOKING_DIAGNOSTIC_CASES", "").strip()
+    if not raw:
+        return CASES
+    requested = tuple(item.strip() for item in raw.split(",") if item.strip())
+    unknown = [item for item in requested if item not in CASES]
+    if unknown:
+        raise RuntimeError(f"Unknown booking diagnostic case(s): {', '.join(unknown)}")
+    return requested
 
 
 def _compact_flow(flow) -> dict | None:
@@ -110,11 +121,12 @@ def _run_case(engine, slug: str, name: str) -> dict:
 def main() -> int:
     if str(settings.environment or "").strip().lower() == "production":
         raise SystemExit("Refusing to run booking diagnostic in production.")
+    selected_cases = _selected_cases()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     try:
         results = []
-        for idx, name in enumerate(CASES, start=1):
-            print(f"[{idx}/{len(CASES)}] {name}", flush=True)
+        for idx, name in enumerate(selected_cases, start=1):
+            print(f"[{idx}/{len(selected_cases)}] {name}", flush=True)
             results.append(_run_case(engine, "tia", name))
     finally:
         engine.dispose()
