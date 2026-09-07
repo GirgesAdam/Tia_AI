@@ -92,11 +92,11 @@ by the selected template. Current variable contracts are:
 The reminder copy must stay timing-neutral because the admin controls when it is
 sent. Do not hardcode "6 hours" or any other delay inside the approved template.
 The current single-location experience also omits branch and appointment-date placeholders;
-the reminder says "today" and sends only the appointment time.
+the reminder sends only the appointment time and stays valid if the admin changes the lead time.
 
 Recommended natural Arabic copy:
 
-- `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} النهارده الساعة {{3}}. مستنيينك 💛`
+- `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} الساعة {{3}}. مستنيينك 💛`
 - `tia_post_visit_01`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟`
 
 The post-visit intent is intentionally one concise message: check how the visit

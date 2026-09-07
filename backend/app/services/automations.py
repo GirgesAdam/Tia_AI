@@ -833,7 +833,7 @@ def _fallback_text(rule_key: str, data: dict) -> str:
     if rule_key == "appointment_reminder_6h":
         return (
             f"أهلًا {data['patient_name']} 👋 بفكرك إن عندك جلسة {data['service_name']} "
-            f"النهارده الساعة {data['time']}. مستنيينك 💛"
+            f"الساعة {data['time']}. مستنيينك 💛"
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.

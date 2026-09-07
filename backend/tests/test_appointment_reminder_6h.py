@@ -82,7 +82,7 @@ def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_is_merged()
     assert "{data['date']}" not in reminder
     assert "{data['branch_name']}" not in reminder
     assert "{data['time']}" in reminder
-    assert "النهارده" in reminder
+    assert "النهارده" not in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
     assert "تحجزي الجلسة الجاية" in post_visit
     assert "تقييمك للجلسة" in post_visit

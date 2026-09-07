@@ -27,6 +27,12 @@ def test_reminder_template_has_no_fixed_delay_date_or_branch_parameter() -> None
     )
     assert params == ["سارة", "إزالة الشعر", "15:00"]
 
+    source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")
+    reminder_copy = source.split('if rule_key == "appointment_reminder_6h":', 1)[1].split("# Legacy rules", 1)[0]
+    assert "6 ساعات" not in reminder_copy
+    assert "النهارده" not in reminder_copy
+    assert "branch_name" not in reminder_copy
+
 
 def test_post_visit_template_keeps_name_service_and_session_date() -> None:
     params = _appointment_template_body_parameters(
