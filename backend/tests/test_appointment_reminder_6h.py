@@ -68,7 +68,7 @@ def test_historical_migration_disabled_old_reminders_and_materialized_6h_key() -
     assert "tia_appointment_reminder_6h_ar" in migration
 
 
-def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_is_merged() -> None:
+def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_matches_meta() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
 
     reminder = service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split(
@@ -83,9 +83,10 @@ def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_is_merged()
     assert "{data['branch_name']}" not in reminder
     assert "{data['time']}" in reminder
     assert "النهارده" not in reminder
+    assert "إن عندك جلسة" in reminder
+    assert "مستنيينك" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
-    assert "تحجزي الجلسة الجاية" in post_visit
-    assert "تقييمك للجلسة" in post_visit
+    assert "كل حاجة تمام؟" in post_visit
 
 
 def test_automation_ui_exposes_configurable_reminder_timing() -> None:
@@ -121,6 +122,7 @@ def test_setup_documents_timing_neutral_template_contract() -> None:
     assert "{{3}}" in reminder_line
     assert "{{4}}" not in reminder_line and "{{5}}" not in reminder_line
     assert "فاضل" not in reminder_line
+    assert "النهارده" not in reminder_line
 
     post_visit_line = next(
         line for line in setup.splitlines()
@@ -128,5 +130,4 @@ def test_setup_documents_timing_neutral_template_contract() -> None:
     )
     assert "{{1}}" in post_visit_line and "{{2}}" in post_visit_line and "{{3}}" in post_visit_line
     assert "{{4}}" not in post_visit_line and "{{5}}" not in post_visit_line
-    assert "تحجزي الجلسة الجاية" in post_visit_line
-    assert "تقييمك للجلسة" in post_visit_line
+    assert "كل حاجة تمام؟" in post_visit_line
