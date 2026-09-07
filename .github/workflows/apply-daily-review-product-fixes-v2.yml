@@ -1,0 +1,44 @@
+name: Apply Daily Review Product Fixes V2
+
+on:
+  push:
+    branches:
+      - test/daily-clinic-conversation-review
+    paths:
+      - backend/scripts/repair_daily_review_patcher.py
+      - .github/workflows/apply-daily-review-product-fixes-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/daily-clinic-conversation-review
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Repair patcher
+        run: python backend/scripts/repair_daily_review_patcher.py
+      - name: Apply exact product fixes
+        run: python backend/scripts/apply_daily_review_product_fixes.py
+      - name: Validate
+        run: |
+          python -m compileall -q backend/app
+          git diff --check
+      - name: Commit product fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app
+          if git diff --cached --quiet; then
+            echo "No product-code changes to commit."
+            exit 0
+          fi
+          git commit -m "Fix daily agent review findings and allow multiple packages"
+          git push origin HEAD:test/daily-clinic-conversation-review
