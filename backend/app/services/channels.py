@@ -28,6 +28,10 @@ from app.schemas.agent import AgentChatResponse
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.schemas.crm import normalize_phone
 from app.services.agent_chat import run_agent_for_existing_inbound
+from app.services.whatsapp_interactions import (
+    process_whatsapp_booking_action,
+    whatsapp_booking_dispatch_metadata,
+)
 from app.services.conversation_ownership import (
     DISPATCH_SEND_LEASE,
     OWNER_HUMAN,
@@ -510,13 +514,25 @@ def process_inbound_event(
         if patient is None or workspace is None:
             raise ChannelError("Inbound event references missing workspace CRM data.")
 
-        agent_response = run_agent_for_existing_inbound(
-            db=db,
-            workspace=workspace,
-            patient=patient,
-            conversation=conversation,
-            inbound=inbound,
+        agent_response = (
+            process_whatsapp_booking_action(
+                db,
+                workspace=workspace,
+                patient=patient,
+                conversation=conversation,
+                inbound=inbound,
+            )
+            if connection.channel == "whatsapp"
+            else None
         )
+        if agent_response is None:
+            agent_response = run_agent_for_existing_inbound(
+                db=db,
+                workspace=workspace,
+                patient=patient,
+                conversation=conversation,
+                inbound=inbound,
+            )
 
         dispatch = None
         if agent_response.outbound_message_id is not None:
@@ -798,7 +814,11 @@ def claim_dispatches(
                 ),
                 message_type=message.message_type,
                 content=message.content,
-                metadata=message.metadata_json or {},
+                metadata=(
+                    whatsapp_booking_dispatch_metadata(db, message=message)
+                    if connection.channel == "whatsapp"
+                    else (message.metadata_json or {})
+                ),
                 attempt=dispatch.attempts,
             )
         )
