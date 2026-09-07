@@ -33,8 +33,8 @@ jobs:
 
           replace(
               'backend/app/models/__init__.py',
-              'from app.models.channel_connection import ChannelConnection\n',
-              'from app.models.channel_connection import ChannelConnection\nfrom app.models.channel_provider_credential import ChannelProviderCredential\n',
+              'from app.models.channel_inbound_event import ChannelInboundEvent\n',
+              'from app.models.channel_inbound_event import ChannelInboundEvent\nfrom app.models.channel_provider_credential import ChannelProviderCredential\n',
           )
           replace(
               'backend/app/models/__init__.py',
