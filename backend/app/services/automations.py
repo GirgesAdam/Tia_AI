@@ -1261,7 +1261,7 @@ def _latest_ai_followup_template_name(
         if isinstance(raw, dict):
             name = str(raw.get("name") or "").strip()
             if name:
-  return name
+                return name
     return None
 
 
