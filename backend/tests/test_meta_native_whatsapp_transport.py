@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -12,6 +14,7 @@ from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.schemas.channel import DispatchClaimItem
 from app.services.meta_whatsapp_transport import (
     MetaWhatsAppTransportError,
+    _readiness_refresh_due,
     build_meta_message_payload,
     verify_meta_webhook_challenge,
     verify_meta_webhook_signature,
@@ -61,6 +64,89 @@ def test_meta_webhook_challenge_uses_platform_verify_token(
     assert verify_meta_webhook_challenge("subscribe", "verify-me") is True
     assert verify_meta_webhook_challenge("subscribe", "wrong") is False
     assert verify_meta_webhook_challenge("unsubscribe", "verify-me") is False
+
+
+def _connection_for_refresh(*, checked_at: datetime, template_status: str = "approved", ready: bool = True, status: str = "active"):
+    return SimpleNamespace(
+        status=status,
+        config_json={
+            "transport_ready": ready,
+            "template_statuses": {"tia_reminder_01": template_status},
+            "provider_health": {"last_checked_at": checked_at.isoformat()},
+        },
+    )
+
+
+def test_meta_readiness_refresh_is_throttled_when_healthy() -> None:
+    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)
+    connection = _connection_for_refresh(checked_at=checked_at)
+
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(minutes=14),
+    ) is False
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(minutes=15),
+    ) is True
+
+
+def test_meta_readiness_refresh_is_faster_while_template_is_pending() -> None:
+    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)
+    connection = _connection_for_refresh(
+        checked_at=checked_at,
+        template_status="pending",
+    )
+
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(minutes=1),
+    ) is False
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(minutes=2),
+    ) is True
+
+
+def test_missing_template_uses_pending_refresh_interval_not_every_tick() -> None:
+    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)
+    connection = _connection_for_refresh(checked_at=checked_at)
+    connection.config_json["template_statuses"] = {}
+
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(seconds=5),
+    ) is False
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=["tia_reminder_01"],
+        now=checked_at + timedelta(minutes=2),
+    ) is True
+
+
+def test_unready_connection_uses_fast_refresh_without_five_second_polling() -> None:
+    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)
+    connection = _connection_for_refresh(
+        checked_at=checked_at,
+        ready=False,
+        status="paused",
+    )
+
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=[],
+        now=checked_at + timedelta(seconds=5),
+    ) is False
+    assert _readiness_refresh_due(
+        connection,
+        required_templates=[],
+        now=checked_at + timedelta(minutes=2),
+    ) is True
 
 
 def test_native_transport_builds_text_message() -> None:

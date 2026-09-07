@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -34,6 +34,8 @@ class MetaWhatsAppTransportError(RuntimeError):
 
 _SUPPORTED_STATUSES = frozenset({"sent", "delivered", "read", "failed"})
 _MAX_INBOUND_PROCESS_ATTEMPTS = 3
+_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=15)
+_PENDING_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=2)
 
 
 def _clean(value: str | None) -> str | None:
@@ -119,6 +121,58 @@ def _required_template_names(db: Session, connection: ChannelConnection) -> list
         )
     )
     return sorted({str(rule.template_name) for rule in rows if rule.template_name})
+
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _readiness_refresh_due(
+    connection: ChannelConnection,
+    *,
+    required_templates: list[str],
+    now: datetime | None = None,
+) -> bool:
+    """Throttle Meta metadata calls without slowing message delivery.
+
+    Healthy connections refresh provider/template metadata every 15 minutes.
+    Connections waiting on a template or otherwise not ready refresh every 2 minutes.
+    The transport tick itself may still run every few seconds for inbound/outbound work.
+    """
+    current = now or datetime.now(UTC)
+    config = connection.config_json or {}
+    raw_health = config.get("provider_health")
+    health = raw_health if isinstance(raw_health, dict) else {}
+    last_checked = _parse_utc_timestamp(health.get("last_checked_at"))
+    if last_checked is None:
+        return True
+
+    raw_statuses = config.get("template_statuses")
+    template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
+    waiting_for_template = any(
+        str(template_statuses.get(name) or "").lower()
+        not in {"approved", "rejected", "disabled"}
+        for name in required_templates
+    )
+    needs_fast_refresh = (
+        connection.status != "active"
+        or not bool(config.get("transport_ready"))
+        or waiting_for_template
+    )
+    interval = (
+        _PENDING_PROVIDER_REFRESH_INTERVAL
+        if needs_fast_refresh
+        else _PROVIDER_REFRESH_INTERVAL
+    )
+    return current - last_checked >= interval
 
 
 def _fetch_phone_info(token: str, phone_number_id: str) -> dict[str, Any]:
@@ -641,8 +695,19 @@ def run_meta_transport_tick(
     inbound_failed = 0
     ready_connections = 0
 
+    provider_refreshes = 0
+
     for connection in connections:
-        ready = refresh_meta_connection_readiness(db, connection)
+        required_templates = _required_template_names(db, connection)
+        if _readiness_refresh_due(
+            connection,
+            required_templates=required_templates,
+        ):
+            ready = refresh_meta_connection_readiness(db, connection)
+            provider_refreshes += 1
+        else:
+            ready = bool((connection.config_json or {}).get("transport_ready"))
+
         processed, failed = _process_pending_inbound(
             db, connection, limit=limit_per_connection
         )
@@ -655,7 +720,6 @@ def run_meta_transport_tick(
         if not token or error:
             continue
         ready_connections += 1
-        required_templates = _required_template_names(db, connection)
         raw_statuses = (connection.config_json or {}).get("template_statuses")
         template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
         allow_templates = not required_templates or all(
@@ -676,6 +740,7 @@ def run_meta_transport_tick(
     return {
         "connections_checked": len(connections),
         "connections_ready": ready_connections,
+        "provider_refreshes": provider_refreshes,
         "inbound_processed": inbound_processed,
         "inbound_failed": inbound_failed,
         "sent": sent,
