@@ -53,6 +53,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run targeted diagnostic
+        # Single conversation only: service change during booking.
         run: python -m scripts.run_booking_followup_diagnostic
       - name: Upload diagnostic
         if: always()
