@@ -33,6 +33,13 @@ If only explicit test rules/workers exist:
 
 This keeps Production strict without making regression residue a false blocker.
 
+## WhatsApp transport staging
+
+The current WhatsApp architecture keeps scheduling/provider state in Tia and
+uses per-clinic Meta credentials encrypted at rest. Native Meta transport
+staging must run from an isolated service/branch and test recipient; it must not
+reuse or migrate a clinic production number merely to validate delivery.
+
 ## Current staging residue pattern
 
 Jobs such as:
