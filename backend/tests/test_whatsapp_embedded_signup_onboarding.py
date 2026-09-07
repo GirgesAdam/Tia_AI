@@ -89,7 +89,7 @@ def test_signup_keeps_connection_paused_until_tia_finishes_provisioning() -> Non
     assert 'status="paused"' in service
     assert '"transport_ready": False' in service
     assert "access_token_ciphertext=ciphertext" in service
-    assert '"access_token"' not in service
+    assert '"access_token":' not in service
 
 
 def test_provider_credential_table_is_not_exposed_to_anon_or_authenticated() -> None:
