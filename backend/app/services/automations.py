@@ -1223,12 +1223,12 @@ def _ai_followup_template_candidates(connection: ChannelConnection) -> list[tupl
     if isinstance(raw_pool, list):
         for raw in raw_pool:
             if not isinstance(raw, dict):
-  continue
+                continue
             name = str(raw.get("name") or "").strip()
             language = str(raw.get("language_code") or "ar").strip() or "ar"
             candidate = (name[:512], language[:32])
             if name and candidate not in candidates:
-  candidates.append(candidate)
+                candidates.append(candidate)
     legacy = config.get("ai_followup_template")
     if isinstance(legacy, dict):
         name = str(legacy.get("name") or "").strip()
