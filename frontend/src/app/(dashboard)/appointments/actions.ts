@@ -44,9 +44,10 @@ function cairoLocalToIso(value: string) {
 }
 
 export async function createManualAppointment(
-  _previous: ManualAppointmentState,
+  previous: ManualAppointmentState,
   formData: FormData,
 ): Promise<ManualAppointmentState> {
+  void previous;
   try {
     const mode = String(formData.get("customer_mode") || "existing");
     let patientId = String(formData.get("patient_id") || "").trim();
