@@ -321,7 +321,13 @@ def _interpreter_system_prompt(
         "and the service/doctor/time constraints, set action=modify, and include requested_date in "
         "clear_entity_fields so the backend searches after the rejected date. Do not select or repeat "
         "the presented slot. If the customer accepts or chooses a time from the presented offer, use "
-        "select_option instead.\n\n"
+        "select_option instead. If an earlier exact time was unavailable and the customer now asks to see "
+        "general availability for the same day, action=modify and clear requested_start_time so the rejected "
+        "exact minute cannot keep filtering later turns. If they ask for later/earlier/before/after instead, "
+        "clear the stale exact time and encode only the new broad bound. When the customer chooses one exact "
+        "clock time from a presented availability window AND explicitly asks to book it, include "
+        "appointment_creation and use select_option with selection_time=HH:MM; do not ask for another "
+        "confirmation and do not keep an older rejected exact time.\n\n"
         "PACKAGES: distinguish one appointment from a package/course of multiple sessions by meaning, "
         "not wording. package_intent=none for an ordinary single appointment; inquire for package info or "
         "comparison; purchase when the customer wants to obtain/start a multi-session package; use_existing "
@@ -365,7 +371,11 @@ def _interpreter_system_prompt(
         "because it exists in workflow memory. "
         "When the latest turn replaces a service or doctor in an active flow, action=modify and the newly "
         "grounded entity owns the requirement. If a service changes and the old doctor was not explicitly "
-        "reaffirmed, clear the old doctor requirement so compatibility can be resolved again. For an active "
+        "reaffirmed, clear the old doctor requirement so compatibility can be resolved again. An explicit "
+        "new service in an active booking flow always owns the next discovery: action=modify, ground the new "
+        "service, and never answer or execute from the previous service's availability snapshot. If the latest "
+        "turn names both the new service and a compatible doctor/date, preserve those new requirements and "
+        "refresh availability for them. For an active "
         "reschedule flow, select_option is only for a replacement slot that the assistant already presented. "
         "If the customer instead supplies a new exact target date/time in their own words and clearly commands "
         "the change now, action MUST be modify (never continue and never ask for a second confirmation), keep "
@@ -381,6 +391,85 @@ def _interpreter_system_prompt(
         f"Clinic timezone: {timezone_name}. Clinic local date/time: {local_now.isoformat()}. "
         f"Active workflow present: {str(active_flow).lower()}"
     )
+
+
+def _snapshot_has_exact_time(
+    flow: ConversationFlowState,
+    exact_time: str,
+    *,
+    doctor_id: str | None,
+    requested_date: str | None,
+) -> bool:
+    """Verify a semantic exact-time choice against the already-presented snapshot."""
+    snapshot = flow.option_snapshot if isinstance(flow.option_snapshot, dict) else {}
+    snapshot_date = str(snapshot.get("date") or "").strip()
+    if requested_date and snapshot_date and str(requested_date) != snapshot_date:
+        return False
+    normalized = str(exact_time).strip()[:5]
+    slots = snapshot.get("slots")
+    if not isinstance(slots, list):
+        return False
+    matches = 0
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("start_time_24h") or "").strip()[:5] != normalized:
+            continue
+        if doctor_id and str(slot.get("doctor_id") or "") != str(doctor_id):
+            continue
+        matches += 1
+    return matches == 1
+
+
+def _normalize_active_booking_decision(
+    decision: UnifiedTurnDecision,
+    flow: ConversationFlowState | None,
+) -> UnifiedTurnDecision:
+    """Normalize structured follow-ups using semantic output + verified flow state only."""
+    if flow is None or not flow.is_active or flow.flow_type != "booking":
+        return decision
+
+    existing = flow.entity_state if isinstance(flow.entity_state, dict) else {}
+    old_service_id = str(existing.get("service_id") or "")
+    new_service_id = str(decision.entity_hints.service_id or "")
+    service_changed = bool(old_service_id and new_service_id and old_service_id != new_service_id)
+
+    clear_fields = list(decision.clear_entity_fields)
+    action = decision.action
+    if service_changed:
+        action = "modify"
+        if (
+            not decision.entity_hints.doctor_id
+            and not decision.entity_hints.doctor_query
+            and not decision.entity_hints.doctor_candidate_ids
+        ):
+            for field in ("doctor_query", "doctor_id", "doctor_candidate_ids"):
+                if field not in clear_fields:
+                    clear_fields.append(field)
+
+    exact_time = decision.selection_time or decision.entity_hints.requested_start_time
+    capabilities = {str(item) for item in decision.capabilities}
+    if (
+        not service_changed
+        and exact_time
+        and "appointment_creation" in capabilities
+        and _snapshot_has_exact_time(
+            flow,
+            str(exact_time),
+            doctor_id=decision.entity_hints.doctor_id,
+            requested_date=decision.entity_hints.requested_date,
+        )
+    ):
+        return decision.model_copy(
+            update={
+                "action": "select_option",
+                "clear_entity_fields": clear_fields,
+                "selection_index": None,
+                "selection_time": str(exact_time).strip()[:5],
+            }
+        )
+
+    return decision.model_copy(update={"action": action, "clear_entity_fields": clear_fields})
 
 
 def interpret_customer_turn(
@@ -484,4 +573,5 @@ def interpret_customer_turn(
     )
     value = _normalize_single_location_decision(invocation.value)
     grounded_hints = validate_grounded_entity_ids(value.entity_hints, clinic_catalog)
-    return value.model_copy(update={"entity_hints": grounded_hints})
+    value = value.model_copy(update={"entity_hints": grounded_hints})
+    return _normalize_active_booking_decision(value, flow)

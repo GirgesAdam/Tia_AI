@@ -281,7 +281,7 @@ def _setup_case(
 
     if name == "booking_reject_days_then_return":
         _, service, doctor, _, _, _ = _booking_context(db, workspace)
-        days = _future_days_for(db, workspace, service=service, doctor=doctor, count=3, after_hour=17)
+        days = _future_days_for(db, workspace, service=service, doctor=doctor, count=3)
         d1, a1, s1 = days[0]
         d2, _, _ = days[1]
         d3, _, _ = days[2]
@@ -289,7 +289,7 @@ def _setup_case(
         return (
             patient,
             [
-                f"عايز أحجز {service.get('name')} مع {doctor.get('name')} أقرب ميعاد بعد الساعة 5 مساءً.",
+                f"عايز أحجز {service.get('name')} مع {doctor.get('name')} أقرب ميعاد متاح.",
                 "اليوم ده مش مناسب، عايز يوم تاني.",
                 f"طب يوم {d3.isoformat()} فيه؟",
                 f"لا خلاص خلينا يوم {d1.isoformat()} اللي قولته الأول.",
@@ -348,7 +348,6 @@ def _setup_case(
             service=service,
             doctor=doctor,
             count=2,
-            after_hour=17,
             exclude_appointment_id=target.id,
         )
         first_day, _, _ = days[0]
@@ -360,7 +359,7 @@ def _setup_case(
             [
                 "عايز أغير معادي.",
                 f"قصدي الميعاد اللي يوم {target_local.date().isoformat()}.",
-                f"شوفلي بدل منه يوم {first_day.isoformat()} بعد الساعة 5.",
+                f"شوفلي بدل منه يوم {first_day.isoformat()}.",
                 "لا اليوم ده مش مناسب برضه.",
                 f"طب يوم {second_day.isoformat()}؟",
                 f"الساعة {final_time} مناسبة، غيره للوقت ده.",
