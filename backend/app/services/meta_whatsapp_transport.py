@@ -38,6 +38,7 @@ _SUPPORTED_STATUSES = frozenset({"sent", "delivered", "read", "failed"})
 _MAX_INBOUND_PROCESS_ATTEMPTS = 3
 _PROVIDER_REFRESH_INTERVAL = timedelta(minutes=15)
 _PENDING_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=2)
+_MAX_TEMPLATE_STATUS_PAGES = 20
 
 
 def _clean(value: str | None) -> str | None:
@@ -202,28 +203,55 @@ def _fetch_phone_info(token: str, phone_number_id: str) -> dict[str, Any]:
 
 
 def _fetch_template_statuses(token: str, waba_id: str) -> dict[str, str]:
-    response = httpx.get(
-        _graph_url(f"{waba_id}/message_templates"),
-        params={"fields": "name,status,language", "limit": 100},
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=20.0,
-    )
-    if response.status_code >= 400:
-        message, meta = _provider_error_payload(response)
-        raise MetaWhatsAppTransportError(
-            message,
-            code=_coerce_meta_error_code(meta.get("code")),
-        )
-    payload = response.json()
-    data = payload.get("data") if isinstance(payload, dict) else None
+    endpoint = _graph_url(f"{waba_id}/message_templates")
+    headers = {"Authorization": f"Bearer {token}"}
     statuses: dict[str, str] = {}
-    for item in data if isinstance(data, list) else []:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        status = str(item.get("status") or "").strip().lower()
-        if name and status:
-            statuses[name] = status
+    after: str | None = None
+    seen_cursors: set[str] = set()
+
+    for _ in range(_MAX_TEMPLATE_STATUS_PAGES):
+        params: dict[str, Any] = {
+            "fields": "name,status,language",
+            "limit": 100,
+        }
+        if after:
+            params["after"] = after
+
+        response = httpx.get(
+            endpoint,
+            params=params,
+            headers=headers,
+            timeout=20.0,
+        )
+        if response.status_code >= 400:
+            message, meta = _provider_error_payload(response)
+            raise MetaWhatsAppTransportError(
+                message,
+                code=_coerce_meta_error_code(meta.get("code")),
+            )
+
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            status = str(item.get("status") or "").strip().lower()
+            if name and status:
+                statuses[name] = status
+
+        paging = payload.get("paging") if isinstance(payload, dict) else None
+        cursors = paging.get("cursors") if isinstance(paging, dict) else None
+        next_after = (
+            str(cursors.get("after") or "").strip()
+            if isinstance(cursors, dict)
+            else ""
+        )
+        if not next_after or next_after in seen_cursors:
+            break
+        seen_cursors.add(next_after)
+        after = next_after
+
     return statuses
 
 

@@ -15,6 +15,7 @@ from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.schemas.channel import DispatchClaimItem
 from app.services.meta_whatsapp_transport import (
     MetaWhatsAppTransportError,
+    _fetch_template_statuses,
     _readiness_refresh_due,
     build_meta_message_payload,
     refresh_meta_connection_readiness,
@@ -212,6 +213,75 @@ def test_readiness_190_surfaces_reconnect_meta(
     assert health["state"] == "degraded"
     assert health["current_error_code"] == "190"
     assert health["action_required"] == "reconnect_meta"
+
+
+def test_template_status_fetch_reads_all_meta_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v23.0")
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    pages = [
+        {
+            "data": [{"name": "first_template", "status": "APPROVED", "language": "ar"}],
+            "paging": {"cursors": {"after": "cursor-2"}},
+        },
+        {
+            "data": [{"name": "tia_reminder_01", "status": "APPROVED", "language": "ar"}],
+        },
+    ]
+
+    def fake_get(_url: str, *, params: dict, headers: dict, timeout: float):
+        calls.append({"params": dict(params), "headers": dict(headers), "timeout": timeout})
+        return FakeResponse(pages[len(calls) - 1])
+
+    monkeypatch.setattr(meta_transport.httpx, "get", fake_get)
+
+    statuses = _fetch_template_statuses("secret-token", "waba-1")
+
+    assert statuses == {
+        "first_template": "approved",
+        "tia_reminder_01": "approved",
+    }
+    assert len(calls) == 2
+    assert "after" not in calls[0]["params"]
+    assert calls[1]["params"]["after"] == "cursor-2"
+    assert calls[0]["headers"]["Authorization"] == "Bearer secret-token"
+
+
+def test_template_status_fetch_stops_on_repeated_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v23.0")
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {
+                "data": [],
+                "paging": {"cursors": {"after": "same-cursor"}},
+            }
+
+    def fake_get(_url: str, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return FakeResponse()
+
+    monkeypatch.setattr(meta_transport.httpx, "get", fake_get)
+
+    assert _fetch_template_statuses("token", "waba") == {}
+    assert calls == 2
 
 
 def test_native_transport_builds_text_message() -> None:
