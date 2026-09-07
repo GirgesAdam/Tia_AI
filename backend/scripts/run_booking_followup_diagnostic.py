@@ -15,7 +15,7 @@ from app.services.conversation_flows import get_active_flow
 from scripts.run_extended_booking_conversation_review import _setup_case
 from scripts.run_daily_clinic_conversation_review import _send
 
-# Intentionally limited to the four booking conversations under follow-up review.
+# Final verification remains limited to the four booking conversations under review.
 CASES = (
     "booking_exact_time_unavailable_then_flexible",
     "booking_change_service_mid_conversation",
