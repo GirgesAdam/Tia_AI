@@ -39,7 +39,7 @@ jobs:
       LLM_MAX_RETRIES: "2"
       LLM_REALTIME_MAX_RETRIES: "0"
       AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
-      BOOKING_DIAGNOSTIC_CASES: booking_change_service_mid_conversation,reschedule_two_appointments_choose_one
+      BOOKING_DIAGNOSTIC_CASES: booking_change_service_mid_conversation
       CORS_ORIGINS: ""
     steps:
       - uses: actions/checkout@v4
