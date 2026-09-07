@@ -1,0 +1,87 @@
+name: Patch legacy reminder compatibility
+on:
+  pull_request:
+    paths:
+      - .github/workflows/patch-legacy-reminder-compat.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Preserve approved reminder during Meta review
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path_str: str, old: str, new: str, count: int = 1) -> None:
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              actual = text.count(old)
+              if actual < count:
+                  raise SystemExit(f'{path_str}: expected at least {count} occurrence(s), found {actual}')
+              path.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          path = Path('backend/app/services/automations.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_legacy = '''    "appointment_reminder_6h": frozenset(\n        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}\n    ),\n'''
+          new_legacy = '''    "appointment_reminder_6h": frozenset(\n        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar"}\n    ),\n'''
+          if old_legacy not in text:
+              raise SystemExit('legacy default reminder set anchor not found')
+          text = text.replace(old_legacy, new_legacy, 1)
+
+          old_helper = '''def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str]:\n    """Return the exact positional variables required by each approved Meta template."""\n'''
+          new_helper = '''def _appointment_template_body_parameters(\n    rule_key: str, data: dict, *, template_name: str | None = None\n) -> list[str]:\n    """Return the exact positional variables required by each approved Meta template."""\n'''
+          if old_helper not in text:
+              raise SystemExit('template body helper signature not found')
+          text = text.replace(old_helper, new_helper, 1)
+
+          old_reminder_params = '''    if rule_key == "appointment_reminder_6h":\n        return [patient_name, service_name, time]\n'''
+          new_reminder_params = '''    if rule_key == "appointment_reminder_6h":\n        # Temporary compatibility for the already-approved Meta template while\n        # the timing-neutral 3-variable replacement is still under review.\n        if template_name == "tia_reminder_6h_01":\n            return [patient_name, service_name, time, branch_name]\n        return [patient_name, service_name, time]\n'''
+          if old_reminder_params not in text:
+              raise SystemExit('reminder parameter contract anchor not found')
+          text = text.replace(old_reminder_params, new_reminder_params, 1)
+
+          old_call = '''            "body_parameters": _appointment_template_body_parameters(rule.key, display),\n'''
+          new_call = '''            "body_parameters": _appointment_template_body_parameters(\n                rule.key, display, template_name=template_name\n            ),\n'''
+          if old_call not in text:
+              raise SystemExit('appointment template parameter call anchor not found')
+          text = text.replace(old_call, new_call, 1)
+
+          old_variant_add = '''            candidate = (name, language)\n            if candidate not in candidates:\n                candidates.append(candidate)\n'''
+          new_variant_add = '''            candidate = (name, language)\n            if (\n                rule.key == "appointment_reminder_6h"\n                and name == "tia_reminder_6h_01"\n                and rule.offset_minutes != -360\n            ):\n                continue\n            if candidate not in candidates:\n                candidates.append(candidate)\n'''
+          if old_variant_add not in text:
+              raise SystemExit('template variant candidate anchor not found')
+          text = text.replace(old_variant_add, new_variant_add, 1)
+          path.write_text(text, encoding='utf-8')
+
+          route = Path('backend/app/api/routes/automations.py')
+          route_text = route.read_text(encoding='utf-8')
+          anchor = '''    changes = payload.model_dump(exclude_unset=True)\n    changed_fields = sorted(changes)\n    previous_enabled = rule.enabled\n'''
+          replacement = '''    changes = payload.model_dump(exclude_unset=True)\n    changed_fields = sorted(changes)\n    previous_enabled = rule.enabled\n\n    if (\n        rule.key == "appointment_reminder_6h"\n        and rule.template_name == "tia_reminder_6h_01"\n        and "offset_minutes" in changes\n        and changes["offset_minutes"] != -360\n        and changes.get("template_name", rule.template_name) == "tia_reminder_6h_01"\n    ):\n        raise HTTPException(\n            status_code=409,\n            detail=(\n                "The currently approved tia_reminder_6h_01 template explicitly says 6 hours. "\n                "Switch to the timing-neutral reminder template before changing this timing."\n            ),\n        )\n'''
+          if anchor not in route_text:
+              raise SystemExit('update_rule changes anchor not found')
+          route.write_text(route_text.replace(anchor, replacement, 1), encoding='utf-8')
+
+          test_path = Path('backend/tests/test_meta_template_contracts.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          append = '''\n\ndef test_active_legacy_reminder_keeps_approved_four_parameter_contract() -> None:\n    params = _appointment_template_body_parameters(\n        "appointment_reminder_6h",\n        {\n            "patient_name": "سارة",\n            "service_name": "ليزر",\n            "date": "08/09/2026",\n            "time": "15:00",\n            "branch_name": "Main",\n        },\n        template_name="tia_reminder_6h_01",\n    )\n    assert params == ["سارة", "ليزر", "15:00", "Main"]\n\n\ndef test_timing_neutral_reminder_keeps_three_parameter_contract() -> None:\n    params = _appointment_template_body_parameters(\n        "appointment_reminder_6h",\n        {\n            "patient_name": "سارة",\n            "service_name": "ليزر",\n            "date": "08/09/2026",\n            "time": "15:00",\n            "branch_name": "Main",\n        },\n        template_name="tia_reminder_01",\n    )\n    assert params == ["سارة", "ليزر", "15:00"]\n\n\ndef test_legacy_active_template_is_not_auto_migrated_before_new_meta_approval() -> None:\n    source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")\n    legacy_block = source.split("LEGACY_DEFAULT_TEMPLATE_NAMES", 1)[1].split("@dataclass", 1)[0]\n    assert "tia_reminder_6h_01" not in legacy_block\n'''
+          if 'test_active_legacy_reminder_keeps_approved_four_parameter_contract' not in test_text:
+              test_path.write_text(test_text + append, encoding='utf-8')
+
+          api_test = Path('backend/tests/test_automation_operations_phase54.py')
+          api_text = api_test.read_text(encoding='utf-8')
+          api_append = '''\n\ndef test_fixed_six_hour_meta_template_blocks_incompatible_admin_timing() -> None:\n    route = (_root() / "backend/app/api/routes/automations.py").read_text(encoding="utf-8")\n    assert 'rule.template_name == "tia_reminder_6h_01"' in route\n    assert 'changes["offset_minutes"] != -360' in route\n    assert 'Switch to the timing-neutral reminder template' in route\n'''
+          if 'test_fixed_six_hour_meta_template_blocks_incompatible_admin_timing' not in api_text:
+              api_test.write_text(api_text + api_append, encoding='utf-8')
+          PY
+          git add backend/app/services/automations.py backend/app/api/routes/automations.py backend/tests/test_meta_template_contracts.py backend/tests/test_automation_operations_phase54.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Support approved reminder during Meta review'
+          git push origin HEAD:${{ github.head_ref }}
