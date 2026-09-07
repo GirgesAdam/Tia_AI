@@ -10,30 +10,30 @@ def replace_once(path: str, old: str, new: str) -> None:
     text = target.read_text(encoding="utf-8")
     count = text.count(old)
     if count != 1:
-        raise RuntimeError(f"Expected one anchor in {path}, found {count}: {old[:140]!r}")
+        raise RuntimeError(f"Expected one anchor in {path}, found {count}: {old[:160]!r}")
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
 def main() -> int:
     replace_once(
-        "backend/app/agents/turn_interpreter.py",
-        '''        "clock time from a presented availability window AND explicitly asks to book it, include "\n        "appointment_creation and use select_option with selection_time=HH:MM; do not ask for another "\n        "confirmation and do not keep an older rejected exact time.\\n\\n"\n''',
-        '''        "clock time from a presented availability window AND explicitly asks to book it, include "\n        "appointment_creation and use select_option with selection_time=HH:MM; do not ask for another "\n        "confirmation and do not keep an older rejected exact time. This remains true even when the persisted "\n        "booking flow currently lists availability_discovery only; the latest explicit booking command owns "\n        "the capability for that turn.\\n\\n"\n''',
+        "backend/app/services/agent_chat.py",
+        '''    for field_name in clear_fields:\n        merged.pop(field_name, None)\n    if "requested_date" in clear_fields:\n''',
+        '''    for field_name in clear_fields:\n        merged.pop(field_name, None)\n    if clear_fields.intersection({"service_query", "service_id", "service_candidate_ids"}):\n        merged.pop("service", None)\n    if clear_fields.intersection({"doctor_query", "doctor_id", "doctor_candidate_ids"}):\n        merged.pop("doctor", None)\n    if "requested_date" in clear_fields:\n''',
     )
 
     replace_once(
-        "backend/app/agents/turn_interpreter.py",
-        '''    if (\n        not service_changed\n        and exact_time\n        and "appointment_creation" in capabilities\n        and _snapshot_has_exact_time(\n            flow,\n            str(exact_time),\n            doctor_id=decision.entity_hints.doctor_id,\n            requested_date=decision.entity_hints.requested_date,\n        )\n    ):\n        return decision.model_copy(\n            update={\n                "action": "select_option",\n                "clear_entity_fields": clear_fields,\n                "selection_index": None,\n                "selection_time": str(exact_time).strip()[:5],\n            }\n        )\n\n    return decision.model_copy(update={"action": action, "clear_entity_fields": clear_fields})\n''',
-        '''    exact_choice_is_in_snapshot = bool(\n        not service_changed\n        and exact_time\n        and "appointment_creation" in capabilities\n        and _snapshot_has_exact_time(\n            flow,\n            str(exact_time),\n            doctor_id=decision.entity_hints.doctor_id,\n            requested_date=decision.entity_hints.requested_date,\n        )\n    )\n    if exact_choice_is_in_snapshot:\n        return decision.model_copy(\n            update={\n                "action": "select_option",\n                "clear_entity_fields": clear_fields,\n                "selection_index": None,\n                "selection_time": str(exact_time).strip()[:5],\n            }\n        )\n\n    if (\n        not service_changed\n        and exact_time\n        and "appointment_creation" in capabilities\n        and decision.action == "select_option"\n    ):\n        # The customer authorized one exact booking time, but the current snapshot\n        # is empty or no longer represents that choice. Re-run exact availability\n        # through the normal modify/read path in this same turn; do not inspect text\n        # and do not guess from an older snapshot.\n        for field in ("not_before_time", "not_after_time"):\n            if field not in clear_fields:\n                clear_fields.append(field)\n        return decision.model_copy(\n            update={\n                "action": "modify",\n                "clear_entity_fields": clear_fields,\n                "selection_index": None,\n                "selection_time": None,\n            }\n        )\n\n    return decision.model_copy(update={"action": action, "clear_entity_fields": clear_fields})\n''',
+        "backend/app/services/agent_chat.py",
+        '''        if selected_value:\n            merged.pop(candidates_key, None)\n        elif candidates_value:\n            merged.pop(selected_key, None)\n    return merged\n''',
+        '''        if selected_value:\n            merged.pop(candidates_key, None)\n        elif candidates_value:\n            merged.pop(selected_key, None)\n            if entity_name in {"service", "doctor"}:\n                merged.pop(entity_name, None)\n    return merged\n''',
     )
 
     replace_once(
-        "backend/scripts/run_extended_booking_conversation_review.py",
-        '''                f"قصدي الميعاد اللي يوم {target_local.date().isoformat()}.",\n''',
-        '''                f"قصدي الميعاد اللي يوم {target_local.date().isoformat()} الساعة {target_local.strftime('%H:%M')}.",\n''',
+        "backend/app/services/agent_chat.py",
+        '''    appointment_id = text_value("appointment_id")\n    requested_date = text_value("requested_date") or text_value("date")\n''',
+        '''    appointment_id = text_value("appointment_id")\n    if not appointment_id and flow is not None and flow.flow_type == "appointment_reschedule":\n        appointment_reference = text_value("appointment_reference")\n        if appointment_reference:\n            try:\n                referenced_start = datetime.fromisoformat(\n                    appointment_reference.replace("Z", "+00:00")\n                )\n            except ValueError:\n                referenced_start = None\n            if referenced_start is not None:\n                timezone_name = tool_context.workspace.timezone or "Africa/Cairo"\n                try:\n                    clinic_tz = ZoneInfo(timezone_name)\n                except ZoneInfoNotFoundError:\n                    clinic_tz = ZoneInfo("Africa/Cairo")\n                if referenced_start.tzinfo is not None:\n                    referenced_start = referenced_start.astimezone(clinic_tz)\n                reference_key = referenced_start.strftime("%Y-%m-%d %H:%M")\n                candidates = list(\n                    tool_context.db.scalars(\n                        select(Appointment).where(\n                            Appointment.workspace_id == tool_context.workspace.id,\n                            Appointment.patient_id == tool_context.patient.id,\n                            Appointment.status.notin_(("cancelled", "no_show")),\n                        )\n                    )\n                )\n                matches = [\n                    row\n                    for row in candidates\n                    if row.start_at.astimezone(clinic_tz).strftime("%Y-%m-%d %H:%M")\n                    == reference_key\n                ]\n                if len(matches) == 1:\n                    appointment_id = str(matches[0].id)\n    requested_date = text_value("requested_date") or text_value("date")\n''',
     )
 
-    print("Applied minimal exact-time recheck fix and clarified the two-appointment fixture.")
+    print("Applied minimal stale-entity cleanup and exact appointment reference resolution.")
     return 0
 
 
