@@ -12,6 +12,13 @@ import { labelForSource, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type { Patient } from "@/lib/types";
 
+function statusDescription(patient: Patient) {
+  if (patient.status === "active") return "نشط";
+  if (patient.status === "inactive") return "غير نشط";
+  if (patient.status === "blocked") return "محظور";
+  return labelForStatus(patient.status);
+}
+
 export default async function PatientsPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const { q = "" } = await searchParams;
   const patients = await tiaRequest<Patient[]>(`/crm/patients?limit=100${q ? `&q=${encodeURIComponent(q)}` : ""}`);
@@ -19,6 +26,10 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
   return (
     <>
       <PageHeader title="العملاء" description="ابحث عن أي عميل وافتح ملفه لمراجعة بيانات التواصل والمواعيد والمتابعات." />
+
+      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+        حالة العميل هنا هي الحالة المسجلة في النظام. "نشط" لا تعني تلقائيًا أنه تواصل خلال آخر 3 شهور؛ آخر تواصل ظاهر في عمود منفصل.
+      </div>
 
       <form className="mb-4 flex max-w-xl gap-2">
         <div className="relative flex-1">
@@ -43,14 +54,13 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                           <span dir="ltr">{patient.phone || "بدون رقم هاتف"}</span>
                         </div>
                       </div>
-                      <Badge tone={toneForStatus(patient.status)}>{labelForStatus(patient.status)}</Badge>
+                      <Badge tone={toneForStatus(patient.status)}>{statusDescription(patient)}</Badge>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-xs">
                       <div><div className="text-[var(--muted)]">المصدر</div><div className="mt-1 font-bold text-slate-800">{labelForSource(patient.source)}</div></div>
                       <div><div className="text-[var(--muted)]">آخر تواصل</div><div className="mt-1 font-bold text-slate-800">{formatDateTime(patient.last_contact_at)}</div></div>
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-xs text-[var(--muted)]">
-                      <span>{patient.marketing_consent ? "يسمح بالتواصل التسويقي" : "لا يسمح بالتواصل التسويقي"}</span>
+                    <div className="mt-3 flex items-center justify-end text-xs text-[var(--muted)]">
                       <span className="inline-flex items-center gap-1 font-bold text-teal-700">فتح الملف <ChevronLeft size={13} /></span>
                     </div>
                   </Link>
@@ -58,7 +68,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
               </div>
 
               <div className="table-shell hidden md:block">
-                <table className="data-table min-w-[780px]">
+                <table className="data-table min-w-[700px]">
                   <thead>
                     <tr>
                       <th>العميل</th>
@@ -66,7 +76,6 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                       <th>مصدر العميل</th>
                       <th>الحالة</th>
                       <th>آخر تواصل</th>
-                      <th>التواصل التسويقي</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -77,9 +86,8 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                         </td>
                         <td dir="ltr" className="text-right">{patient.phone || "—"}</td>
                         <td>{labelForSource(patient.source)}</td>
-                        <td><Badge tone={toneForStatus(patient.status)}>{labelForStatus(patient.status)}</Badge></td>
+                        <td><Badge tone={toneForStatus(patient.status)}>{statusDescription(patient)}</Badge></td>
                         <td>{formatDateTime(patient.last_contact_at)}</td>
-                        <td>{patient.marketing_consent ? "مسموح" : "غير مسموح"}</td>
                       </tr>
                     ))}
                   </tbody>
