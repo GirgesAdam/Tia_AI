@@ -1,0 +1,91 @@
+name: Align Native WhatsApp Tests
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+permissions:
+  contents: write
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+          fetch-depth: 0
+      - name: Align stale transport contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path_str: str, old: str, new: str) -> None:
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'Expected block missing in {path_str}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace(
+              'backend/tests/test_auto_patient_lifecycle.py',
+              'import json\n',
+              '',
+          )
+          replace(
+              'backend/tests/test_auto_patient_lifecycle.py',
+              '''def test_n8n_outbox_supports_three_four_and_five_parameter_templates() -> None:\n    workflow = json.loads(\n        (_root() / "n8n/workflows/tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8")\n    )\n    for count in (3, 4, 5):\n        node = next(\n            row for row in workflow["nodes"]\n            if row["name"] == f"WhatsApp Send Template {count} Params"\n        )\n        params = node["parameters"]["components"]["component"][0]["bodyParameters"]["parameter"]\n        assert len(params) == count\n        for index, param in enumerate(params):\n            assert param["type"] == "text"\n            assert f"body_parameters?.[{index}]" in param["text"]\n''',
+              '''def test_native_whatsapp_transport_supports_three_four_and_five_parameter_templates() -> None:\n    from uuid import uuid4\n\n    from app.schemas.channel import DispatchClaimItem\n    from app.services.meta_whatsapp_transport import build_meta_message_payload\n\n    for count in (3, 4, 5):\n        body_parameters = [f"value-{index}" for index in range(count)]\n        item = DispatchClaimItem(\n            dispatch_id=uuid4(),\n            message_id=uuid4(),\n            channel="whatsapp",\n            provider="meta_cloud",\n            external_account_id="123456789",\n            external_user_id="201001112223",\n            external_conversation_id="201001112223",\n            message_type="template",\n            content=None,\n            metadata={\n                "whatsapp_template": {\n                    "name": "contract_template",\n                    "language_code": "ar",\n                    "body_parameters": body_parameters,\n                }\n            },\n            attempt=1,\n        )\n\n        payload = build_meta_message_payload(item)\n        params = payload["template"]["components"][0]["parameters"]\n        assert len(params) == count\n        assert [param["text"] for param in params] == body_parameters\n''',
+          )
+
+          replace(
+              'backend/tests/test_automation_product_contract.py',
+              '''def test_automation_runtime_is_whatsapp_only() -> None:\n    root = Path(__file__).resolve().parents[2]\n    workflows = root / "n8n" / "workflows"\n    assert not (workflows / "tia_gmail_outbox_worker.json").exists()\n    assert (workflows / "tia_whatsapp_outbox_worker.json").exists()\n    assert (workflows / "tia_whatsapp_inbound_status.json").exists()\n    assert (workflows / "tia_automation_scheduler.json").exists()\n''',
+              '''def test_automation_runtime_is_whatsapp_only() -> None:\n    root = Path(__file__).resolve().parents[2]\n    workflows = root / "n8n" / "workflows"\n    route = (root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")\n\n    assert not (workflows / "tia_gmail_outbox_worker.json").exists()\n    assert (workflows / "tia_whatsapp_outbox_worker.json").exists()\n    assert not (workflows / "tia_whatsapp_inbound_status.json").exists()\n    assert (workflows / "tia_automation_scheduler.json").exists()\n    assert '@router.post("/webhook"' in route\n    assert '@router.post("/transport/tick")' in route\n''',
+          )
+
+          Path('backend/tests/test_n8n_workflow_contract.py').write_text('''import json\nfrom pathlib import Path\n\nWORKFLOW_NAMES = (\n    "tia_whatsapp_outbox_worker.json",\n    "tia_automation_scheduler.json",\n)\n\n\ndef _root() -> Path:\n    return Path(__file__).resolve().parents[2]\n\n\ndef test_workflows_are_valid_json_without_embedded_credentials() -> None:\n    for name in WORKFLOW_NAMES:\n        path = _root() / "n8n" / "workflows" / name\n        workflow = json.loads(path.read_text(encoding="utf-8"))\n        assert workflow["nodes"]\n        raw = json.dumps(workflow, ensure_ascii=False).lower()\n        for forbidden in (\n            "tia_ch_",\n            'x-automation-token":',\n            'access_token":',\n            'client_secret":',\n            "bearer eaa",\n        ):\n            assert forbidden not in raw\n\n\ndef test_whatsapp_transport_worker_only_wakes_tia_native_transport() -> None:\n    root = _root() / "n8n" / "workflows"\n    worker = json.loads((root / "tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8"))\n    raw = json.dumps(worker, ensure_ascii=False)\n\n    assert "/api/v1/channels/whatsapp/transport/tick" in raw\n    assert "n8n-nodes-base.whatsApp" not in raw\n    assert "graph.facebook.com" not in raw\n    assert "/adapter/outbox/claim" not in raw\n    assert "/adapter/outbox/provider-status" not in raw\n\n\ndef test_meta_webhook_and_provider_results_are_owned_by_backend() -> None:\n    root = _root()\n    route = (root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")\n    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")\n\n    assert '@router.get("/webhook"' in route\n    assert '@router.post("/webhook"' in route\n    assert "X-Hub-Signature-256" in route\n    assert "verify_meta_webhook_signature" in route\n    assert "record_dispatch_result(" in transport\n    assert "record_provider_status(" in transport\n    assert '_graph_url(f"{phone_number_id}/messages")' in transport\n\n\ndef test_runtime_workers_support_a_hosted_backend_url() -> None:\n    root = _root() / "n8n" / "workflows"\n    for name in WORKFLOW_NAMES:\n        raw = (root / name).read_text(encoding="utf-8")\n        assert "$env.TIA_API_BASE_URL" in raw\n        assert "|| 'http://host.docker.internal:8000'" in raw\n        assert "https://YOUR_TIA_BACKEND_DOMAIN" not in raw\n\n\ndef test_automation_scheduler_execute_url_is_a_real_expression() -> None:\n    path = _root() / "n8n" / "workflows" / "tia_automation_scheduler.json"\n    workflow = json.loads(path.read_text(encoding="utf-8"))\n    by_name = {node["name"]: node for node in workflow["nodes"]}\n\n    execute_url = by_name["Tia Execute Automation"]["parameters"]["url"]\n    assert "$env.TIA_API_BASE_URL" in execute_url\n    assert "/api/v1/automations/adapter/jobs/" in execute_url\n    assert "+ $json.job_id +" in execute_url\n    assert "%27%20%2B%20%24json.job_id" not in execute_url\n\n\ndef test_inbound_whatsapp_is_not_processed_or_retried_by_n8n() -> None:\n    root = _root()\n    workflows = root / "n8n" / "workflows"\n    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")\n\n    assert not (workflows / "tia_whatsapp_inbound_status.json").exists()\n    assert "def ingest_meta_webhook(" in transport\n    assert "def _process_pending_inbound(" in transport\n    assert "_MAX_INBOUND_PROCESS_ATTEMPTS = 3" in transport\n\n\ndef test_provider_send_retries_remain_in_tia_state_machine_not_n8n() -> None:\n    root = _root()\n    worker = (root / "n8n/workflows/tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8")\n    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")\n\n    assert "WhatsApp Send Template" not in worker\n    assert "WhatsApp Send Text" not in worker\n    assert "retry_after_seconds=30" in transport\n    assert "record_dispatch_result(" in transport\n''', encoding='utf-8')
+
+          replace(
+              'backend/tests/test_whatsapp_booking_interactions.py',
+              'import json\n',
+              '',
+          )
+          replace(
+              'backend/tests/test_whatsapp_booking_interactions.py',
+              '''def test_n8n_whatsapp_workflows_support_structured_reply_buttons() -> None:\n    root = Path(__file__).resolve().parents[2] / "n8n" / "workflows"\n    inbound = json.loads((root / "tia_whatsapp_inbound_status.json").read_text(encoding="utf-8"))\n    outbox = json.loads((root / "tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8"))\n\n    inbound_nodes = {node["name"]: node for node in inbound["nodes"]}\n    normalize_code = inbound_nodes["Normalize WhatsApp Event"]["parameters"]["jsCode"]\n    assert "button_reply" in normalize_code\n    assert "interactive_reply" in normalize_code\n\n    outbox_nodes = {node["name"]: node for node in outbox["nodes"]}\n    assert "Interactive Message?" in outbox_nodes\n    interactive = outbox_nodes["WhatsApp Send Interactive"]\n    assert interactive["type"] == "n8n-nodes-base.httpRequest"\n    assert interactive["parameters"]["authentication"] == "predefinedCredentialType"\n    assert interactive["parameters"]["nodeCredentialType"] == "whatsAppApi"\n    assert "graph.facebook.com" in interactive["parameters"]["url"]\n    assert "whatsapp_interactive" in interactive["parameters"]["jsonBody"]\n''',
+              '''def test_native_whatsapp_transport_supports_structured_reply_buttons() -> None:\n    from app.schemas.channel import DispatchClaimItem\n    from app.services.meta_whatsapp_transport import _normalize_inbound, build_meta_message_payload\n\n    inbound = _normalize_inbound(\n        {\n            "metadata": {"phone_number_id": "123456789"},\n            "messages": [\n                {\n                    "id": "wamid.button",\n                    "from": "201001112223",\n                    "type": "interactive",\n                    "interactive": {\n                        "type": "button_reply",\n                        "button_reply": {\n                            "id": "tia.booking.confirm:abc",\n                            "title": "تأكيد الحجز",\n                        },\n                    },\n                }\n            ],\n        }\n    )\n    assert len(inbound) == 1\n    assert inbound[0].metadata["interactive_reply"] == {\n        "type": "button_reply",\n        "id": "tia.booking.confirm:abc",\n        "title": "تأكيد الحجز",\n    }\n\n    outbound = DispatchClaimItem(\n        dispatch_id=uuid4(),\n        message_id=uuid4(),\n        channel="whatsapp",\n        provider="meta_cloud",\n        external_account_id="123456789",\n        external_user_id="201001112223",\n        external_conversation_id="201001112223",\n        message_type="text",\n        content="تم الحجز",\n        metadata={\n            "whatsapp_interactive": {\n                "type": "button",\n                "buttons": [\n                    {"id": "tia.booking.confirm:abc", "title": "تأكيد الحجز"}\n                ],\n            }\n        },\n        attempt=1,\n    )\n    payload = build_meta_message_payload(outbound)\n    assert payload["type"] == "interactive"\n    assert payload["interactive"]["action"]["buttons"][0]["reply"]["id"] == "tia.booking.confirm:abc"\n''',
+          )
+
+          replace(
+              'backend/tests/test_whatsapp_n8n_bridge.py',
+              '''def test_n8n_workflow_templates_are_present() -> None:\n    project_root = Path(__file__).resolve().parents[2]\n    inbound = project_root / "n8n/workflows/tia_whatsapp_inbound_status.json"\n    outbox = project_root / "n8n/workflows/tia_whatsapp_outbox_worker.json"\n    assert inbound.is_file()\n    assert outbox.is_file()\n    assert "n8n-nodes-base.whatsAppTrigger" in inbound.read_text(encoding="utf-8")\n    assert "n8n-nodes-base.whatsApp" in outbox.read_text(encoding="utf-8")\n''',
+              '''def test_native_whatsapp_bridge_is_present_without_per_clinic_n8n_provider_nodes() -> None:\n    project_root = Path(__file__).resolve().parents[2]\n    inbound = project_root / "n8n/workflows/tia_whatsapp_inbound_status.json"\n    outbox = project_root / "n8n/workflows/tia_whatsapp_outbox_worker.json"\n    route = (project_root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")\n    transport = (project_root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")\n\n    assert not inbound.exists()\n    assert outbox.is_file()\n    outbox_text = outbox.read_text(encoding="utf-8")\n    assert "/api/v1/channels/whatsapp/transport/tick" in outbox_text\n    assert "n8n-nodes-base.whatsApp" not in outbox_text\n    assert '@router.post("/webhook"' in route\n    assert "record_provider_status(" in transport\n''',
+          )
+
+          replace(
+              'n8n/AUTOMATIONS_SETUP.md',
+              'If no approved template is configured, the existing CRM follow-up path falls back\nto a human CRM task rather than attempting a provider-rejected send.',
+              'If no approved template is configured, the existing CRM follow-up path falls back to a human CRM task rather than attempting a provider-rejected send.',
+          )
+          PY
+      - name: Focused transport tests
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          ruff check app tests alembic
+          python -m compileall -q app alembic tests
+          python -m pytest -q \
+            tests/test_ai_followup_execution.py \
+            tests/test_auto_patient_lifecycle.py \
+            tests/test_automation_product_contract.py \
+            tests/test_n8n_workflow_contract.py \
+            tests/test_whatsapp_booking_interactions.py \
+            tests/test_whatsapp_n8n_bridge.py \
+            tests/test_meta_native_whatsapp_transport.py
+      - name: Commit aligned contracts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/tests n8n/AUTOMATIONS_SETUP.md
+          git commit -m "test: align WhatsApp contracts with native transport"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
