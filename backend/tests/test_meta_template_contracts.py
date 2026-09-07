@@ -11,7 +11,9 @@ def _rules():
 def test_meta_product_template_names_match_approved_templates() -> None:
     rules = _rules()
     assert rules["appointment_reminder_6h"].template_name == "tia_reminder_01"
+    assert rules["appointment_reminder_6h"].template_language == "ar_EG"
     assert rules["post_visit_followup"].template_name == "tia_post_visit_01"
+    assert rules["post_visit_followup"].template_language == "ar_EG"
 
 
 def test_reminder_template_has_no_fixed_delay_date_or_branch_parameter() -> None:
