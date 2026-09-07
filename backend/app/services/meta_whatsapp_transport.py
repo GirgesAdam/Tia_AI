@@ -29,7 +29,9 @@ from app.services.provider_credentials import (
 
 
 class MetaWhatsAppTransportError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 _SUPPORTED_STATUSES = frozenset({"sent", "delivered", "read", "failed"})
@@ -87,6 +89,13 @@ def _provider_error_payload(response: httpx.Response) -> tuple[str, dict[str, An
             "fbtrace_id": raw.get("fbtrace_id"),
         }
     return message, error_meta
+
+
+def _coerce_meta_error_code(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _credential_for_connection(
@@ -184,7 +193,10 @@ def _fetch_phone_info(token: str, phone_number_id: str) -> dict[str, Any]:
     )
     if response.status_code >= 400:
         message, meta = _provider_error_payload(response)
-        raise MetaWhatsAppTransportError(f"{meta.get('code') or ''}:{message}")
+        raise MetaWhatsAppTransportError(
+            message,
+            code=_coerce_meta_error_code(meta.get("code")),
+        )
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
 
@@ -198,7 +210,10 @@ def _fetch_template_statuses(token: str, waba_id: str) -> dict[str, str]:
     )
     if response.status_code >= 400:
         message, meta = _provider_error_payload(response)
-        raise MetaWhatsAppTransportError(f"{meta.get('code') or ''}:{message}")
+        raise MetaWhatsAppTransportError(
+            message,
+            code=_coerce_meta_error_code(meta.get("code")),
+        )
     payload = response.json()
     data = payload.get("data") if isinstance(payload, dict) else None
     statuses: dict[str, str] = {}
@@ -217,6 +232,7 @@ def _set_provider_health(
     *,
     state: str,
     error: str | None = None,
+    error_code: int | str | None = None,
     action_required: str | None = None,
 ) -> None:
     config = dict(connection.config_json or {})
@@ -225,7 +241,7 @@ def _set_provider_health(
     health["state"] = state
     health["last_checked_at"] = datetime.now(UTC).isoformat()
     health["current_error"] = error[:2000] if error else None
-    health["current_error_code"] = None
+    health["current_error_code"] = str(error_code) if error_code is not None else None
     if action_required:
         health["action_required"] = action_required
     else:
@@ -261,15 +277,23 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
         template_statuses = _fetch_template_statuses(token, waba_id)
     except (httpx.HTTPError, MetaWhatsAppTransportError) as exc:
         message = str(exc)
+        error_code = exc.code if isinstance(exc, MetaWhatsAppTransportError) else None
         config = dict(connection.config_json or {})
         config["transport_ready"] = False
         connection.config_json = config
         connection.status = "paused"
-        action_required = "reconnect_meta" if message.startswith("190:") else None
+        action_required = (
+            "reconnect_meta"
+            if error_code == 190
+            else "meta_account_review"
+            if error_code == 131031
+            else None
+        )
         _set_provider_health(
             connection,
-            state="degraded",
+            state="disabled" if error_code == 131031 else "degraded",
             error=message,
+            error_code=error_code,
             action_required=action_required,
         )
         db.commit()
@@ -462,6 +486,7 @@ def _send_claimed_dispatch(
                 connection,
                 state="degraded",
                 error=message,
+                error_code=190,
                 action_required="reconnect_meta",
             )
             db.commit()

@@ -103,6 +103,32 @@ def _provider_error(response: httpx.Response, fallback: str) -> MetaWhatsAppProv
     return MetaWhatsAppProviderError(message, code=code)
 
 
+def _setup_provider_health(
+    provider_error: MetaWhatsAppProviderError | None,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    code = provider_error.code if provider_error else None
+    state = (
+        "disabled"
+        if code == "131031"
+        else "degraded"
+        if provider_error is not None
+        else "setup_pending"
+    )
+    health: dict[str, Any] = {
+        "state": state,
+        "current_error_code": code,
+        "current_error": str(provider_error) if provider_error else None,
+        "last_checked_at": now.isoformat(),
+    }
+    if code == "190":
+        health["action_required"] = "reconnect_meta"
+    elif code == "131031":
+        health["action_required"] = "meta_account_review"
+    return health
+
+
 def _exchange_signup_code(code: str) -> tuple[str, datetime | None]:
     app_id = _clean_optional(settings.meta_app_id)
     app_secret = _clean_optional(settings.meta_app_secret)
@@ -346,12 +372,7 @@ def complete_embedded_signup(
     display_phone = str(phone_info.get("display_phone_number") or "").strip() or None
     verified_name = str(phone_info.get("verified_name") or "").strip() or None
     quality_rating = str(phone_info.get("quality_rating") or "").strip() or None
-    health = {
-        "state": "degraded" if provider_error else "setup_pending",
-        "current_error_code": provider_error.code if provider_error else None,
-        "current_error": str(provider_error) if provider_error else None,
-        "last_checked_at": now.isoformat(),
-    }
+    health = _setup_provider_health(provider_error, now=now)
 
     if same_connection is None:
         _, adapter_token_hash = generate_adapter_token()

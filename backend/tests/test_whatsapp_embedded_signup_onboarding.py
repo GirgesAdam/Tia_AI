@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -6,7 +7,11 @@ from pydantic import ValidationError
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.schemas.whatsapp_setup import WhatsAppEmbeddedSignupComplete
-from app.services.meta_whatsapp_onboarding import embedded_signup_public_config
+from app.services.meta_whatsapp_onboarding import (
+    MetaWhatsAppProviderError,
+    _setup_provider_health,
+    embedded_signup_public_config,
+)
 from app.services.provider_credentials import (
     decrypt_provider_access_token,
     encrypt_provider_access_token,
@@ -27,6 +32,26 @@ def _configure_meta(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(meta_whatsapp_settings, "channel_transport_worker_token", "worker-secret")
     monkeypatch.setattr(meta_whatsapp_settings, "channel_credential_encryption_key", key)
     return key
+
+
+def test_signup_provider_health_classifies_reconnect_and_account_review() -> None:
+    now = datetime(2026, 9, 7, 20, 0, tzinfo=UTC)
+
+    expired = _setup_provider_health(
+        MetaWhatsAppProviderError("Invalid OAuth token", code="190"),
+        now=now,
+    )
+    locked = _setup_provider_health(
+        MetaWhatsAppProviderError("Business account locked", code="131031"),
+        now=now,
+    )
+
+    assert expired["state"] == "degraded"
+    assert expired["action_required"] == "reconnect_meta"
+    assert expired["current_error_code"] == "190"
+    assert locked["state"] == "disabled"
+    assert locked["action_required"] == "meta_account_review"
+    assert locked["current_error_code"] == "131031"
 
 
 def test_provider_access_token_is_encrypted_at_rest(monkeypatch: pytest.MonkeyPatch) -> None:

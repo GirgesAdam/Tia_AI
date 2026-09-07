@@ -12,10 +12,12 @@ import pytest
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.schemas.channel import DispatchClaimItem
+import app.services.meta_whatsapp_transport as meta_transport
 from app.services.meta_whatsapp_transport import (
     MetaWhatsAppTransportError,
     _readiness_refresh_due,
     build_meta_message_payload,
+    refresh_meta_connection_readiness,
     verify_meta_webhook_challenge,
     verify_meta_webhook_signature,
 )
@@ -147,6 +149,69 @@ def test_unready_connection_uses_fast_refresh_without_five_second_polling() -> N
         required_templates=[],
         now=checked_at + timedelta(minutes=2),
     ) is True
+
+
+def _provider_error_connection():
+    return SimpleNamespace(
+        channel="whatsapp",
+        provider="meta_cloud",
+        external_account_id="123456789",
+        status="active",
+        config_json={
+            "phone_number_id": "123456789",
+            "waba_id": "987654321",
+            "transport_ready": True,
+        },
+    )
+
+
+def test_readiness_131031_surfaces_meta_account_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _provider_error_connection()
+    db = SimpleNamespace(commit=lambda: None)
+    monkeypatch.setattr(
+        meta_transport,
+        "_decrypt_connection_token",
+        lambda _db, _connection: ("token", None),
+    )
+
+    def fail_phone(_token: str, _phone_number_id: str):
+        raise MetaWhatsAppTransportError("Business account locked", code=131031)
+
+    monkeypatch.setattr(meta_transport, "_fetch_phone_info", fail_phone)
+
+    assert refresh_meta_connection_readiness(db, connection) is False
+    health = connection.config_json["provider_health"]
+    assert connection.status == "paused"
+    assert connection.config_json["transport_ready"] is False
+    assert health["state"] == "disabled"
+    assert health["current_error_code"] == "131031"
+    assert health["action_required"] == "meta_account_review"
+
+
+def test_readiness_190_surfaces_reconnect_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _provider_error_connection()
+    db = SimpleNamespace(commit=lambda: None)
+    monkeypatch.setattr(
+        meta_transport,
+        "_decrypt_connection_token",
+        lambda _db, _connection: ("token", None),
+    )
+
+    def fail_phone(_token: str, _phone_number_id: str):
+        raise MetaWhatsAppTransportError("Invalid OAuth access token", code=190)
+
+    monkeypatch.setattr(meta_transport, "_fetch_phone_info", fail_phone)
+
+    assert refresh_meta_connection_readiness(db, connection) is False
+    health = connection.config_json["provider_health"]
+    assert connection.status == "paused"
+    assert health["state"] == "degraded"
+    assert health["current_error_code"] == "190"
+    assert health["action_required"] == "reconnect_meta"
 
 
 def test_native_transport_builds_text_message() -> None:
