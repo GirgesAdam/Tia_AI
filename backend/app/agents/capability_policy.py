@@ -11,6 +11,7 @@ from app.agents.semantic_router import (
 
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),
+    "clinic_information": frozenset(),
     "pricing": frozenset({"search_services"}),
     "branch_discovery": frozenset({"list_branches"}),
     "doctor_discovery": frozenset({"list_doctors"}),
@@ -68,7 +69,13 @@ def _risk_handoff(
         return True, "medical", "high"
     if "complaint" in risks:
         return True, "complaint", decision.recommended_handoff_priority
-    if "payment" in risks and "package_refund_quote" not in decision.capabilities:
+    safe_payment_reads = {
+        "customer_history",
+        "appointment_list",
+        "package_information",
+        "package_refund_quote",
+    }
+    if "payment" in risks and not safe_payment_reads.intersection(decision.capabilities):
         return True, "payment", decision.recommended_handoff_priority
     if "urgent" in risks:
         return True, decision.recommended_handoff_category, "urgent"

@@ -32,6 +32,9 @@ class PatientHistoryAppointmentRead(BaseModel):
     price_minor: int
     currency: str
     net_paid_minor: int
+    payment_status: str
+    payment_method: str
+    billing_context: str
 
 
 class PatientHistoryProfileRead(BaseModel):

@@ -16,6 +16,7 @@ SemanticDomain = Literal[
 ]
 SemanticCapability = Literal[
     "service_information",
+    "clinic_information",
     "pricing",
     "branch_discovery",
     "doctor_discovery",
@@ -82,16 +83,31 @@ class SemanticEntityHints(BaseModel):
         extra="forbid", json_schema_extra=_require_all_schema_fields
     )
 
-    service_query: str | None
+    service_query: str | None = Field(
+        default=None,
+        description=(
+            "Service wording intended by the latest customer turn. If the latest turn replaces "
+            "a service from persisted workflow state, reflect the new service wording here and "
+            "never copy the old service wording merely because it is stored in the flow."
+        ),
+    )
     branch_query: str | None
     doctor_query: str | None
     service_id: str | None = Field(
         default=None,
-        description="Canonical service UUID from the supplied clinic catalog.",
+        description=(
+            "Canonical service UUID from the supplied clinic catalog for the service intended by "
+            "the latest customer turn. If the latest wording plausibly matches multiple service "
+            "variants, leave this null and return those UUIDs in service_candidate_ids instead of "
+            "reusing a persisted older service UUID."
+        ),
     )
     service_candidate_ids: list[str] = Field(
         default_factory=list,
-        description="All plausible service UUIDs when no single service is selected.",
+        description=(
+            "All plausible service UUIDs for the latest customer turn when no single service is "
+            "selected; use this for ambiguous service variants rather than keeping an older service."
+        ),
     )
     branch_id: str | None = Field(
         default=None,
@@ -110,13 +126,20 @@ class SemanticEntityHints(BaseModel):
         description="All plausible doctor UUIDs when no single doctor is selected.",
     )
     requested_date: str | None = Field(
-        description="YYYY-MM-DD when semantically resolved, otherwise null."
+        default=None,
+        description=(
+            "Desired appointment date YYYY-MM-DD from the latest customer turn. In a reschedule "
+            "flow this is always the NEW target date, never the date of the existing appointment "
+            "being changed. Use appointment_reference for the existing appointment."
+        ),
     )
     requested_start_time: str | None = Field(
         default=None,
         description=(
-            "Exact local appointment start HH:MM when the customer requests one "
-            "precise start time, otherwise null."
+            "Exact local appointment start HH:MM intended by the latest customer turn. In a "
+            "reschedule flow this is the NEW target start time. Preserve an explicit exact clock "
+            "time from the latest turn even when older exact/before/after constraints exist in "
+            "workflow state; otherwise null."
         ),
     )
     not_before_time: str | None = Field(
@@ -125,7 +148,15 @@ class SemanticEntityHints(BaseModel):
     not_after_time: str | None = Field(
         description="Local HH:MM when semantically resolved, otherwise null."
     )
-    appointment_reference: str | None
+    appointment_reference: str | None = Field(
+        default=None,
+        description=(
+            "Reference that identifies the EXISTING appointment being acted on, such as its "
+            "current date/time or other customer-facing description. Never put the replacement "
+            "reschedule target here; replacement date/time belong in requested_date and "
+            "requested_start_time."
+        ),
+    )
 
 
 class SemanticCapabilityDecision(BaseModel):

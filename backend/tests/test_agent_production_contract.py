@@ -29,6 +29,14 @@ def test_package_write_path_stays_deterministic() -> None:
     assert "_structured_flow_write" in source
 
 
+def test_booking_write_requires_latest_turn_authority() -> None:
+    source = (BACKEND / "app/services/agent_chat.py").read_text(encoding="utf-8")
+
+    assert 'flow.flow_type == "booking"' in source
+    assert '"appointment_creation" not in {' in source
+    assert "for capability in turn.capabilities" in source
+
+
 def test_response_guard_is_invariant_only() -> None:
     source = (BACKEND / "app/agents/response_guard.py").read_text(encoding="utf-8")
 

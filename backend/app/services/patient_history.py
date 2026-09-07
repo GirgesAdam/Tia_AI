@@ -175,6 +175,9 @@ def build_patient_history_context(
                 price_minor=appointment.price_minor,
                 currency=appointment.currency,
                 net_paid_minor=net_by_appointment.get(appointment.id, 0),
+                payment_status=appointment.payment_status,
+                payment_method=appointment.payment_method,
+                billing_context=appointment.billing_context,
             )
             for appointment, service_name, branch_name, doctor_first, doctor_last in recent_rows
         ],
