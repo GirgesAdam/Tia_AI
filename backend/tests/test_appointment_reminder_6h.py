@@ -91,11 +91,19 @@ def test_automation_ui_exposes_configurable_reminder_timing() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(
         encoding="utf-8"
     )
+    component = (_root() / "frontend/src/components/automation-timing-form.tsx").read_text(
+        encoding="utf-8"
+    )
+    actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(
+        encoding="utf-8"
+    )
 
     assert page.count("appointment_reminder_6h") >= 2
-    assert "saveAutomationTiming" in page
-    assert 'name="timing_value"' in page
-    assert 'name="timing_unit"' in page
+    assert "AutomationTimingForm" in page
+    assert "saveAutomationTiming" in component
+    assert 'name="timing_value"' in component
+    assert 'name="timing_unit"' in component
+    assert "saveAutomationTiming" in actions
 
 
 def test_setup_documents_timing_neutral_template_contract() -> None:
