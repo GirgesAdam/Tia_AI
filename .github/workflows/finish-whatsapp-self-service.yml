@@ -1,0 +1,59 @@
+name: Finish WhatsApp Self Service
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+permissions:
+  contents: write
+jobs:
+  finish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+          fetch-depth: 0
+      - name: Apply final safety wiring
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'backend/app/services/operational_readiness.py': [
+                  ('EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"', 'EXPECTED_MIGRATION_HEAD = "0059_channel_provider_credentials"'),
+              ],
+              'backend/tests/test_operational_readiness_contract.py': [
+                  ('assert EXPECTED_MIGRATION_HEAD == "0058_whatsapp_safety"', 'assert EXPECTED_MIGRATION_HEAD == "0059_channel_provider_credentials"'),
+              ],
+              'backend/tests/test_public_table_rls_completion_v049017.py': [
+                  ('assert \'EXPECTED_MIGRATION_HEAD = "0058_whatsapp_safety"\' in readiness', 'assert \'EXPECTED_MIGRATION_HEAD = "0059_channel_provider_credentials"\' in readiness'),
+              ],
+              'frontend/src/app/(dashboard)/setup/whatsapp/page.tsx': [
+                  ('      (connection.status === "paused" ||\n        providerState === "disabled" ||\n        providerState === "degraded"),', '      (providerState === "disabled" ||\n        providerState === "degraded" ||\n        providerErrorCode === "131031"),'),
+              ],
+          }
+
+          for file_name, pairs in replacements.items():
+              path = Path(file_name)
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'Expected text missing in {file_name}: {old}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+      - name: Backend focused checks
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          ruff check app tests alembic
+          python -m compileall -q app alembic tests
+          python -m pytest -q tests/test_whatsapp_embedded_signup_onboarding.py tests/test_operational_readiness_contract.py tests/test_public_table_rls_completion_v049017.py
+      - name: Commit final wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend frontend
+          git commit -m "feat: finish WhatsApp self-service readiness"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
