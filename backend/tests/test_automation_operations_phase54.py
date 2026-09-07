@@ -74,6 +74,7 @@ def test_retry_and_cancel_routes_require_workspace_admin() -> None:
 def test_automation_dashboard_has_health_attention_safe_actions_and_product_whitelist() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
     actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(encoding="utf-8")
+    timing = (_root() / "frontend/src/components/automation-timing-form.tsx").read_text(encoding="utf-8")
 
     assert 'tiaRequest<AutomationOperationsOverview>("/automations/overview")' in page
     assert "attentionLabel" in page
@@ -84,14 +85,15 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
     assert "visibleProductRuleKeys" in page
     assert '"cancellation_recovery"' in page
     assert '"no_show_followup"' not in page
-    assert "saveAutomationTiming" in page
+    assert "AutomationTimingForm" in page
+    assert "saveAutomationTiming" in timing
     assert '/automations/jobs/${id}/retry' in actions
     assert '/automations/jobs/${id}/cancel' in actions
 
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0057_expense_type"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:
