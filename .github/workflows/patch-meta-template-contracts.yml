@@ -1,0 +1,132 @@
+name: Patch Meta template contracts
+on:
+  pull_request:
+    paths:
+      - .github/workflows/patch-meta-template-contracts.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'feat/clinic-ops-ux-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Align approved WhatsApp template contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path_str: str, old: str, new: str, count: int = 1) -> None:
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              actual = text.count(old)
+              if actual < count:
+                  raise SystemExit(f'{path_str}: expected at least {count} occurrence(s), found {actual}')
+              path.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          # New Meta-approved product template names.
+          replace_exact(
+              'backend/app/core/automation_rules.py',
+              'template_name="tia_appointment_reminder_ar",',
+              'template_name="tia_reminder_01",',
+          )
+          replace_exact(
+              'backend/app/core/automation_rules.py',
+              'template_name="tia_post_visit_followup_ar",',
+              'template_name="tia_post_visit_01",',
+          )
+
+          # Keep existing workspaces safe: only migrate known historical/default template names,
+          # never overwrite a clinic-specific custom template.
+          path = Path('backend/app/services/automations.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = 'RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})\n'
+          addition = '''RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})\n\nLEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {\n    "appointment_reminder_6h": frozenset(\n        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}\n    ),\n    "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),\n}\n'''
+          if anchor not in text:
+              raise SystemExit('automations.py: constants anchor not found')
+          text = text.replace(anchor, addition, 1)
+
+          old_loop = '''    for definition in DEFAULT_AUTOMATION_RULES:\n        if definition.key in existing:\n            continue\n        row = AutomationRule(\n'''
+          new_loop = '''    for definition in DEFAULT_AUTOMATION_RULES:\n        if definition.key in existing:\n            row = existing[definition.key]\n            legacy_names = LEGACY_DEFAULT_TEMPLATE_NAMES.get(definition.key, frozenset())\n            if row.template_name in legacy_names and row.template_name != definition.template_name:\n                row.template_name = definition.template_name\n                row.template_language = definition.template_language\n                changed = True\n            continue\n        row = AutomationRule(\n'''
+          if old_loop not in text:
+              raise SystemExit('automations.py: default-rule loop anchor not found')
+          text = text.replace(old_loop, new_loop, 1)
+
+          old_params = '''    if rule_key == "appointment_reminder_6h":\n        return [patient_name, service_name, date, time]\n'''
+          new_params = '''    if rule_key == "appointment_reminder_6h":\n        return [patient_name, service_name, time]\n'''
+          if old_params not in text:
+              raise SystemExit('automations.py: reminder parameter contract not found')
+          text = text.replace(old_params, new_params, 1)
+
+          old_copy = '''    if rule_key == "appointment_reminder_6h":\n        return (\n            f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "\n            f"يوم {data['date']} الساعة {data['time']}. "\n            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."\n        )\n'''
+          new_copy = '''    if rule_key == "appointment_reminder_6h":\n        return (\n            f"أهلًا {data['patient_name']} 👋 بفكرك إن عندك جلسة {data['service_name']} "\n            f"النهارده الساعة {data['time']}. مستنيينك 💛"\n        )\n'''
+          if old_copy not in text:
+              raise SystemExit('automations.py: reminder fallback copy not found')
+          text = text.replace(old_copy, new_copy, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # Product contract tests.
+          replace_exact(
+              'backend/tests/test_automation_product_contract.py',
+              'assert reminder.template_name == "tia_appointment_reminder_ar"',
+              'assert reminder.template_name == "tia_reminder_01"',
+          )
+          replace_exact(
+              'backend/tests/test_appointment_reminder_6h.py',
+              'assert reminder.template_name == "tia_appointment_reminder_ar"',
+              'assert reminder.template_name == "tia_reminder_01"',
+          )
+
+          test_path = Path('backend/tests/test_appointment_reminder_6h.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          old_test_block = '''    assert "فاضل حوالي 6 ساعات" not in reminder\n    assert "{data['date']}" in reminder\n    assert "{data['time']}" in reminder\n    assert "تعدّلي الموعد" in reminder\n'''
+          new_test_block = '''    assert "فاضل حوالي 6 ساعات" not in reminder\n    assert "{data['date']}" not in reminder\n    assert "{data['branch_name']}" not in reminder\n    assert "{data['time']}" in reminder\n    assert "النهارده" in reminder\n'''
+          if old_test_block not in test_text:
+              raise SystemExit('reminder copy test block not found')
+          test_text = test_text.replace(old_test_block, new_test_block, 1)
+
+          old_docs_test = '''    assert "tia_appointment_reminder_ar" in setup\n    assert "admin controls the timing" in setup\n    assert 'Do not hardcode "6 hours"' in setup\n    reminder_line = next(\n        line for line in setup.splitlines()\n        if "tia_appointment_reminder_ar" in line and "أهلًا" in line\n    )\n    assert "بموعدك لـ{{2}}" in reminder_line\n    assert "{{3}}" in reminder_line and "{{4}}" in reminder_line\n    assert "{{5}}" not in reminder_line\n    assert "تعدّلي الموعد" in reminder_line\n\n    post_visit_line = next(\n        line for line in setup.splitlines()\n        if "tia_post_visit_followup_ar" in line and "إزيك" in line\n    )\n'''
+          new_docs_test = '''    assert "tia_reminder_01" in setup\n    assert "admin controls the timing" in setup\n    assert 'Do not hardcode "6 hours"' in setup\n    reminder_line = next(\n        line for line in setup.splitlines()\n        if "tia_reminder_01" in line and "أهلًا" in line\n    )\n    assert "جلسة {{2}}" in reminder_line\n    assert "{{3}}" in reminder_line\n    assert "{{4}}" not in reminder_line and "{{5}}" not in reminder_line\n    assert "فاضل" not in reminder_line\n\n    post_visit_line = next(\n        line for line in setup.splitlines()\n        if "tia_post_visit_01" in line and "إزيك" in line\n    )\n'''
+          if old_docs_test not in test_text:
+              raise SystemExit('setup docs test block not found')
+          test_text = test_text.replace(old_docs_test, new_docs_test, 1)
+          test_path.write_text(test_text, encoding='utf-8')
+
+          # Add a focused source-level guard for the positional contract and legacy migration behavior.
+          contract_test = Path('backend/tests/test_meta_template_contracts.py')
+          contract_test.write_text('''from pathlib import Path\n\nfrom app.core.automation_rules import DEFAULT_AUTOMATION_RULES\nfrom app.services.automations import _appointment_template_body_parameters\n\n\ndef _rules():\n    return {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}\n\n\ndef test_meta_product_template_names_match_approved_templates() -> None:\n    rules = _rules()\n    assert rules["appointment_reminder_6h"].template_name == "tia_reminder_01"\n    assert rules["post_visit_followup"].template_name == "tia_post_visit_01"\n\n\ndef test_reminder_template_has_no_fixed_delay_date_or_branch_parameter() -> None:\n    params = _appointment_template_body_parameters(\n        "appointment_reminder_6h",\n        {\n            "patient_name": "سارة",\n            "service_name": "إزالة الشعر",\n            "date": "08/09/2026",\n            "time": "15:00",\n            "branch_name": "Main",\n        },\n    )\n    assert params == ["سارة", "إزالة الشعر", "15:00"]\n\n\ndef test_post_visit_template_keeps_name_service_and_session_date() -> None:\n    params = _appointment_template_body_parameters(\n        "post_visit_followup",\n        {\n            "patient_name": "سارة",\n            "service_name": "إزالة الشعر",\n            "date": "08/09/2026",\n            "time": "15:00",\n            "branch_name": "Main",\n        },\n    )\n    assert params == ["سارة", "إزالة الشعر", "08/09/2026"]\n\n\ndef test_known_legacy_default_names_are_migrated_without_overwriting_custom_templates() -> None:\n    source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")\n    assert "LEGACY_DEFAULT_TEMPLATE_NAMES" in source\n    assert "tia_appointment_reminder_ar" in source\n    assert "tia_reminder_6h_01" in source\n    assert "tia_post_visit_followup_ar" in source\n    assert "if row.template_name in legacy_names" in source\n''', encoding='utf-8')
+
+          # Operator docs: exact approved contracts, with timing owned by Automation settings.
+          docs_path = Path('n8n/AUTOMATIONS_SETUP.md')
+          docs = docs_path.read_text(encoding='utf-8')
+          docs = docs.replace('- `tia_appointment_reminder_ar`', '- `tia_reminder_01`', 1)
+          docs = docs.replace('- `tia_post_visit_followup_ar`', '- `tia_post_visit_01`', 1)
+          docs = docs.replace(
+              '- appointment reminder — **4 parameters**: customer name, service, appointment\n  date, appointment time.',
+              '- appointment reminder — **3 parameters**: customer name, service, appointment time.',
+              1,
+          )
+          docs = docs.replace(
+              '- `tia_appointment_reminder_ar`: `أهلًا {{1}} 👋 بفكرك بموعدك لـ{{2}} يوم {{3}} الساعة {{4}}. لو محتاجة تعدّلي الموعد ابعتيلي هنا.`',
+              '- `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} النهارده الساعة {{3}}. مستنيينك 💛`',
+              1,
+          )
+          docs = docs.replace(
+              '- `tia_post_visit_followup_ar`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟ لو محتاجة مساعدة أو حابة تحجزي الجلسة الجاية ابعتيلي هنا، ويسعدنا نعرف تقييمك للجلسة.`',
+              '- `tia_post_visit_01`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟`',
+              1,
+          )
+          docs = docs.replace(
+              'The reminder copy must stay timing-neutral because the admin controls when it is\nsent. Do not hardcode "6 hours" or any other delay inside the approved template.\nIt also does not need a branch placeholder in the current single-location patient\nexperience.',
+              'The reminder copy must stay timing-neutral because the admin controls when it is\nsent. Do not hardcode "6 hours" or any other delay inside the approved template.\nThe current single-location experience also omits branch and appointment-date placeholders;\nthe reminder says "today" and sends only the appointment time.',
+              1,
+          )
+          docs_path.write_text(docs, encoding='utf-8')
+          PY
+          git add backend/app/core/automation_rules.py backend/app/services/automations.py backend/tests/test_automation_product_contract.py backend/tests/test_appointment_reminder_6h.py backend/tests/test_meta_template_contracts.py n8n/AUTOMATIONS_SETUP.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Align WhatsApp templates with admin timing'
+          git push origin HEAD:${{ github.head_ref }}
