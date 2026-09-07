@@ -1,0 +1,82 @@
+name: Patch Meta Readiness Throttle
+on:
+  push:
+    branches: [feat/clinic-ops-ux-cleanup]
+    paths: [.github/workflows/patch-meta-readiness-throttle.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-ops-ux-cleanup
+      - name: Patch readiness throttling and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          transport_path = Path('backend/app/services/meta_whatsapp_transport.py')
+          text = transport_path.read_text(encoding='utf-8')
+
+          text = text.replace(
+              'from datetime import UTC, datetime\n',
+              'from datetime import UTC, datetime, timedelta\n',
+              1,
+          )
+          text = text.replace(
+              '_MAX_INBOUND_PROCESS_ATTEMPTS = 3\n',
+              '_MAX_INBOUND_PROCESS_ATTEMPTS = 3\n_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=15)\n_PENDING_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=2)\n',
+              1,
+          )
+
+          marker = '''    return sorted({str(rule.template_name) for rule in rows if rule.template_name})\n\n\ndef _fetch_phone_info'''
+          replacement = '''    return sorted({str(rule.template_name) for rule in rows if rule.template_name})\n\n\ndef _parse_utc_timestamp(value: object) -> datetime | None:\n    if not isinstance(value, str) or not value.strip():\n        return None\n    try:\n        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))\n    except ValueError:\n        return None\n    if parsed.tzinfo is None:\n        parsed = parsed.replace(tzinfo=UTC)\n    return parsed.astimezone(UTC)\n\n\ndef _readiness_refresh_due(\n    connection: ChannelConnection,\n    *,\n    required_templates: list[str],\n    now: datetime | None = None,\n) -> bool:\n    \"\"\"Throttle Meta metadata calls without slowing message delivery.\n\n    Healthy connections refresh provider/template metadata every 15 minutes.\n    Connections waiting on a template or otherwise not ready refresh every 2 minutes.\n    The transport tick itself may still run every few seconds for inbound/outbound work.\n    \"\"\"\n    current = now or datetime.now(UTC)\n    config = connection.config_json or {}\n    raw_health = config.get("provider_health")\n    health = raw_health if isinstance(raw_health, dict) else {}\n    last_checked = _parse_utc_timestamp(health.get("last_checked_at"))\n    if last_checked is None:\n        return True\n\n    raw_statuses = config.get("template_statuses")\n    template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}\n    waiting_for_template = any(\n        str(template_statuses.get(name) or "").lower()\n        not in {"approved", "rejected", "disabled"}\n        for name in required_templates\n    )\n    needs_fast_refresh = (\n        connection.status != "active"\n        or not bool(config.get("transport_ready"))\n        or waiting_for_template\n    )\n    interval = (\n        _PENDING_PROVIDER_REFRESH_INTERVAL\n        if needs_fast_refresh\n        else _PROVIDER_REFRESH_INTERVAL\n    )\n    return current - last_checked >= interval\n\n\ndef _fetch_phone_info'''
+          if marker not in text:
+              raise SystemExit('required-template insertion marker not found')
+          text = text.replace(marker, replacement, 1)
+
+          old_loop = '''    for connection in connections:\n        ready = refresh_meta_connection_readiness(db, connection)\n        processed, failed = _process_pending_inbound(\n            db, connection, limit=limit_per_connection\n        )\n        inbound_processed += processed\n        inbound_failed += failed\n        if not ready or connection.status != "active":\n            continue\n\n        token, error = _decrypt_connection_token(db, connection)\n        if not token or error:\n            continue\n        ready_connections += 1\n        required_templates = _required_template_names(db, connection)\n        raw_statuses = (connection.config_json or {}).get("template_statuses")\n'''
+          new_loop = '''    provider_refreshes = 0\n\n    for connection in connections:\n        required_templates = _required_template_names(db, connection)\n        if _readiness_refresh_due(\n            connection,\n            required_templates=required_templates,\n        ):\n            ready = refresh_meta_connection_readiness(db, connection)\n            provider_refreshes += 1\n        else:\n            ready = bool((connection.config_json or {}).get("transport_ready"))\n\n        processed, failed = _process_pending_inbound(\n            db, connection, limit=limit_per_connection\n        )\n        inbound_processed += processed\n        inbound_failed += failed\n        if not ready or connection.status != "active":\n            continue\n\n        token, error = _decrypt_connection_token(db, connection)\n        if not token or error:\n            continue\n        ready_connections += 1\n        raw_statuses = (connection.config_json or {}).get("template_statuses")\n'''
+          if old_loop not in text:
+              raise SystemExit('transport loop marker not found')
+          text = text.replace(old_loop, new_loop, 1)
+
+          old_return = '''        "connections_ready": ready_connections,\n        "inbound_processed": inbound_processed,\n'''
+          new_return = '''        "connections_ready": ready_connections,\n        "provider_refreshes": provider_refreshes,\n        "inbound_processed": inbound_processed,\n'''
+          if old_return not in text:
+              raise SystemExit('return marker not found')
+          text = text.replace(old_return, new_return, 1)
+          transport_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('backend/tests/test_meta_native_whatsapp_transport.py')
+          tests = test_path.read_text(encoding='utf-8')
+          tests = tests.replace(
+              'import json\nfrom pathlib import Path\nfrom uuid import uuid4\n',
+              'import json\nfrom datetime import UTC, datetime, timedelta\nfrom pathlib import Path\nfrom types import SimpleNamespace\nfrom uuid import uuid4\n',
+              1,
+          )
+          tests = tests.replace(
+              '    MetaWhatsAppTransportError,\n    build_meta_message_payload,\n',
+              '    MetaWhatsAppTransportError,\n    _readiness_refresh_due,\n    build_meta_message_payload,\n',
+              1,
+          )
+          anchor = '''def test_native_transport_builds_text_message() -> None:\n'''
+          additions = '''def _connection_for_refresh(*, checked_at: datetime, template_status: str = "approved", ready: bool = True, status: str = "active"):\n    return SimpleNamespace(\n        status=status,\n        config_json={\n            "transport_ready": ready,\n            "template_statuses": {"tia_reminder_01": template_status},\n            "provider_health": {"last_checked_at": checked_at.isoformat()},\n        },\n    )\n\n\ndef test_meta_readiness_refresh_is_throttled_when_healthy() -> None:\n    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)\n    connection = _connection_for_refresh(checked_at=checked_at)\n\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(minutes=14),\n    ) is False\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(minutes=15),\n    ) is True\n\n\ndef test_meta_readiness_refresh_is_faster_while_template_is_pending() -> None:\n    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)\n    connection = _connection_for_refresh(\n        checked_at=checked_at,\n        template_status="pending",\n    )\n\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(minutes=1),\n    ) is False\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(minutes=2),\n    ) is True\n\n\ndef test_missing_template_uses_pending_refresh_interval_not_every_tick() -> None:\n    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)\n    connection = _connection_for_refresh(checked_at=checked_at)\n    connection.config_json["template_statuses"] = {}\n\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(seconds=5),\n    ) is False\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=["tia_reminder_01"],\n        now=checked_at + timedelta(minutes=2),\n    ) is True\n\n\ndef test_unready_connection_uses_fast_refresh_without_five_second_polling() -> None:\n    checked_at = datetime(2026, 9, 7, 18, 0, tzinfo=UTC)\n    connection = _connection_for_refresh(\n        checked_at=checked_at,\n        ready=False,\n        status="paused",\n    )\n\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=[],\n        now=checked_at + timedelta(seconds=5),\n    ) is False\n    assert _readiness_refresh_due(\n        connection,\n        required_templates=[],\n        now=checked_at + timedelta(minutes=2),\n    ) is True\n\n\n'''
+          if anchor not in tests:
+              raise SystemExit('test insertion anchor not found')
+          tests = tests.replace(anchor, additions + anchor, 1)
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Validate patched files
+        run: |
+          python -m compileall -q backend/app/services/meta_whatsapp_transport.py backend/tests/test_meta_native_whatsapp_transport.py
+          git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/meta_whatsapp_transport.py backend/tests/test_meta_native_whatsapp_transport.py
+          git commit -m "perf: throttle Meta readiness refreshes"
+          git push origin HEAD:feat/clinic-ops-ux-cleanup
