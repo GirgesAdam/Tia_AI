@@ -332,6 +332,7 @@ def _setup_case(
                 "لا المواعيد دي مش مناسبة.",
                 f"غيرت رأيي، عايز {second_service.get('name')} بدلها.",
                 f"شوفلي {second_service.get('name')} مع {second_doctor.get('name')} يوم {second_day.isoformat()}.",
+                f"عايز النسخة اللي مدتها {int(second_service.get('duration_minutes') or 0)} دقيقة.",
                 f"الساعة {final_time} مناسبة، احجزها.",
                 "أكدلي إن الحجز للخدمة الجديدة مش الأولى.",
             ],

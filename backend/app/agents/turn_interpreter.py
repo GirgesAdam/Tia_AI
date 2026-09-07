@@ -542,6 +542,10 @@ def interpret_customer_turn(
             f"{json.dumps(state_payload, ensure_ascii=False, default=str, separators=(',', ':'))}\n\n"
             "Recent conversation for reference resolution only:\n"
             f"{_recent_conversation_excerpt(history)}\n\n"
+            "Latest-turn consistency reminder: if presented booking/reschedule options exist and "
+            "the latest customer turn explicitly chooses one option or exact clock time and authorizes "
+            "the action, capture that choice in selection_index/selection_time or requested_start_time "
+            "and include the matching write capability. Never infer a choice the customer did not state.\n\n"
             "Latest customer turn (authoritative):\n"
             f"{_latest_customer_turn(history)}"
         )
