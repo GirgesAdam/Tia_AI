@@ -22,11 +22,13 @@ type ExpenseCategory =
   | "software"
   | "taxes"
   | "other";
+type ExpenseType = "fixed" | "variable";
 
 type Expense = {
   id: string;
   title: string;
   category: ExpenseCategory;
+  expense_type: ExpenseType;
   amount_minor: number;
   currency: string;
   incurred_on: string;
@@ -63,7 +65,10 @@ const categoryLabels: Record<ExpenseCategory, string> = {
   taxes: "ضرائب ورسوم",
   other: "أخرى",
 };
-
+const expenseTypeLabels: Record<ExpenseType, string> = {
+  fixed: "مصروف ثابت",
+  variable: "مصروف متغير",
+};
 const categories = Object.entries(categoryLabels) as Array<[ExpenseCategory, string]>;
 
 function validDate(value: string | undefined) {
@@ -80,22 +85,18 @@ function ProfitCard({ item }: { item: ProfitabilityCurrency }) {
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-3">
         <div>
-          <CardTitle>{item.currency}</CardTitle>
-          <p className="mt-1 text-xs font-semibold text-[var(--muted)]">التحصيل والمصروفات خلال الفترة المحددة</p>
+          <CardTitle>ملخص المالية</CardTitle>
+          <p className="mt-1 text-xs font-semibold text-[var(--muted)]">الدخل والمصروفات وصافي الربح خلال الفترة المحددة</p>
         </div>
         <span className={`grid size-10 place-items-center rounded-xl ${profitable ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
           {profitable ? <TrendingUp size={19} /> : <TrendingDown size={19} />}
         </span>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl bg-slate-50 p-3">
-            <div className="text-[11px] font-bold text-slate-500">المدفوعات</div>
-            <div className="mt-1 text-lg font-black text-slate-950">{formatMoney(item.gross_payments_minor, item.currency)}</div>
-          </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <div className="text-[11px] font-bold text-slate-500">المرتجعات</div>
-            <div className="mt-1 text-lg font-black text-slate-950">{formatMoney(item.refunds_minor, item.currency)}</div>
+            <div className="text-[11px] font-bold text-slate-500">الدخل</div>
+            <div className="mt-1 text-lg font-black text-slate-950">{formatMoney(item.net_revenue_minor, item.currency)}</div>
           </div>
           <div className="rounded-xl bg-slate-50 p-3">
             <div className="text-[11px] font-bold text-slate-500">المصروفات</div>
@@ -105,9 +106,6 @@ function ProfitCard({ item }: { item: ProfitabilityCurrency }) {
             <div className={`text-[11px] font-bold ${profitable ? "text-emerald-700" : "text-rose-700"}`}>صافي الربح</div>
             <div className={`mt-1 text-lg font-black ${profitable ? "text-emerald-950" : "text-rose-950"}`}>{formatMoney(item.profit_minor, item.currency)}</div>
           </div>
-        </div>
-        <div className="mt-3 text-xs font-semibold text-[var(--muted)]">
-          صافي الإيراد بعد المرتجعات: {formatMoney(item.net_revenue_minor, item.currency)}
         </div>
       </CardContent>
     </Card>
@@ -120,7 +118,14 @@ function ExpenseFields({ expense, defaultDate }: { expense?: Expense; defaultDat
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <label className="xl:col-span-2">
           <span className="mb-1.5 block text-xs font-bold text-slate-600">المصروف</span>
-          <Input name="title" required maxLength={200} defaultValue={expense?.title || ""} placeholder="مثال: إيجار فرع التجمع" />
+          <Input name="title" required maxLength={200} defaultValue={expense?.title || ""} placeholder="مثال: إيجار العيادة" />
+        </label>
+        <label>
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">النوع</span>
+          <Select name="expense_type" defaultValue={expense?.expense_type || "variable"}>
+            <option value="fixed">ثابت</option>
+            <option value="variable">متغير</option>
+          </Select>
         </label>
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">التصنيف</span>
@@ -129,12 +134,8 @@ function ExpenseFields({ expense, defaultDate }: { expense?: Expense; defaultDat
           </Select>
         </label>
         <label>
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">المبلغ</span>
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">المبلغ بالجنيه</span>
           <Input name="amount" type="number" min="0.01" step="0.01" required defaultValue={expense ? amountInputValue(expense.amount_minor) : ""} placeholder="0.00" />
-        </label>
-        <label>
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">العملة</span>
-          <Input name="currency" required minLength={3} maxLength={3} defaultValue={expense?.currency || "EGP"} className="uppercase" />
         </label>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
@@ -174,7 +175,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="المالية"
-        description="تابع التحصيل الفعلي والمرتجعات والمصروفات وصافي الربح من بيانات Tia الحقيقية، بدون تقدير الإيراد من أسعار المواعيد."
+        description="تابع الدخل والمصروفات وصافي الربح من بيانات Tia الفعلية. العملة مضبوطة تلقائيًا على الجنيه المصري."
       />
 
       <Card className="mb-5">
@@ -200,7 +201,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
             <CardContent className="py-10 text-center">
               <WalletCards className="mx-auto text-slate-300" size={34} />
               <div className="mt-3 font-black text-slate-900">لا توجد حركة مالية في هذه الفترة</div>
-              <p className="mt-1 text-sm text-[var(--muted)]">ستظهر المدفوعات والمرتجعات والمصروفات هنا بمجرد تسجيلها.</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">سيظهر الدخل والمصروفات وصافي الربح هنا بمجرد تسجيل حركة مالية.</p>
             </CardContent>
           </Card>
         )}
@@ -211,7 +212,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           <CardHeader className="flex-row items-center justify-between gap-3">
             <div>
               <CardTitle>إضافة مصروف</CardTitle>
-              <p className="mt-1 text-xs text-[var(--muted)]">سجّل المصروف وقت حدوثه ليظهر فورًا في حساب الربحية.</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">اختر هل المصروف ثابت أو متغير وسجله وقت حدوثه.</p>
             </div>
             <span className="grid size-9 place-items-center rounded-xl bg-teal-50 text-teal-700"><Plus size={17} /></span>
           </CardHeader>
@@ -240,7 +241,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="font-black text-slate-950">{expense.title}</div>
-                      <div className="mt-1 text-xs font-semibold text-[var(--muted)]">{categoryLabels[expense.category]} · {expense.incurred_on}</div>
+                      <div className="mt-1 text-xs font-semibold text-[var(--muted)]">{expenseTypeLabels[expense.expense_type]} · {categoryLabels[expense.category]} · {expense.incurred_on}</div>
                       {expense.note && <div className="mt-2 text-sm text-slate-600">{expense.note}</div>}
                     </div>
                     <div className="text-left text-lg font-black text-slate-950">{formatMoney(expense.amount_minor, expense.currency)}</div>
@@ -249,27 +250,18 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                   {isAdmin && (
                     <div className="mt-3 border-t border-slate-100 pt-3">
                       <details>
-                        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800">
-                          <Pencil size={14} /> تعديل المصروف
-                        </summary>
+                        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800"><Pencil size={14} /> تعديل المصروف</summary>
                         <form action={updateExpense} className="mt-4 rounded-xl bg-slate-50 p-4">
                           <input type="hidden" name="expense_id" value={expense.id} />
                           <ExpenseFields expense={expense} defaultDate={profitability.end_date} />
-                          <div className="mt-4 flex flex-wrap justify-end gap-2">
-                            <Button type="submit" size="sm"><Pencil size={14} />حفظ التعديل</Button>
-                          </div>
+                          <div className="mt-4 flex flex-wrap justify-end gap-2"><Button type="submit" size="sm"><Pencil size={14} />حفظ التعديل</Button></div>
                         </form>
                       </details>
                       <details className="mt-2">
-                        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-800">
-                          <Trash2 size={14} /> حذف المصروف
-                        </summary>
+                        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-800"><Trash2 size={14} /> حذف المصروف</summary>
                         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3">
                           <span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span>
-                          <form action={deleteExpense}>
-                            <input type="hidden" name="expense_id" value={expense.id} />
-                            <Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button>
-                          </form>
+                          <form action={deleteExpense}><input type="hidden" name="expense_id" value={expense.id} /><Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button></form>
                         </div>
                       </details>
                     </div>
@@ -278,9 +270,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
               ))}
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">
-              لا توجد مصروفات مسجلة في هذه الفترة.
-            </div>
+            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">لا توجد مصروفات مسجلة في هذه الفترة.</div>
           )}
         </CardContent>
       </Card>
