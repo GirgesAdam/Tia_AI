@@ -747,15 +747,16 @@ def run_meta_transport_tick(
         ready_connections += 1
         raw_statuses = (connection.config_json or {}).get("template_statuses")
         template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
-        allow_templates = not required_templates or all(
-            str(template_statuses.get(name) or "").lower() == "approved"
-            for name in required_templates
+        approved_template_names = frozenset(
+            str(name)
+            for name, status in template_statuses.items()
+            if str(status or "").lower() == "approved"
         )
         for item in claim_dispatches(
             db,
             connection=connection,
             limit=limit_per_connection,
-            allow_templates=allow_templates,
+            approved_template_names=approved_template_names,
         ):
             if _send_claimed_dispatch(db, connection=connection, token=token, item=item):
                 sent += 1

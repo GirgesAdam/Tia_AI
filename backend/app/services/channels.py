@@ -718,6 +718,30 @@ def _whatsapp_dispatch_requires_opt_in(
     }
 
 
+def _whatsapp_template_name(message: Message) -> str | None:
+    metadata = message.metadata_json or {}
+    template = metadata.get("whatsapp_template")
+    if not isinstance(template, dict):
+        return None
+    raw_name = template.get("name")
+    if not isinstance(raw_name, str):
+        return None
+    return raw_name.strip() or None
+
+
+def _template_dispatch_is_allowed(
+    message: Message,
+    *,
+    approved_template_names: frozenset[str] | set[str] | None,
+) -> bool:
+    if message.message_type != "template" or approved_template_names is None:
+        return True
+    template_name = _whatsapp_template_name(message)
+    # Malformed template metadata is intentionally claimed so the provider-payload
+    # builder can fail it deterministically instead of leaving it queued forever.
+    return template_name is None or template_name in approved_template_names
+
+
 def _dispatch_is_claimable(
     dispatch: MessageDispatch,
     *,
@@ -741,6 +765,7 @@ def claim_dispatches(
     connection: ChannelConnection,
     limit: int,
     allow_templates: bool = True,
+    approved_template_names: frozenset[str] | set[str] | None = None,
 ) -> list[DispatchClaimItem]:
     if settings.demo_mode and not settings.demo_allow_external_dispatch:
         return []
@@ -826,6 +851,15 @@ def claim_dispatches(
             continue
 
         if not allow_templates and message.message_type == "template":
+            continue
+        if not _template_dispatch_is_allowed(
+            message,
+            approved_template_names=approved_template_names,
+        ):
+            # Do not burn provider retry budget while Meta is still reviewing this
+            # particular template. Deferring it also lets later approved/text
+            # messages move through the bounded candidate window.
+            dispatch.next_attempt_at = now + timedelta(minutes=2)
             continue
 
         if _whatsapp_dispatch_requires_opt_in(connection, message):

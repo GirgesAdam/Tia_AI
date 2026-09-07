@@ -305,7 +305,7 @@ def test_native_routes_and_worker_are_platform_managed() -> None:
     assert "X-Tia-Transport-Token" in route
     assert "decrypt_provider_access_token" in transport
     assert "record_dispatch_result" in transport
-    assert "allow_templates=allow_templates" in transport
+    assert "approved_template_names=approved_template_names" in transport
 
     serialized = json.dumps(worker)
     assert "n8n-nodes-base.whatsApp" not in serialized
