@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 
 import { saveAutomationTiming } from "@/app/(dashboard)/automations/actions";
 import { Button } from "@/components/ui/button";
@@ -26,13 +26,6 @@ export function AutomationTimingForm({
   const [savedValue, setSavedValue] = useState(String(initialValue));
   const [savedUnit, setSavedUnit] = useState<TimingUnit>(initialUnit);
   const [pending, startTransition] = useTransition();
-
-  useEffect(() => {
-    setValue(String(initialValue));
-    setUnit(initialUnit);
-    setSavedValue(String(initialValue));
-    setSavedUnit(initialUnit);
-  }, [initialValue, initialUnit]);
 
   const dirty = value !== savedValue || unit !== savedUnit;
 
