@@ -30,6 +30,15 @@ def test_structured_button_id_selects_exact_booking_action() -> None:
     assert action.appointment_id == appointment_id
 
 
+def _booking_message(run_id):
+    return SimpleNamespace(
+        workspace_id=uuid4(),
+        conversation_id=uuid4(),
+        sender_type="ai",
+        metadata_json={"agent_run_id": str(run_id)},
+    )
+
+
 def test_pending_booking_dispatch_gets_confirm_and_reschedule_buttons() -> None:
     run_id = uuid4()
     appointment_id = str(uuid4())
@@ -44,14 +53,8 @@ def test_pending_booking_dispatch_gets_confirm_and_reschedule_buttons() -> None:
             }
         )
     )
-    message = SimpleNamespace(
-        workspace_id=uuid4(),
-        conversation_id=uuid4(),
-        sender_type="ai",
-        metadata_json={"agent_run_id": str(run_id)},
-    )
 
-    metadata = whatsapp_booking_dispatch_metadata(db, message=message)
+    metadata = whatsapp_booking_dispatch_metadata(db, message=_booking_message(run_id))
     buttons = metadata["whatsapp_interactive"]["buttons"]
 
     assert buttons == [
@@ -63,6 +66,31 @@ def test_pending_booking_dispatch_gets_confirm_and_reschedule_buttons() -> None:
             "id": f"tia.booking.reschedule:{appointment_id}",
             "title": "تغيير الميعاد",
         },
+    ]
+
+
+def test_confirmed_booking_dispatch_does_not_offer_redundant_confirm_button() -> None:
+    run_id = uuid4()
+    appointment_id = str(uuid4())
+    db = SimpleNamespace(
+        scalar=lambda _statement: SimpleNamespace(
+            output_json={
+                "ok": True,
+                "appointment": {
+                    "appointment_id": appointment_id,
+                    "status": "confirmed",
+                },
+            }
+        )
+    )
+
+    metadata = whatsapp_booking_dispatch_metadata(db, message=_booking_message(run_id))
+
+    assert metadata["whatsapp_interactive"]["buttons"] == [
+        {
+            "id": f"tia.booking.reschedule:{appointment_id}",
+            "title": "تغيير الميعاد",
+        }
     ]
 
 
