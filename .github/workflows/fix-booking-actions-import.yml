@@ -1,0 +1,45 @@
+name: Fix booking actions import order
+
+on:
+  push:
+    branches:
+      - feat/booking-whatsapp-actions
+    paths:
+      - .github/workflows/fix-booking-actions-import.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/booking-whatsapp-actions
+      - name: Fix import order
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/services/channels.py')
+          text = path.read_text(encoding='utf-8')
+          block = '''from app.services.whatsapp_interactions import (\n    process_whatsapp_booking_action,\n    whatsapp_booking_dispatch_metadata,\n)\n'''
+          if text.count(block) != 1:
+              raise SystemExit('whatsapp import block not found exactly once')
+          text = text.replace(block, '', 1)
+          anchor = 'from app.services.crm_tasks import reconcile_ai_followup_dispatch\n'
+          if text.count(anchor) != 1:
+              raise SystemExit('crm_tasks anchor not found exactly once')
+          text = text.replace(anchor, anchor + block, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm .github/workflows/fix-booking-actions-import.yml
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix WhatsApp action import order"
+          git push origin HEAD:feat/booking-whatsapp-actions
