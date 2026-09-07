@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.channel_adapter import generate_adapter_token
-from app.core.config import settings
+from app.core.meta_whatsapp_config import meta_whatsapp_settings as settings
 from app.models.automation_rule import AutomationRule
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
