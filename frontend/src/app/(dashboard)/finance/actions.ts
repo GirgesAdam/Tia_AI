@@ -15,6 +15,7 @@ const expenseCategories = new Set([
   "taxes",
   "other",
 ]);
+const expenseTypes = new Set(["fixed", "variable"]);
 
 function parseAmountMinor(value: FormDataEntryValue | null) {
   const raw = String(value || "").trim().replace(",", ".");
@@ -27,16 +28,16 @@ function parseAmountMinor(value: FormDataEntryValue | null) {
 function expensePayload(formData: FormData) {
   const title = String(formData.get("title") || "").trim();
   const category = String(formData.get("category") || "other");
+  const expenseType = String(formData.get("expense_type") || "variable");
   const amountMinor = parseAmountMinor(formData.get("amount"));
-  const currency = String(formData.get("currency") || "EGP").trim().toUpperCase();
   const incurredOn = String(formData.get("incurred_on") || "").trim();
   const note = String(formData.get("note") || "").trim();
 
   if (
     !title ||
     !expenseCategories.has(category) ||
+    !expenseTypes.has(expenseType) ||
     !amountMinor ||
-    !/^[A-Z]{3}$/.test(currency) ||
     !/^\d{4}-\d{2}-\d{2}$/.test(incurredOn)
   ) {
     return null;
@@ -45,8 +46,9 @@ function expensePayload(formData: FormData) {
   return {
     title,
     category,
+    expense_type: expenseType,
     amount_minor: amountMinor,
-    currency,
+    currency: "EGP",
     incurred_on: incurredOn,
     note: note || null,
   };
