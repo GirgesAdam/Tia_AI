@@ -28,17 +28,25 @@ def _fernet() -> Fernet:
         ) from exc
 
 
-def encrypt_provider_access_token(token: str) -> str:
-    value = token.strip()
-    if not value:
-        raise ProviderCredentialError("Provider access token cannot be empty.")
-    return _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+def encrypt_provider_secret(value: str) -> str:
+    clean = value.strip()
+    if not clean:
+        raise ProviderCredentialError("Provider secret cannot be empty.")
+    return _fernet().encrypt(clean.encode("utf-8")).decode("utf-8")
 
 
-def decrypt_provider_access_token(ciphertext: str) -> str:
+def decrypt_provider_secret(ciphertext: str) -> str:
     try:
         return _fernet().decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
         raise ProviderCredentialError(
             "Stored provider credential cannot be decrypted with the configured key."
         ) from exc
+
+
+def encrypt_provider_access_token(token: str) -> str:
+    return encrypt_provider_secret(token)
+
+
+def decrypt_provider_access_token(ciphertext: str) -> str:
+    return decrypt_provider_secret(ciphertext)
