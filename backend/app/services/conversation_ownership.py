@@ -4,9 +4,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session
 
-from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.conversation import Conversation
 from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
@@ -30,44 +29,36 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _timestamp_not_after(value: datetime, boundary: datetime) -> bool:
-    return _as_utc(value) <= _as_utc(boundary)
+def customer_inbound_can_trigger_ai(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> bool:
+    """Allow AI only for customer activity newer than the latest human hand-back.
 
-
-def _suppress_pre_resume_inbound_events(conversation: Conversation) -> int:
-    """Finalize queued customer events from the human-owned period without replying.
-
-    The messages stay in conversation history so the next real customer turn can
-    see the full human exchange. Only their old processing triggers are consumed.
-    Events already being processed are protected by the ownership-epoch guard in
-    `agent_can_reply` when that run reaches its final ownership check.
+    A delayed provider event may be processed after staff has already returned the
+    conversation to AI. Comparing this exact inbound message with the persisted
+    handoff resolution time prevents an old customer turn from waking AI later.
+    The message itself stays in history; only its old reply trigger is suppressed.
     """
-    if not isinstance(conversation, Conversation):
-        return 0
-    db = object_session(conversation)
-    if db is None:
-        return 0
-
-    events = list(
-        db.scalars(
-            select(ChannelInboundEvent)
-            .join(Message, Message.id == ChannelInboundEvent.message_id)
-            .where(
-                ChannelInboundEvent.workspace_id == conversation.workspace_id,
-                Message.workspace_id == conversation.workspace_id,
-                Message.conversation_id == conversation.id,
-                Message.sender_type == "patient",
-                Message.direction == "inbound",
-                ChannelInboundEvent.status.in_(("received", "failed")),
-            )
-            .with_for_update()
+    resolved_at = db.scalar(
+        select(HandoffRequest.resolved_at)
+        .where(
+            HandoffRequest.workspace_id == conversation.workspace_id,
+            HandoffRequest.conversation_id == conversation.id,
+            HandoffRequest.status == "resolved",
+            HandoffRequest.resolved_at.is_not(None),
         )
+        .order_by(HandoffRequest.resolved_at.desc())
+        .limit(1)
     )
-    for event in events:
-        event.status = "processed"
-        event.outbound_message_id = None
-        event.last_error = None
-    return len(events)
+    if not isinstance(resolved_at, datetime):
+        return True
+    created_at = getattr(inbound, "created_at", None)
+    if not isinstance(created_at, datetime):
+        return False
+    return _as_utc(created_at) > _as_utc(resolved_at)
 
 
 def ai_dispatch_is_sendable(
@@ -91,19 +82,16 @@ def ai_dispatch_is_sendable(
             and active_handoff.assigned_user_id is None
         )
 
-    # Conversational AI replies are tied to the ownership epoch in which they
-    # were created. If a human takeover/resume happened afterwards, the old reply
-    # must never become sendable again. Templates/automations do not carry an
-    # in-reply-to customer message id and are intentionally unaffected.
+    # Conversational replies belong to the ownership epoch in which they were
+    # created. A queued reply from before a takeover/hand-back must never become
+    # sendable again. Templates and independent automations do not carry this
+    # in-reply-to marker and are intentionally unaffected.
     if metadata.get("in_reply_to_message_id"):
         created_at = getattr(message, "created_at", None)
         ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
-        if (
-            isinstance(created_at, datetime)
-            and isinstance(ownership_changed_at, datetime)
-            and _timestamp_not_after(created_at, ownership_changed_at)
-        ):
-            return False
+        if isinstance(created_at, datetime) and isinstance(ownership_changed_at, datetime):
+            if _as_utc(created_at) <= _as_utc(ownership_changed_at):
+                return False
 
     return agent_can_reply(conversation) and active_handoff is None
 
@@ -219,31 +207,19 @@ def _now() -> datetime:
 
 
 def agent_can_reply(conversation: Conversation) -> bool:
-    """Return whether this AI run still owns a customer-triggered turn.
+    """Return whether this AI run still owns an open conversation.
 
-    Returning a handoff to AI deliberately arms a silent state: the conversation
-    remains open, but AI cannot reply until a newer customer inbound updates
-    `last_message_at`. The transient ownership epoch also prevents an LLM run that
-    started before a takeover from becoming valid again after a fast hand-back.
+    The transient epoch is set when customer inbound is recorded. If ownership
+    changes while that run is thinking, a final refreshed ownership check sees a
+    different persisted timestamp and suppresses the stale reply even if staff has
+    already handed the conversation back to AI.
     """
     if conversation.owner_type != OWNER_AI or conversation.status != "open":
         return False
 
-    ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
-    last_message_at = getattr(conversation, "last_message_at", None)
-    if (
-        isinstance(ownership_changed_at, datetime)
-        and isinstance(last_message_at, datetime)
-        and _timestamp_not_after(last_message_at, ownership_changed_at)
-    ):
-        return False
-
-    if not isinstance(ownership_changed_at, datetime):
-        return True
-
     run_epoch = getattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, None)
-    if run_epoch is None:
-        setattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, ownership_changed_at)
+    ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
+    if run_epoch is None or not isinstance(ownership_changed_at, datetime):
         return True
     if not isinstance(run_epoch, datetime):
         return False
@@ -270,19 +246,11 @@ def return_to_ai(
     now: datetime | None = None,
 ) -> None:
     changed_at = now or _now()
-    resuming_from_human = conversation.owner_type == OWNER_HUMAN and not close
-    if resuming_from_human:
-        _suppress_pre_resume_inbound_events(conversation)
-
     conversation.owner_type = OWNER_AI
     conversation.assigned_user_id = None
     conversation.status = "closed" if close else "open"
     conversation.closed_at = changed_at if close else None
     conversation.ownership_changed_at = changed_at
-    if resuming_from_human:
-        # Do not let old customer activity unlock AI after hand-back. The next
-        # real customer inbound will move last_message_at past this resume epoch.
-        conversation.last_message_at = changed_at
 
 
 def record_customer_inbound(
@@ -290,13 +258,10 @@ def record_customer_inbound(
     *,
     now: datetime | None = None,
 ) -> None:
-    current = now or _now()
     conversation.unread_count = max(0, int(conversation.unread_count or 0)) + 1
-    conversation.last_message_at = current
+    conversation.last_message_at = now or _now()
     ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
     if isinstance(ownership_changed_at, datetime):
-        # A genuinely new customer turn starts a fresh run under the current
-        # ownership epoch. This is transient per SQLAlchemy session/run.
         setattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, ownership_changed_at)
 
 
