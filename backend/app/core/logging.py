@@ -11,3 +11,8 @@ def configure_logging() -> None:
         stream=sys.stdout,
         force=True,
     )
+    # Provider validation requests can carry Meta access tokens in query strings.
+    # Keep third-party HTTP client request logging above INFO so credentials never
+    # appear in application logs while preserving our own application logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
