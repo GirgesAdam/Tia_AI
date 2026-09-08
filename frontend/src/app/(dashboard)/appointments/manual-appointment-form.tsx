@@ -10,23 +10,10 @@ import { createManualAppointment, type ManualAppointmentState } from "./actions"
 
 const initialState: ManualAppointmentState = { ok: false, message: "" };
 
-function cairoNowForInput() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Cairo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
-}
-
 export function ManualAppointmentForm({
   mode,
   phone,
+  defaultStart,
   patientId,
   patientName,
   services,
@@ -38,6 +25,7 @@ export function ManualAppointmentForm({
 }: {
   mode: "existing" | "new";
   phone: string;
+  defaultStart: string;
   patientId?: string;
   patientName?: string;
   services: Service[];
@@ -51,7 +39,6 @@ export function ManualAppointmentForm({
   const [doctorId, setDoctorId] = useState("");
   const staffMap = useMemo(() => new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()])), [staff]);
   const branchId = doctorBranchMap[doctorId] || defaultBranchId || "";
-  const defaultStart = useMemo(() => cairoNowForInput(), []);
 
   return (
     <form action={formAction} className="space-y-4">
