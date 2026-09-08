@@ -19,10 +19,7 @@ import { ManualAppointmentForm } from "./manual-appointment-form";
 type SearchParams = { patient_id?: string; scope?: string; status?: string; manual_phone?: string };
 type BookingKnowledge = {
   branches: Array<{ id: string; is_active: boolean }>;
-  doctors: Array<{
-    id: string;
-    branches: Array<{ id: string; is_primary: boolean }>;
-  }>;
+  doctors: Array<{ id: string; branches: Array<{ id: string; is_primary: boolean }> }>;
 };
 
 const scopes = [["today", "اليوم"], ["upcoming", "القادمة"], ["past", "السابقة"], ["all", "الكل"]] as const;
@@ -57,6 +54,31 @@ function normalizePhoneIdentity(value: string | null | undefined) {
   return normalized;
 }
 
+function phoneSearchVariants(value: string) {
+  const identity = normalizePhoneIdentity(value);
+  const variants = new Set([value.trim(), identity]);
+  if (identity.startsWith("+20") && identity.length === 13) {
+    variants.add(`0${identity.slice(3)}`);
+    variants.add(identity.slice(1));
+    variants.add(`00${identity.slice(1)}`);
+  }
+  return [...variants].filter(Boolean);
+}
+
+function cairoNowForInput() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+}
+
 function availableManualStatuses(appointment: Appointment, now: number): AppointmentStatus[] {
   const started = new Date(appointment.start_at).getTime() <= now;
   if (appointment.status === "pending") return started ? ["completed", "no_show"] : ["confirmed", "cancelled"];
@@ -68,7 +90,6 @@ function availableManualStatuses(appointment: Appointment, now: number): Appoint
 function StatusControl({ appointment, patientId, canOverrideCancellation, now }: { appointment: Appointment; patientId: string; canOverrideCancellation: boolean; now: number }) {
   const options = availableManualStatuses(appointment, now);
   if (!options.length) return <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>;
-
   return (
     <form action={changeAppointmentStatus} className="flex min-w-[170px] items-center gap-1.5">
       <input type="hidden" name="appointment_id" value={appointment.id} />
@@ -98,9 +119,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
 
   const [appointments, patients, services, doctors, staff, knowledge, ctx] = await Promise.all([
     tiaRequest<Appointment[]>(`/booking/appointments?${query.toString()}`),
-    patientId
-      ? tiaRequest<Patient>(`/crm/patients/${patientId}`).then((patient) => [patient])
-      : tiaRequest<Patient[]>("/crm/patients?limit=100"),
+    patientId ? tiaRequest<Patient>(`/crm/patients/${patientId}`).then((patient) => [patient]) : tiaRequest<Patient[]>("/crm/patients?limit=100"),
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<Doctor[]>("/clinic/doctors"),
     tiaRequest<Staff[]>("/clinic/staff"),
@@ -110,8 +129,11 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
 
   let manualPatient: Patient | null = null;
   if (manualPhone) {
-    const candidates = await tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(manualPhone)}&limit=20`).catch(() => []);
+    const resultSets = await Promise.all(phoneSearchVariants(manualPhone).map((variant) =>
+      tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(variant)}&limit=20`).catch(() => []),
+    ));
     const identity = normalizePhoneIdentity(manualPhone);
+    const candidates = [...new Map(resultSets.flat().map((patient) => [patient.id, patient])).values()];
     manualPatient = candidates.find((patient) => normalizePhoneIdentity(patient.phone) === identity) || null;
   }
 
@@ -136,6 +158,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   const doctorMap = new Map(doctors.map((item) => [item.id, staffMap.get(item.staff_id) || "دكتور"]));
   const selectedPatient = patientId ? patients[0] : null;
   const canOverrideCancellation = ctx.workspace.role === "admin";
+  const defaultStart = cairoNowForInput();
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
 
@@ -144,18 +167,14 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
       <PageHeader
         title="المواعيد"
         description={selectedPatient ? `كل مواعيد ${patientMap.get(selectedPatient.id) || "العميل"} في مكان واحد.` : "تابع المواعيد وسجّل الحجوزات اليدوية من الاستقبال أو التليفون بدون تجاوز قواعد الحجز."}
-        action={selectedPatient ? (
-          <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-800">
-            الرجوع إلى ملف العميل <ChevronLeft size={15} />
-          </Link>
-        ) : undefined}
+        action={selectedPatient ? <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-800">الرجوع إلى ملف العميل <ChevronLeft size={15} /></Link> : undefined}
       />
 
       {!selectedPatient && (
         <Card className="mb-5">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Plus size={18} /> إضافة موعد يدوي</CardTitle>
-            <p className="text-xs font-semibold text-[var(--muted)]">ابدأ برقم الهاتف. Tia يحدد تلقائيًا إذا كان العميل موجودًا ويعرض تاريخه قبل تسجيل الموعد.</p>
+            <p className="text-xs font-semibold text-[var(--muted)]">ابدأ برقم الهاتف. Tia يحدد تلقائيًا إذا كان العميل موجودًا ويعرض حجوزاته السابقة قبل تسجيل الموعد.</p>
           </CardHeader>
           <CardContent className="space-y-5">
             <form method="get" className="flex max-w-xl gap-2">
@@ -194,6 +213,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                 <ManualAppointmentForm
                   mode={manualPatient ? "existing" : "new"}
                   phone={manualPhone}
+                  defaultStart={defaultStart}
                   patientId={manualPatient?.id}
                   patientName={manualPatient ? `${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim() : undefined}
                   services={services}
@@ -210,13 +230,9 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
       )}
 
       <div className="surface-toolbar mb-4">
-        <div className="flex flex-wrap gap-1">
-          {scopes.map(([value, label]) => <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>{label}</FilterChip>)}
-        </div>
+        <div className="flex flex-wrap gap-1">{scopes.map(([value, label]) => <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>{label}</FilterChip>)}</div>
         <span className="hidden h-7 w-px bg-slate-200 sm:block" />
-        <div className="flex flex-wrap gap-1">
-          {statuses.map(([value, label]) => <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>{label}</FilterChip>)}
-        </div>
+        <div className="flex flex-wrap gap-1">{statuses.map(([value, label]) => <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>{label}</FilterChip>)}</div>
         <span className="mr-auto hidden text-xs font-semibold text-[var(--muted)] sm:block">{appointments.length} موعد</span>
       </div>
 
@@ -228,17 +244,11 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                 {appointments.map((appointment) => (
                   <div key={appointment.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <Link href={`/patients/${appointment.patient_id}`} className="truncate text-sm font-black text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link>
-                        <div className="mt-1 text-sm font-semibold text-slate-700">{serviceMap.get(appointment.service_id) || "خدمة"}</div>
-                      </div>
+                      <div className="min-w-0"><Link href={`/patients/${appointment.patient_id}`} className="truncate text-sm font-black text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link><div className="mt-1 text-sm font-semibold text-slate-700">{serviceMap.get(appointment.service_id) || "خدمة"}</div></div>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700">{bookingMethod(appointment.source)}</span>
                     </div>
                     <div className="mt-3 rounded-xl bg-slate-50 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-bold text-slate-900">{formatDateTime(appointment.start_at)}</span>
-                        <span className="text-sm font-black text-slate-900">{formatMoney(appointment.price_minor, appointment.currency)}</span>
-                      </div>
+                      <div className="flex items-center justify-between gap-3"><span className="text-sm font-bold text-slate-900">{formatDateTime(appointment.start_at)}</span><span className="text-sm font-black text-slate-900">{formatMoney(appointment.price_minor, appointment.currency)}</span></div>
                       <div className="mt-2 text-xs text-[var(--muted)]"><span className="inline-flex items-center gap-1"><Stethoscope size={13} />{doctorMap.get(appointment.doctor_id) || "دكتور"}</span></div>
                     </div>
                     <div className="mt-3"><StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} /></div>
@@ -249,19 +259,17 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
               <div className="table-shell hidden md:block">
                 <table className="data-table min-w-[900px]">
                   <thead><tr><th>العميل</th><th>الموعد</th><th>الخدمة</th><th>الدكتور</th><th>السعر</th><th>طريقة الحجز</th><th>الحالة</th></tr></thead>
-                  <tbody>
-                    {appointments.map((appointment) => (
-                      <tr key={appointment.id}>
-                        <td className="font-bold"><Link href={`/patients/${appointment.patient_id}`} className="text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link></td>
-                        <td className="whitespace-nowrap font-semibold text-slate-800">{formatDateTime(appointment.start_at)}</td>
-                        <td>{serviceMap.get(appointment.service_id) || "خدمة"}</td>
-                        <td>{doctorMap.get(appointment.doctor_id) || "دكتور"}</td>
-                        <td className="whitespace-nowrap font-semibold">{formatMoney(appointment.price_minor, appointment.currency)}</td>
-                        <td><span className="font-semibold text-slate-700">{bookingMethod(appointment.source)}</span></td>
-                        <td><StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
+                  <tbody>{appointments.map((appointment) => (
+                    <tr key={appointment.id}>
+                      <td className="font-bold"><Link href={`/patients/${appointment.patient_id}`} className="text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link></td>
+                      <td className="whitespace-nowrap font-semibold text-slate-800">{formatDateTime(appointment.start_at)}</td>
+                      <td>{serviceMap.get(appointment.service_id) || "خدمة"}</td>
+                      <td>{doctorMap.get(appointment.doctor_id) || "دكتور"}</td>
+                      <td className="whitespace-nowrap font-semibold">{formatMoney(appointment.price_minor, appointment.currency)}</td>
+                      <td><span className="font-semibold text-slate-700">{bookingMethod(appointment.source)}</span></td>
+                      <td><StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} /></td>
+                    </tr>
+                  ))}</tbody>
                 </table>
               </div>
             </>
