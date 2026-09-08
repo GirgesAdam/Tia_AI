@@ -62,12 +62,47 @@ def test_direct_onboarding_has_meta_deep_links_and_scoped_webhook() -> None:
     service = (backend / "app/services/meta_whatsapp_onboarding.py").read_text(encoding="utf-8")
     assert "https://developers.facebook.com/apps/" in automation
     assert "https://business.facebook.com/settings/system-users" in automation
-    assert "https://business.facebook.com/wa/manage/phone-numbers/" in automation
-    assert "whatsapp-business/wa-dev-console/" in automation
+    assert "use_cases/customize/api-testing-v2/" in automation
+    assert "business_id=2086664822245784" in automation
+    assert "selected_tab=api-testing-v2" in automation
     assert "whatsapp-business/wa-settings/" in automation
     assert '"/webhook/{connection_id}"' in route
     assert "app_secret_ciphertext" in service
     assert '"webhook_verify_token"' in service
+
+
+def test_direct_onboarding_keeps_entered_credentials_after_failed_action() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    repo = backend.parent
+    automation = (
+        repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+    actions = (
+        repo / "frontend/src/app/(dashboard)/automations/actions.ts"
+    ).read_text(encoding="utf-8")
+
+    for state_name in ("appSecret", "wabaId", "phoneNumberId", "accessToken"):
+        assert f"const [{state_name}, set" in automation
+        assert f"value={{{state_name}}}" in automation
+    assert "Meta رفضت التحقق من بيانات الربط" in actions
+    assert "technicalMessage" in actions
+
+
+def test_system_user_link_is_high_contrast_and_right_aligned() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    repo = backend.parent
+    automation = (
+        repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+    assert "!text-teal-700" in automation
+    assert 'className="mt-2 w-full text-right"' in automation
+
+
+def test_http_client_info_logging_is_suppressed_for_provider_secret_safety() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    logging_source = (backend / "app/core/logging.py").read_text(encoding="utf-8")
+    assert 'logging.getLogger("httpx").setLevel(logging.WARNING)' in logging_source
+    assert 'logging.getLogger("httpcore").setLevel(logging.WARNING)' in logging_source
 
 
 def test_automation_page_owns_whatsapp_onboarding() -> None:
