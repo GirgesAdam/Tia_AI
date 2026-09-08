@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { tiaRequest } from "@/lib/tia/api";
+import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { ChannelConnection } from "@/lib/types";
 
 export type WhatsAppSetupActionState = {
@@ -9,7 +9,25 @@ export type WhatsAppSetupActionState = {
   message: string | null;
 };
 
+function safeTechnicalDetail(value: string | undefined) {
+  const detail = value?.trim();
+  if (!detail) return null;
+  return detail
+    .replace(/EA[A-Za-z0-9_-]{20,}/g, "[token hidden]")
+    .replace(/\b\d{8,}\|[A-Za-z0-9_-]{16,}\b/g, "[app token hidden]")
+    .slice(0, 700);
+}
+
 function actionErrorMessage(error: unknown) {
+  if (error instanceof TiaApiError) {
+    const technicalDetail = safeTechnicalDetail(error.technicalMessage);
+    if (technicalDetail) {
+      if (error.status === 502) return `Meta رفضت التحقق من بيانات الربط: ${technicalDetail}`;
+      if (error.status === 409) return technicalDetail;
+      if (error.status === 400 || error.status === 422) return technicalDetail;
+      if (error.status === 503) return `إعداد الربط غير مكتمل: ${technicalDetail}`;
+    }
+  }
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/, "") || "تعذر إكمال الخطوة. حاول مرة أخرى.";
 }
