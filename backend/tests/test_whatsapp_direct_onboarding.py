@@ -65,7 +65,8 @@ def test_direct_onboarding_has_meta_deep_links_and_scoped_webhook() -> None:
     assert "use_cases/customize/api-testing-v2/" in automation
     assert "business_id=2086664822245784" in automation
     assert "selected_tab=api-testing-v2" in automation
-    assert "whatsapp-business/wa-settings/" in automation
+    assert "use_cases/customize/configuration/" in automation
+    assert "selected_tab=configuration" in automation
     assert '"/webhook/{connection_id}"' in route
     assert "x-forwarded-proto" in route
     assert "app_secret_ciphertext" in service
