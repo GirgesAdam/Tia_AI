@@ -7,17 +7,17 @@ it wakes Tia on schedule. It does **not** hold a clinic's Meta access token, Wha
 credential, WABA ID, phone-number credential, booking state, reminder eligibility,
 idempotency, retries, clinic-sync cursors, mapping, or financial decisions.
 
-For the self-service WhatsApp path, Meta calls Tia's webhook directly and Tia sends
-to Meta Graph API directly with the encrypted credential belonging to the correct
-clinic connection. This means onboarding a new clinic does not require creating a
-new n8n workflow or WhatsApp credential.
+For WhatsApp, Meta calls Tia's webhook directly and Tia sends to Meta Graph API
+directly with the encrypted credential belonging to the correct clinic connection.
+Onboarding a new clinic does not require a new n8n workflow or WhatsApp credential.
 
 ## Current patient automations
 
 The product intentionally exposes a small set of predefined automations instead
 of a workflow builder:
 
-- `booking_confirmation` — optional booking confirmation.
+- `booking_confirmation` — fixed booking confirmation. It is part of the product
+  lifecycle and is always enabled; it is not shown as an optional Automation card.
 - `appointment_reminder_6h` — appointment reminder. The historical key is kept
   for database compatibility, but the admin controls the timing.
 - `post_visit_followup` — optional post-visit message that checks in, offers help
@@ -26,12 +26,14 @@ of a workflow builder:
 - `lead_not_booked_followup` — optional follow-up for an interested lead that has
   not completed a booking yet.
 
-Only the appointment reminder is enabled by default for new workspaces. Optional
-features stay opt-in and can be enabled or disabled independently by the admin.
+Only the appointment reminder is enabled by default among the admin-toggleable
+rules. Booking confirmation is fixed on. Other optional features can be enabled
+or disabled independently by the admin.
 
 The admin can configure reminder/follow-up timing in minutes, hours, or days from
 the Automations page. Tia stores the resulting `offset_minutes` on the rule and
-replans pending jobs deterministically.
+replans pending jobs deterministically. There is no product-level seven-day timing
+cap; planning query windows expand to cover the configured offset.
 
 Legacy 24-hour, 2-hour, and standalone no-show reminder rules may still exist in
 old data/history, but they are not part of the current product UI or default rule
@@ -71,89 +73,108 @@ times. Tia plans idempotent jobs in PostgreSQL and returns only jobs that are du
 The same scheduler also wakes the clinic-sync runtime; the backend owns that sync
 state and its retry/backoff behavior.
 
-## WhatsApp self-service onboarding
+## WhatsApp direct onboarding
 
-Tia uses Meta Embedded Signup. The clinic admin is only expected to:
+Embedded Signup is not part of the current product path. Each clinic owns its Meta
+App, WABA, phone number, and System User credential. The clinic admin completes a
+guided setup inside the **Automation** page.
 
-1. sign in to Meta;
-2. choose the clinic Business and WhatsApp number;
-3. complete Business Verification / Request Review if Meta explicitly requires it;
-4. intervene if Meta rejects a required message template.
+The admin provides once:
 
-The clinic admin must **not** be asked to copy a WABA ID, Phone Number ID, access
-token, webhook secret, n8n credential, or channel adapter token.
+1. Meta App ID;
+2. Meta App Secret;
+3. WhatsApp Business Account ID (WABA ID);
+4. Phone Number ID;
+5. System User Access Token with `whatsapp_business_management` and
+   `whatsapp_business_messaging`.
 
-Tia stores the clinic Meta access token encrypted at rest in
-`channel_provider_credentials`. The public channel config contains operational IDs
-and health/status metadata only; it never stores the raw access token.
+Every input has a direct Meta link in the UI. Tia validates that the token belongs
+to the entered app, checks the required scopes, verifies that the phone belongs to
+the WABA, and stores the access token and App Secret encrypted per clinic.
 
-The Tia platform itself is configured once with:
+Tia then generates a connection-scoped Callback URL and Verify Token. The admin
+pastes those two values in the clinic Meta App's WhatsApp Configuration page,
+clicks **Verify and Save**, and subscribes the `messages` webhook field. After that,
+Tia subscribes the app to the WABA and owns provider/template health monitoring.
+
+The callback shape is:
 
 ```text
-META_APP_ID
-META_APP_SECRET
-META_WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID
+GET/POST /api/v1/channels/whatsapp/webhook/{connection_id}
+```
+
+POST webhook bodies are validated with Meta's `X-Hub-Signature-256` HMAC using
+the encrypted App Secret for that exact clinic connection.
+
+Per-clinic credentials live in `channel_provider_credentials`. Raw access tokens
+and App Secrets are never returned to the dashboard after they are saved.
+
+The Tia platform itself only needs shared runtime configuration such as:
+
+```text
 META_GRAPH_API_VERSION
-META_WEBHOOK_VERIFY_TOKEN
 CHANNEL_CREDENTIAL_ENCRYPTION_KEY
 CHANNEL_TRANSPORT_WORKER_TOKEN
 ```
 
-These are platform/operator settings, not per-clinic onboarding steps.
-
-Meta's callback URL for inbound messages and delivery statuses is the Tia backend:
-
-```text
-GET/POST /api/v1/channels/whatsapp/webhook
-```
-
-POST webhook bodies are validated with Meta's `X-Hub-Signature-256` HMAC before
-Tia accepts any event. Incoming events are resolved to the correct clinic by the
-Meta `phone_number_id` already recorded during Embedded Signup.
+The clinic's App ID/App Secret/WABA/Phone ID/System User token are **not** shared
+platform credentials.
 
 ## WhatsApp templates
 
-The automation engine queues proactive WhatsApp messages as Meta templates. Meta
-must approve the templates before the corresponding proactive template dispatch
-is released.
+Tia owns the standard template catalog. The admin does not type template names and
+does not need to decide which templates to create.
 
-Current default template names:
+As soon as direct Meta credentials are accepted for a clinic, Tia checks the
+clinic WABA and automatically creates **all** missing standard templates —
+independent of which optional Automation toggles are enabled. The Automation page
+shows every template and its live Meta status, for example `approved`, `pending`,
+`rejected`, or a provisioning error. Tia keeps refreshing statuses automatically.
 
-- `tia_booking_confirmation_ar`
-- `tia_reminder_01`
-- `tia_post_visit_01`
-- `tia_cancellation_recovery_ar`
+Current standard template names:
+
+- `tia_booking_confirmation_ar` — fixed booking confirmation;
+- `tia_reminder_01` — configurable appointment reminder;
+- `tia_post_visit_01` — post-visit follow-up;
+- `tia_cancellation_recovery_ar` — cancellation/no-show recovery;
+- `tia_ai_followup_ar` — lead/AI CRM proactive follow-up outside the 24-hour window.
 
 The WhatsApp transport sends the exact number of positional body parameters
 required by the selected template. Current variable contracts are:
 
-- appointment reminder — **3 parameters**: customer name, service, appointment time.
-- post-visit follow-up — **3 parameters**: customer name, service, session date.
-- cancellation recovery — **4 parameters**: customer name, service, cancelled/no-show
-  appointment date, appointment time.
-- booking confirmation retains its existing five-variable appointment contract.
+- booking confirmation — **5 parameters**: customer name, service, appointment
+  date, appointment time, clinic/branch display name;
+- appointment reminder — **3 parameters**: customer name, service, appointment time;
+- post-visit follow-up — **3 parameters**: customer name, service, session date;
+- cancellation recovery — **4 parameters**: customer name, service,
+  cancelled/no-show appointment date, appointment time;
+- AI/lead follow-up — **5 parameters**: customer name, follow-up goal, local date,
+  local time, clinic name.
 
 The reminder copy must stay timing-neutral because the admin controls when it is
 sent. Do not hardcode "6 hours" or any other delay inside the approved template.
 The current single-location experience also omits branch and appointment-date
-placeholders; the reminder sends only the appointment time and stays valid if the
-admin changes the lead time.
+placeholders from the reminder itself.
 
-Recommended natural Arabic copy:
+Canonical Arabic reminder and post-visit copy:
 
 - `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} الساعة {{3}}. مستنيينك 💛`
 - `tia_post_visit_01`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟`
 
-Tia refreshes template statuses from Meta using the clinic's encrypted credential.
-If a required template is pending review, Tia waits without turning that into a
-clinic-admin setup task. If Meta rejects a required template, the Setup UI surfaces
-that as an admin action. Free-form customer-service replies can continue on a
-healthy active connection while proactive template sends remain queued until the
-required templates are approved.
+A toggle never creates or submits a template to Meta. Template provisioning is a
+connection-onboarding concern; toggles only express whether an optional automation
+should run. In the UI an enabled rule may therefore show **في انتظار التجهيز**
+until its own template is approved, and **شغالة** only when the WhatsApp connection,
+webhook, native transport, and that rule's template are ready.
+
+If a Meta-approved template is still pending, Tia waits instead of attempting an
+invalid proactive send. If Meta rejects a template, the Automation page surfaces
+that status. Existing dispatch safety only releases a proactive template when Meta
+reports that exact template as approved.
 
 The post-visit intent is intentionally one concise message: check how the visit
-went, offer help or the next booking, and invite feedback. Do not split these
-into multiple automatic messages.
+went, offer help or the next booking, and invite feedback. Do not split these into
+multiple automatic messages.
 
 ### AI CRM follow-ups and the 24-hour WhatsApp window
 
@@ -161,22 +182,18 @@ Existing AI CRM follow-ups use free-form text only while WhatsApp's 24-hour
 customer-service window is open. Outside that window, Tia does not try to bypass
 Meta policy with free-form text.
 
-For a CRM follow-up that needs proactive delivery outside the window, configure
-one or more Meta-approved template names from the Automations page. They are
-stored on the WhatsApp connection under `config.ai_followup_templates` as a list
-of `{name, language_code}` objects. Tia keeps the legacy
-`config.ai_followup_template` key for backward compatibility with older workers.
+The standard `tia_ai_followup_ar` Meta-approved template is automatically created
+and recorded in the connection's `config.ai_followup_templates` / legacy
+`config.ai_followup_template` compatibility keys. The admin does not configure a
+template-name pool manually.
 
-When more than one approved template is configured, Tia selects a stable template
-for the patient/task and avoids immediately repeating the last AI follow-up
-template when another approved option is available. This rotation does not add
-an LLM call.
+Outside the 24-hour window, the existing AI follow-up runtime uses the approved
+standard template. If the required template is not approved yet, the existing CRM
+follow-up path falls back to a human CRM task rather than attempting a
+provider-rejected send.
 
-If no approved template is configured, the existing CRM follow-up path falls back to a human CRM task rather than attempting a provider-rejected send.
-
-This is transport safety for the existing CRM runtime; it is not a new admin task
-automation feature. Do not store Meta tokens, API keys, or other secrets in the
-template-name configuration.
+This is transport safety for the existing CRM runtime; it is not a separate admin
+automation engine.
 
 ## WhatsApp proactive-message safety
 
@@ -186,10 +203,10 @@ record or withdraw it from the patient profile. Proactive templates and automati
 sends are blocked when opt-in is missing.
 
 Provider account-level failures such as Meta error `131031` pause only that
-clinic's WhatsApp connection. The Setup UI surfaces the Meta-side action that the
-clinic admin must complete. Authentication expiry/error is surfaced as a simple
-"reconnect Meta" action rather than asking the clinic for a raw token. AI CRM
-follow-ups fall back to staff work instead of retrying indefinitely.
+clinic's WhatsApp connection. The Automation page surfaces the Meta-side action
+that the clinic admin must complete. Authentication expiry/error is surfaced as a
+reconnection action. AI CRM follow-ups fall back to staff work instead of retrying
+indefinitely.
 
 Each clinic keeps its own encrypted WABA/phone credential, so a restriction on one
 clinic does not stop other tenants.
@@ -229,12 +246,13 @@ Do not create one n8n workflow or WhatsApp credential per clinic.
 - no-show appointments use the same cancellation-recovery behavior instead of a
   second no-show automation;
 - changing a rule timing replans queued jobs;
-- disabling a rule cancels pending jobs;
+- disabling an optional rule cancels pending jobs;
+- booking confirmation is fixed and cannot be disabled;
 - manual cancellation stays terminal;
 - duplicate scheduler ticks do not create duplicate jobs;
 - proactive WhatsApp routing can use the CRM patient phone when there is exactly
   one real sendable WhatsApp connection;
-- provider tokens are encrypted at rest and never returned to the dashboard;
+- provider tokens and App Secrets are encrypted at rest and never returned to the dashboard;
 - generic adapter/worker tokens remain hashed where those legacy/provider-neutral
   paths are still used;
 - permanent provider failures stop retries and surface the required action;
@@ -255,4 +273,4 @@ The Meta template is `tia_cancellation_recovery_ar` with four positional body pa
 `lead_not_booked_followup` is optional and disabled by default. The admin chooses the delay after the lead's latest recorded contact, falling back to lead creation time.
 The planner creates one idempotent system AI CRM follow-up task per lead and reuses the existing `crm_follow_up` AutomationJob runtime; there is no lead-specific job type or workflow engine.
 Before sending, Tia verifies that the rule is still enabled, the lead is still `new`, `contacted`, or `qualified`, and no other active follow-up task is already handling that lead. `booked`, `won`, `lost`, and `spam` leads are not contacted by this automation.
-Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the connection-level approved `ai_followup_templates` pool applies, with legacy `ai_followup_template` compatibility.
+Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the automatically provisioned `tia_ai_followup_ar` Meta template is required to be approved.
