@@ -64,7 +64,7 @@ def test_automation_runtime_is_whatsapp_only() -> None:
     assert (workflows / "tia_whatsapp_outbox_worker.json").exists()
     assert not (workflows / "tia_whatsapp_inbound_status.json").exists()
     assert (workflows / "tia_automation_scheduler.json").exists()
-    assert '@router.post("/webhook"' in route
+    assert '@router.post("/webhook/{connection_id}"' in route
     assert '@router.post("/transport/tick")' in route
 
 
