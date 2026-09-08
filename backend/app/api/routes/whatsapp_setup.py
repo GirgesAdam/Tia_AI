@@ -50,6 +50,19 @@ def _provider_setup_detail(exc: MetaWhatsAppProviderError) -> str:
     return f"{message} (Meta code {exc.code})" if exc.code else message
 
 
+def _public_callback_base_url(request: Request) -> str:
+    base_url = str(request.base_url).rstrip("/")
+    forwarded_proto = (
+        (request.headers.get("x-forwarded-proto") or "")
+        .split(",", 1)[0]
+        .strip()
+        .lower()
+    )
+    if forwarded_proto == "https" and base_url.startswith("http://"):
+        return "https://" + base_url.removeprefix("http://")
+    return base_url
+
+
 @router.get("/webhook/{connection_id}", include_in_schema=False)
 def whatsapp_meta_webhook_verify(
     connection_id: UUID,
@@ -175,7 +188,7 @@ def whatsapp_direct_connect(
             waba_id=payload.waba_id,
             phone_number_id=payload.phone_number_id,
             access_token=payload.access_token,
-            callback_base_url=str(request.base_url).rstrip("/"),
+            callback_base_url=_public_callback_base_url(request),
         )
     except MetaWhatsAppConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
