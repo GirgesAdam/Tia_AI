@@ -45,6 +45,11 @@ def _verify_scoped_signature(body: bytes, signature_header: str | None, app_secr
     return hmac.compare_digest(expected, supplied)
 
 
+def _provider_setup_detail(exc: MetaWhatsAppProviderError) -> str:
+    message = str(exc).strip() or "Meta rejected the WhatsApp setup request."
+    return f"{message} (Meta code {exc.code})" if exc.code else message
+
+
 @router.get("/webhook/{connection_id}", include_in_schema=False)
 def whatsapp_meta_webhook_verify(
     connection_id: UUID,
@@ -177,7 +182,10 @@ def whatsapp_direct_connect(
     except MetaWhatsAppConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MetaWhatsAppProviderError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_provider_setup_detail(exc),
+        ) from exc
     return WhatsAppDirectConnectResult(state=state)
 
 
@@ -193,5 +201,8 @@ def whatsapp_direct_finish(
     except MetaWhatsAppConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MetaWhatsAppProviderError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_provider_setup_detail(exc),
+        ) from exc
     return WhatsAppDirectConnectResult(state=state)
