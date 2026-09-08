@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CheckCircle2, Clock3, Database } from "lucide-react";
+import { CheckCircle2, Clock3, Database, MessageCircleMore } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +38,18 @@ export default async function SetupPage() {
           </div>
         </CardContent>
       </Card>
+
+      {admin && (
+        <Card className="mb-5">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 font-bold text-slate-950"><MessageCircleMore size={18} /> واتساب والـAutomation</div>
+              <p className="mt-1 text-sm leading-6 text-[var(--muted)]">اربط واتساب من صفحة Automation عبر خطوات Meta الموجهة، وبعدها Tia تتولى التحقق والتشفير والقوالب ومسار الإرسال.</p>
+            </div>
+            <Link href="/automations" className={buttonVariants({ variant: "outline" })}>فتح Automation</Link>
+          </CardContent>
+        </Card>
+      )}
 
       {admin ? (
         <ClinicSetupImporter initialSetup={setup} />

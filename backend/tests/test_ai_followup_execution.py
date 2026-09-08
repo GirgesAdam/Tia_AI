@@ -164,7 +164,6 @@ def test_patient_and_task_ui_make_automatic_followup_explicit() -> None:
     assert 'task.execution_mode === "human"' in tasks_page
 
 
-
 def test_whatsapp_followup_models_customer_service_window_explicitly() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
     assert "_latest_patient_inbound_at" in service
@@ -177,25 +176,42 @@ def test_whatsapp_followup_models_customer_service_window_explicitly() -> None:
 def test_outside_24h_uses_configured_approved_template_without_llm() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
     window_pos = service.index("if not _whatsapp_customer_service_window_open(")
-    template_pos = service.index("_ai_followup_template_config(connection)", window_pos)
+    template_pos = service.index("_select_ai_followup_template(", window_pos)
     template_dispatch_pos = service.index("_dispatch_ai_followup_template(", template_pos)
     composer_pos = service.index("compose_followup_message(", template_dispatch_pos)
     assert window_pos < template_pos < template_dispatch_pos < composer_pos
+    assert "_ai_followup_template_candidates" in service
+    assert "_latest_ai_followup_template_name" in service
     assert 'message_type="template"' in service
     assert '"delivery_mode": "approved_template"' in service
     assert '"whatsapp_template"' in service
     assert 'reason="approved_whatsapp_followup_template_required"' in service
 
 
-def test_channels_admin_can_configure_followup_template_without_secrets() -> None:
-    page = (_root() / "frontend/src/app/(dashboard)/channels/page.tsx").read_text(encoding="utf-8")
-    action = (_root() / "frontend/src/app/(dashboard)/channels/actions.ts").read_text(encoding="utf-8")
-    assert "ai_followup_template" in page
-    assert 'name="template_name"' in page
-    assert 'name="template_language"' in page
-    assert 'ctx.workspace.role === "admin"' in page
-    assert "config.ai_followup_template" in action
-    assert 'method: "PATCH"' in action
+def test_followup_template_is_platform_managed_instead_of_admin_typed() -> None:
+    page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(
+        encoding="utf-8"
+    )
+    action = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(
+        encoding="utf-8"
+    )
+    onboarding = (
+        _root() / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+    transport = (_root() / "backend/app/services/meta_whatsapp_transport.py").read_text(
+        encoding="utf-8"
+    )
+    channels_page = (_root() / "frontend/src/app/(dashboard)/channels/page.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'name="template_names"' not in page
+    assert 'name="template_language"' not in page
+    assert "saveAiFollowupTemplates" not in action
+    assert "provision_standard_whatsapp_templates" in transport
+    assert '"ai_followup_templates"' in transport
+    assert "قوالب الرسائل" in onboarding
+    assert 'redirect("/automations")' in channels_page
 
 
 def test_automation_setup_documents_approved_template_fallback() -> None:

@@ -26,7 +26,8 @@ def _schema(engine) -> None:
             phone_normalized VARCHAR(40), gender VARCHAR(32), birth_date DATE,
             preferred_language VARCHAR(10), preferred_branch_id CHAR(32), source VARCHAR(32),
             source_detail VARCHAR(200), status VARCHAR(20), marketing_consent BOOLEAN DEFAULT 0,
-            marketing_consent_at DATETIME, source_created_at DATETIME, last_contact_at DATETIME,
+            marketing_consent_at DATETIME, whatsapp_opt_in BOOLEAN DEFAULT 0,
+            whatsapp_opt_in_at DATETIME, whatsapp_opt_in_source VARCHAR(32), source_created_at DATETIME, last_contact_at DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -211,5 +212,5 @@ def test_migration_preserves_original_patient_timestamp_and_head() -> None:
     assert 'revision: str = "0037_patient_history"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0036_sync_runtime"' in migration
     assert 'sa.Column("source_created_at", sa.DateTime(timezone=True), nullable=True)' in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
     assert len("0037_patient_history") <= 32

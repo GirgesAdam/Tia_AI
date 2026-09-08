@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 WORKFLOW_NAMES = (
-    "tia_whatsapp_inbound_status.json",
     "tia_whatsapp_outbox_worker.json",
     "tia_automation_scheduler.json",
 )
@@ -23,58 +22,36 @@ def test_workflows_are_valid_json_without_embedded_credentials() -> None:
             'x-automation-token":',
             'access_token":',
             'client_secret":',
+            "bearer eaa",
         ):
             assert forbidden not in raw
 
 
-def test_whatsapp_workflows_have_provider_result_and_status_callback_paths() -> None:
+def test_whatsapp_transport_worker_only_wakes_tia_native_transport() -> None:
     root = _root() / "n8n" / "workflows"
-    inbound = (root / "tia_whatsapp_inbound_status.json").read_text(encoding="utf-8")
-    outbox = (root / "tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8")
-    assert "/outbox/provider-status" in inbound
-    assert "/adapter/inbound" in inbound
-    assert "/result" in outbox
-    assert "WhatsApp Send Template" in outbox
-    assert "WhatsApp Send Text" in outbox
+    worker = json.loads((root / "tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8"))
+    raw = json.dumps(worker, ensure_ascii=False)
+
+    assert "/api/v1/channels/whatsapp/transport/tick" in raw
+    assert "n8n-nodes-base.whatsApp" not in raw
+    assert "graph.facebook.com" not in raw
+    assert "/adapter/outbox/claim" not in raw
+    assert "/adapter/outbox/provider-status" not in raw
 
 
-def test_whatsapp_result_nodes_avoid_optional_chaining_expression_parser_bug() -> None:
-    path = _root() / "n8n" / "workflows" / "tia_whatsapp_outbox_worker.json"
-    workflow = json.loads(path.read_text(encoding="utf-8"))
-    by_name = {node["name"]: node for node in workflow["nodes"]}
+def test_meta_webhook_and_provider_results_are_owned_by_backend() -> None:
+    root = _root()
+    route = (root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")
+    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
 
-    for name in ("Tia Record Template Result", "Tia Record Text Result"):
-        node = by_name[name]
-        body = node["parameters"]["jsonBody"]
-        url = node["parameters"]["url"]
-        assert "?." not in body
-        assert "$('Expand Dispatches').item.json.dispatch_id" in url
-        assert "/adapter/outbox/" in url
-        assert "/result" in url
-
-
-def test_whatsapp_provider_send_is_single_attempt_and_preserves_real_error() -> None:
-    path = _root() / "n8n" / "workflows" / "tia_whatsapp_outbox_worker.json"
-    workflow = json.loads(path.read_text(encoding="utf-8"))
-    by_name = {node["name"]: node for node in workflow["nodes"]}
-
-    send_nodes = [
-        name
-        for name in by_name
-        if name == "WhatsApp Send Text" or name.startswith("WhatsApp Send Template")
-    ]
-    assert send_nodes
-    for name in send_nodes:
-        node = by_name[name]
-        assert node.get("retryOnFail") is not True
-        assert "maxTries" not in node
-
-    for name in ("Tia Record Template Result", "Tia Record Text Result"):
-        body = by_name[name]["parameters"]["jsonBody"]
-        assert "typeof $json.error" not in body
-        assert "$json.error.toString()" in body
-        assert "errorDescription" in body
-        assert "retry_after_seconds" in body
+    assert '@router.get("/webhook/{connection_id}"' in route
+    assert '@router.post("/webhook/{connection_id}"' in route
+    assert "X-Hub-Signature-256" in route
+    assert "app_secret_ciphertext" in route
+    assert "_verify_scoped_signature" in route
+    assert "record_dispatch_result(" in transport
+    assert "record_provider_status(" in transport
+    assert '_graph_url(f"{phone_number_id}/messages")' in transport
 
 
 def test_runtime_workers_support_a_hosted_backend_url() -> None:
@@ -82,7 +59,6 @@ def test_runtime_workers_support_a_hosted_backend_url() -> None:
     for name in WORKFLOW_NAMES:
         raw = (root / name).read_text(encoding="utf-8")
         assert "$env.TIA_API_BASE_URL" in raw
-        # Local Docker remains a fallback, not the only backend address.
         assert "|| 'http://host.docker.internal:8000'" in raw
         assert "https://YOUR_TIA_BACKEND_DOMAIN" not in raw
 
@@ -99,15 +75,23 @@ def test_automation_scheduler_execute_url_is_a_real_expression() -> None:
     assert "%27%20%2B%20%24json.job_id" not in execute_url
 
 
-def test_whatsapp_ai_process_is_not_blindly_retried_by_n8n() -> None:
-    path = _root() / "n8n" / "workflows" / "tia_whatsapp_inbound_status.json"
-    workflow = json.loads(path.read_text(encoding="utf-8"))
-    by_name = {node["name"]: node for node in workflow["nodes"]}
+def test_inbound_whatsapp_is_not_processed_or_retried_by_n8n() -> None:
+    root = _root()
+    workflows = root / "n8n" / "workflows"
+    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
 
-    process = by_name["Tia Process With AI"]
-    assert process.get("retryOnFail") is not True
-    assert "maxTries" not in process
-    assert "waitBetweenTries" not in process
+    assert not (workflows / "tia_whatsapp_inbound_status.json").exists()
+    assert "def ingest_meta_webhook(" in transport
+    assert "def _process_pending_inbound(" in transport
+    assert "_MAX_INBOUND_PROCESS_ATTEMPTS = 3" in transport
 
-    # Accepting the normalized inbound is idempotent and can keep its own retry.
-    assert by_name["Tia Accept Inbound"].get("retryOnFail") is True
+
+def test_provider_send_retries_remain_in_tia_state_machine_not_n8n() -> None:
+    root = _root()
+    worker = (root / "n8n/workflows/tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8")
+    transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
+
+    assert "WhatsApp Send Template" not in worker
+    assert "WhatsApp Send Text" not in worker
+    assert "retry_after_seconds=30" in transport
+    assert "record_dispatch_result(" in transport

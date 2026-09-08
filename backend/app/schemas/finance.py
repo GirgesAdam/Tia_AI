@@ -17,13 +17,15 @@ ExpenseCategory = Literal[
     "taxes",
     "other",
 ]
+ExpenseType = Literal["fixed", "variable"]
 
 
 class ExpenseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     category: ExpenseCategory = "other"
+    expense_type: ExpenseType = "variable"
     amount_minor: int = Field(gt=0)
-    currency: str = Field(min_length=3, max_length=3)
+    currency: str = Field(default="EGP", min_length=3, max_length=3)
     incurred_on: date
     note: str | None = Field(default=None, max_length=1000)
 
@@ -49,6 +51,7 @@ class ExpenseCreate(BaseModel):
 class ExpenseUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     category: ExpenseCategory | None = None
+    expense_type: ExpenseType | None = None
     amount_minor: int | None = Field(default=None, gt=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     incurred_on: date | None = None
@@ -74,7 +77,7 @@ class ExpenseUpdate(BaseModel):
 
     @model_validator(mode="after")
     def reject_null_for_required_columns(self) -> ExpenseUpdate:
-        for field_name in ("title", "category", "amount_minor", "currency", "incurred_on"):
+        for field_name in ("title", "category", "expense_type", "amount_minor", "currency", "incurred_on"):
             if field_name in self.model_fields_set and getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} cannot be null.")
         return self
@@ -86,6 +89,7 @@ class ExpenseRead(BaseModel):
     created_by_user_id: UUID | None
     title: str
     category: ExpenseCategory
+    expense_type: ExpenseType
     amount_minor: int
     currency: str
     incurred_on: date

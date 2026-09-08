@@ -49,6 +49,13 @@ LEAD_FOLLOWUP_DEDUPE_PREFIX = "automation:lead-not-booked:"
 LEAD_FOLLOWUP_ELIGIBLE_STATUSES = frozenset({"new", "contacted", "qualified"})
 RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
+LEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {
+    "appointment_reminder_6h": frozenset(
+        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}
+    ),
+    "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),
+}
+
 
 @dataclass(frozen=True)
 class PlanningResult:
@@ -100,6 +107,21 @@ def ensure_default_rules(
 
     for definition in DEFAULT_AUTOMATION_RULES:
         if definition.key in existing:
+            row = existing[definition.key]
+            legacy_names = LEGACY_DEFAULT_TEMPLATE_NAMES.get(definition.key, frozenset())
+            if row.template_name in legacy_names and row.template_name != definition.template_name:
+                row.template_name = definition.template_name
+                row.template_language = definition.template_language
+                changed = True
+            if (
+                row.template_name == definition.template_name
+                and row.template_language != definition.template_language
+            ):
+                row.template_language = definition.template_language
+                changed = True
+            if definition.key == "booking_confirmation" and not row.enabled:
+                row.enabled = True
+                changed = True
             continue
         row = AutomationRule(
             workspace_id=workspace_id,
@@ -188,18 +210,24 @@ def _candidate_appointments(
     horizon: datetime,
 ) -> list[Appointment]:
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
+        appointment_horizon = horizon
+        if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
+            appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
         return list(
             db.scalars(
                 select(Appointment).where(
                     Appointment.workspace_id == workspace_id,
                     Appointment.status.in_(("pending", "confirmed")),
                     Appointment.start_at > now,
-                    Appointment.start_at <= horizon,
+                    Appointment.start_at <= appointment_horizon,
                 )
             )
         )
     if rule.trigger_kind == "after_completed":
-        oldest = now - timedelta(days=14)
+        oldest = now - max(
+            timedelta(days=14),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -211,7 +239,10 @@ def _candidate_appointments(
             )
         )
     if rule.trigger_kind == "after_no_show":
-        oldest = now - timedelta(days=7)
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -223,7 +254,10 @@ def _candidate_appointments(
             )
         )
     if rule.trigger_kind == "after_cancelled":
-        oldest = now - timedelta(days=7)
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -422,7 +456,10 @@ def _plan_lead_followup_rule(
     if not rule.enabled:
         return PlanningResult(planned=0, cancelled=cancelled)
 
-    oldest = now - timedelta(days=30)
+    oldest = now - max(
+        timedelta(days=30),
+        timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+    )
     leads = list(
         db.scalars(
             select(Lead).where(
@@ -819,9 +856,8 @@ def _fallback_text(rule_key: str, data: dict) -> str:
         )
     if rule_key == "appointment_reminder_6h":
         return (
-            f"أهلًا {data['patient_name']} 👋 بفكرك بموعدك لـ{data['service_name']} "
-            f"يوم {data['date']} الساعة {data['time']}. "
-            "لو محتاجة تعدّلي الموعد ابعتيلي هنا."
+            f"أهلًا {data['patient_name']} 👋 بفكرك إن عندك جلسة {data['service_name']} "
+            f"الساعة {data['time']}. مستنيينك 💛"
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.
@@ -870,6 +906,12 @@ def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:
             if not name or not language:
                 continue
             candidate = (name, language)
+            if (
+                rule.key == "appointment_reminder_6h"
+                and name == "tia_reminder_6h_01"
+                and rule.offset_minutes != -360
+            ):
+                continue
             if candidate not in candidates:
                 candidates.append(candidate)
     return candidates
@@ -884,7 +926,9 @@ def _select_rule_template(rule: AutomationRule, appointment_id: UUID) -> tuple[s
     return name, language, len(candidates)
 
 
-def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str]:
+def _appointment_template_body_parameters(
+    rule_key: str, data: dict, *, template_name: str | None = None
+) -> list[str]:
     """Return the exact positional variables required by each approved Meta template."""
     patient_name = str(data.get("patient_name") or "العميل")[:256]
     service_name = str(data.get("service_name") or "الخدمة")[:256]
@@ -893,7 +937,11 @@ def _appointment_template_body_parameters(rule_key: str, data: dict) -> list[str
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
-        return [patient_name, service_name, date, time]
+        # Temporary compatibility for the already-approved Meta template while
+        # the timing-neutral 3-variable replacement is still under review.
+        if template_name == "tia_reminder_6h_01":
+            return [patient_name, service_name, time, branch_name]
+        return [patient_name, service_name, time]
     if rule_key == "cancellation_recovery":
         return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
@@ -1216,16 +1264,70 @@ def _whatsapp_customer_service_window_open(
     return inbound.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=24)
 
 
-def _ai_followup_template_config(connection: ChannelConnection) -> tuple[str, str] | None:
-    raw = (connection.config_json or {}).get("ai_followup_template")
-    if not isinstance(raw, dict):
-        return None
-    name = str(raw.get("name") or "").strip()
-    language_code = str(raw.get("language_code") or "ar").strip() or "ar"
-    if not name:
-        return None
-    return name[:512], language_code[:32]
+def _ai_followup_template_candidates(connection: ChannelConnection) -> list[tuple[str, str]]:
+    config = connection.config_json or {}
+    candidates: list[tuple[str, str]] = []
+    raw_pool = config.get("ai_followup_templates")
+    if isinstance(raw_pool, list):
+        for raw in raw_pool:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            language = str(raw.get("language_code") or "ar").strip() or "ar"
+            candidate = (name[:512], language[:32])
+            if name and candidate not in candidates:
+                candidates.append(candidate)
+    legacy = config.get("ai_followup_template")
+    if isinstance(legacy, dict):
+        name = str(legacy.get("name") or "").strip()
+        language = str(legacy.get("language_code") or "ar").strip() or "ar"
+        candidate = (name[:512], language[:32])
+        if name and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
+
+def _latest_ai_followup_template_name(
+    db: Session, *, workspace_id: UUID, conversation_id: UUID
+) -> str | None:
+    messages = db.scalars(
+        select(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.conversation_id == conversation_id,
+            Message.direction == "outbound",
+            Message.message_type == "template",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(10)
+    )
+    for message in messages:
+        metadata = message.metadata_json or {}
+        if metadata.get("source") != "ai_followup":
+            continue
+        raw = metadata.get("whatsapp_template")
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or "").strip()
+            if name:
+                return name
+    return None
+
+
+def _select_ai_followup_template(
+    connection: ChannelConnection,
+    *,
+    task_id: UUID,
+    patient_id: UUID,
+    previous_template: str | None = None,
+) -> tuple[str, str] | None:
+    candidates = _ai_followup_template_candidates(connection)
+    if not candidates:
+        return None
+    digest = hashlib.sha256(f"{patient_id}:{task_id}".encode()).digest()
+    index = int.from_bytes(digest[:8], "big") % len(candidates)
+    if len(candidates) > 1 and previous_template and candidates[index][0] == previous_template:
+        index = (index + 1) % len(candidates)
+    return candidates[index]
 
 def _dispatch_ai_followup_template(
     db: Session,
@@ -1429,6 +1531,16 @@ def _execute_crm_followup_job(
         job.result_json = {"reason": "patient_not_active"}
         db.commit()
         return ExecutionResult(job=job, reason="patient_not_active")
+    if not patient.whatsapp_opt_in:
+        result = _handoff_followup_to_staff(
+            task=task,
+            job=job,
+            conversation=None,
+            reason="whatsapp_opt_in_required",
+            now=now,
+        )
+        db.commit()
+        return result
 
     route = _resolve_followup_route(db, task=task, now=now)
     if route is None:
@@ -1484,7 +1596,15 @@ def _execute_crm_followup_job(
     if not _whatsapp_customer_service_window_open(
         latest_patient_inbound_at=latest_inbound_at, now=now
     ):
-        template = _ai_followup_template_config(connection)
+        previous_template = _latest_ai_followup_template_name(
+            db, workspace_id=workspace_id, conversation_id=conversation.id
+        )
+        template = _select_ai_followup_template(
+            connection,
+            task_id=task.id,
+            patient_id=patient.id,
+            previous_template=previous_template,
+        )
         if template is None:
             result = _handoff_followup_to_staff(
                 task=task,
@@ -1745,7 +1865,7 @@ def automation_operations_overview(
             .where(
                 AutomationRule.workspace_id == workspace_id,
                 AutomationRule.enabled.is_(True),
-                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS),
+                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS | {"booking_confirmation"}),
             )
         )
         or 0
@@ -2117,6 +2237,14 @@ def execute_job(
         return ExecutionResult(job=job, reason=job.result_json["reason"])
 
     conversation, connection = route
+    if connection.channel == "whatsapp" and not patient.whatsapp_opt_in:
+        job.status = "skipped"
+        job.completed_at = now
+        job.locked_at = None
+        job.result_json = {"reason": "whatsapp_opt_in_required"}
+        db.commit()
+        return ExecutionResult(job=job, reason="whatsapp_opt_in_required")
+
     display = _appointment_display_data(
         db,
         workspace=workspace,
@@ -2136,7 +2264,9 @@ def execute_job(
         "whatsapp_template": {
             "name": template_name,
             "language_code": template_language,
-            "body_parameters": _appointment_template_body_parameters(rule.key, display),
+            "body_parameters": _appointment_template_body_parameters(
+                rule.key, display, template_name=template_name
+            ),
             "variant_count": template_variant_count,
         },
         "appointment": display,

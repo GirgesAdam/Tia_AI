@@ -1,20 +1,22 @@
 import Link from "next/link";
-import { CalendarClock, ChevronLeft, Stethoscope } from "lucide-react";
+import { CalendarClock, ChevronLeft, Plus, Stethoscope } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
+import { Select } from "@/components/ui/select";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
-import type { Appointment, AppointmentStatus, Doctor, Patient, Service, Staff } from "@/lib/types";
+import type { Appointment, AppointmentStatus, Branch, Doctor, Patient, PatientPackage, Service, Staff } from "@/lib/types";
 import { changeAppointmentStatus } from "./actions";
+import { ManualAppointmentForm } from "./manual-appointment-form";
 
-type SearchParams = { patient_id?: string; scope?: string; status?: string };
+type SearchParams = { patient_id?: string; scope?: string; status?: string; manual_patient_id?: string };
 const scopes = [["today", "اليوم"], ["upcoming", "القادمة"], ["past", "السابقة"], ["all", "الكل"]] as const;
 const statuses: Array<["" | AppointmentStatus, string]> = [
   ["", "كل الحالات"],
@@ -52,17 +54,7 @@ function availableManualStatuses(appointment: Appointment, now: number): Appoint
   return [];
 }
 
-function StatusControl({
-  appointment,
-  patientId,
-  canOverrideCancellation,
-  now,
-}: {
-  appointment: Appointment;
-  patientId: string;
-  canOverrideCancellation: boolean;
-  now: number;
-}) {
+function StatusControl({ appointment, patientId, canOverrideCancellation, now }: { appointment: Appointment; patientId: string; canOverrideCancellation: boolean; now: number }) {
   const options = availableManualStatuses(appointment, now);
   if (!options.length) {
     return <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>;
@@ -85,6 +77,7 @@ function StatusControl({
 export default async function AppointmentsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const raw = await searchParams;
   const patientId = raw.patient_id;
+  const manualPatientId = raw.manual_patient_id || "";
   const defaultScope = patientId ? "all" : "today";
   const scope = scopes.some(([value]) => value === raw.scope) ? raw.scope! : defaultScope;
   const status = statuses.some(([value]) => value === raw.status) ? raw.status || "" : "";
@@ -94,7 +87,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   if (patientId) query.set("patient_id", patientId);
   if (status) query.set("status", status);
 
-  const [appointments, patients, services, doctors, staff, ctx] = await Promise.all([
+  const [appointments, patients, services, doctors, staff, branches, ctx] = await Promise.all([
     tiaRequest<Appointment[]>(`/booking/appointments?${query.toString()}`),
     patientId
       ? tiaRequest<Patient>(`/crm/patients/${patientId}`).then((patient) => [patient])
@@ -102,8 +95,16 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<Doctor[]>("/clinic/doctors"),
     tiaRequest<Staff[]>("/clinic/staff"),
+    tiaRequest<Branch[]>("/clinic/branches"),
     getAppContext(),
   ]);
+
+  const manualPatient = manualPatientId
+    ? await tiaRequest<Patient>(`/crm/patients/${manualPatientId}`).catch(() => null)
+    : null;
+  const manualPackages = manualPatient
+    ? await tiaRequest<PatientPackage[]>(`/booking/patients/${manualPatient.id}/packages?usable_only=true`).catch(() => [])
+    : [];
 
   const patientMap = new Map(patients.map((item) => [item.id, `${item.first_name} ${item.last_name || ""}`.trim()]));
   const serviceMap = new Map(services.map((item) => [item.id, item.name]));
@@ -120,34 +121,66 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
     <>
       <PageHeader
         title="المواعيد"
-        description={
-          selectedPatient
-            ? `كل مواعيد ${patientMap.get(selectedPatient.id) || "العميل"} في مكان واحد.`
-            : "تابع المواعيد واعرف الحجوزات القادمة من Tia، وغيّر حالة الموعد يدويًا عند الحاجة."
-        }
-        action={
-          selectedPatient ? (
-            <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-800">
-              الرجوع إلى ملف العميل <ChevronLeft size={15} />
-            </Link>
-          ) : undefined
-        }
+        description={selectedPatient ? `كل مواعيد ${patientMap.get(selectedPatient.id) || "العميل"} في مكان واحد.` : "تابع المواعيد وسجّل الحجوزات اليدوية من الاستقبال أو التليفون بدون تجاوز قواعد الحجز."}
+        action={selectedPatient ? (
+          <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-800">
+            الرجوع إلى ملف العميل <ChevronLeft size={15} />
+          </Link>
+        ) : undefined}
       />
+
+      {!selectedPatient && (
+        <Card className="mb-5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Plus size={18} /> إضافة موعد يدوي</CardTitle>
+            <p className="text-xs font-semibold text-[var(--muted)]">استخدم نفس booking backend الحقيقي؛ لو الوقت غير متاح أو الباكدج غير مناسبة، الحجز سيرفض.</p>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <details open={Boolean(manualPatient)} className="rounded-xl border border-slate-200 p-4">
+              <summary className="cursor-pointer text-sm font-black text-slate-900">عميل موجود</summary>
+              <form method="get" className="mt-4 flex max-w-xl gap-2">
+                <Select name="manual_patient_id" defaultValue={manualPatient?.id || ""} required>
+                  <option value="" disabled>اختار العميل</option>
+                  {patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.first_name} {patient.last_name || ""} {patient.phone ? `· ${patient.phone}` : ""}</option>)}
+                </Select>
+                <Button type="submit" variant="outline">متابعة</Button>
+              </form>
+              {manualPatient && (
+                <div className="mt-4 border-t border-slate-100 pt-4">
+                  <ManualAppointmentForm
+                    mode="existing"
+                    patientId={manualPatient.id}
+                    patientName={`${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim()}
+                    branches={branches}
+                    services={services}
+                    doctors={doctors}
+                    staff={staff}
+                    packages={manualPackages}
+                  />
+                </div>
+              )}
+            </details>
+
+            <details className="rounded-xl border border-slate-200 p-4">
+              <summary className="cursor-pointer text-sm font-black text-slate-900">عميل جديد</summary>
+              <div className="mt-4">
+                <ManualAppointmentForm mode="new" branches={branches} services={services} doctors={doctors} staff={staff} />
+              </div>
+            </details>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="surface-toolbar mb-4">
         <div className="flex flex-wrap gap-1">
           {scopes.map(([value, label]) => (
-            <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>
-              {label}
-            </FilterChip>
+            <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>{label}</FilterChip>
           ))}
         </div>
         <span className="hidden h-7 w-px bg-slate-200 sm:block" />
         <div className="flex flex-wrap gap-1">
           {statuses.map(([value, label]) => (
-            <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>
-              {label}
-            </FilterChip>
+            <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>{label}</FilterChip>
           ))}
         </div>
         <span className="mr-auto hidden text-xs font-semibold text-[var(--muted)] sm:block">{appointments.length} موعد</span>
@@ -162,52 +195,30 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                   <div key={appointment.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <Link href={`/patients/${appointment.patient_id}`} className="truncate text-sm font-black text-teal-800 hover:underline">
-                          {patientMap.get(appointment.patient_id) || "عميل"}
-                        </Link>
+                        <Link href={`/patients/${appointment.patient_id}`} className="truncate text-sm font-black text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link>
                         <div className="mt-1 text-sm font-semibold text-slate-700">{serviceMap.get(appointment.service_id) || "خدمة"}</div>
                       </div>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700">{bookingMethod(appointment.source)}</span>
                     </div>
-
                     <div className="mt-3 rounded-xl bg-slate-50 p-3">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-bold text-slate-900">{formatDateTime(appointment.start_at)}</span>
                         <span className="text-sm font-black text-slate-900">{formatMoney(appointment.price_minor, appointment.currency)}</span>
                       </div>
-                      <div className="mt-2 text-xs text-[var(--muted)]">
-                        <span className="inline-flex items-center gap-1"><Stethoscope size={13} />{doctorMap.get(appointment.doctor_id) || "دكتور"}</span>
-                      </div>
+                      <div className="mt-2 text-xs text-[var(--muted)]"><span className="inline-flex items-center gap-1"><Stethoscope size={13} />{doctorMap.get(appointment.doctor_id) || "دكتور"}</span></div>
                     </div>
-
-                    <div className="mt-3">
-                      <StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} />
-                    </div>
+                    <div className="mt-3"><StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} /></div>
                   </div>
                 ))}
               </div>
 
               <div className="table-shell hidden md:block">
                 <table className="data-table min-w-[900px]">
-                  <thead>
-                    <tr>
-                      <th>العميل</th>
-                      <th>الموعد</th>
-                      <th>الخدمة</th>
-                      <th>الدكتور</th>
-                      <th>السعر</th>
-                      <th>طريقة الحجز</th>
-                      <th>الحالة</th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>العميل</th><th>الموعد</th><th>الخدمة</th><th>الدكتور</th><th>السعر</th><th>طريقة الحجز</th><th>الحالة</th></tr></thead>
                   <tbody>
                     {appointments.map((appointment) => (
                       <tr key={appointment.id}>
-                        <td className="font-bold">
-                          <Link href={`/patients/${appointment.patient_id}`} className="text-teal-800 hover:underline">
-                            {patientMap.get(appointment.patient_id) || "عميل"}
-                          </Link>
-                        </td>
+                        <td className="font-bold"><Link href={`/patients/${appointment.patient_id}`} className="text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link></td>
                         <td className="whitespace-nowrap font-semibold text-slate-800">{formatDateTime(appointment.start_at)}</td>
                         <td>{serviceMap.get(appointment.service_id) || "خدمة"}</td>
                         <td>{doctorMap.get(appointment.doctor_id) || "دكتور"}</td>
@@ -220,9 +231,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                 </table>
               </div>
             </>
-          ) : (
-            <EmptyState icon={CalendarClock} title="لا توجد مواعيد مطابقة" description="غيّر الفترة أو الحالة لعرض مواعيد أخرى." />
-          )}
+          ) : <EmptyState icon={CalendarClock} title="لا توجد مواعيد مطابقة" description="غيّر الفترة أو الحالة لعرض مواعيد أخرى." />}
         </CardContent>
       </Card>
     </>

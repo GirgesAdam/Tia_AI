@@ -111,11 +111,17 @@ def test_late_failure_does_not_override_delivered() -> None:
     assert message.delivery_status == "delivered"
 
 
-def test_n8n_workflow_templates_are_present() -> None:
+def test_native_whatsapp_bridge_is_present_without_per_clinic_n8n_provider_nodes() -> None:
     project_root = Path(__file__).resolve().parents[2]
     inbound = project_root / "n8n/workflows/tia_whatsapp_inbound_status.json"
     outbox = project_root / "n8n/workflows/tia_whatsapp_outbox_worker.json"
-    assert inbound.is_file()
+    route = (project_root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")
+    transport = (project_root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
+
+    assert not inbound.exists()
     assert outbox.is_file()
-    assert "n8n-nodes-base.whatsAppTrigger" in inbound.read_text(encoding="utf-8")
-    assert "n8n-nodes-base.whatsApp" in outbox.read_text(encoding="utf-8")
+    outbox_text = outbox.read_text(encoding="utf-8")
+    assert "/api/v1/channels/whatsapp/transport/tick" in outbox_text
+    assert "n8n-nodes-base.whatsApp" not in outbox_text
+    assert '@router.post("/webhook/{connection_id}"' in route
+    assert "record_provider_status(" in transport

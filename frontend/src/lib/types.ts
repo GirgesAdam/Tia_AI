@@ -81,7 +81,7 @@ export interface Patient {
   id: string; workspace_id: string; first_name: string; last_name: string | null; phone: string | null;
   gender: string | null; birth_date: string | null; preferred_language: string;
   preferred_branch_id: string | null; source: string; source_detail: string | null; status: string;
-  marketing_consent: boolean; marketing_consent_at: string | null; last_contact_at: string | null;
+  marketing_consent: boolean; marketing_consent_at: string | null; whatsapp_opt_in: boolean; whatsapp_opt_in_at: string | null; whatsapp_opt_in_source: string | null; last_contact_at: string | null;
   created_at: string; updated_at: string;
 }
 export interface PatientTag {

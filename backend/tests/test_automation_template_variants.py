@@ -63,7 +63,7 @@ def test_template_variants_keep_same_variable_contract() -> None:
             "date": "25/08/2026",
         },
     )
-    assert reminder == ["سارة", "ليزر", "25/08/2026", "18:00"]
+    assert reminder == ["سارة", "ليزر", "18:00"]
     assert post_visit == ["سارة", "ليزر", "25/08/2026"]
 
 

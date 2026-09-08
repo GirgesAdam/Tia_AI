@@ -15,7 +15,7 @@ def test_cancellation_recovery_covers_no_show_and_retires_legacy_rule() -> None:
     assert 'RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})' in service
     assert 'appointment.status == "no_show" and appointment.no_show_at is not None' in service
     assert "appointment.cancelled_at or appointment.no_show_at" in service
-    assert "AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS)" in service
+    assert 'AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS | {"booking_confirmation"})' in service
 
 
 def test_admin_ui_does_not_offer_duplicate_no_show_followup() -> None:

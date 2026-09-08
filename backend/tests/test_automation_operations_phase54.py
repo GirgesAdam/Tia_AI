@@ -74,6 +74,7 @@ def test_retry_and_cancel_routes_require_workspace_admin() -> None:
 def test_automation_dashboard_has_health_attention_safe_actions_and_product_whitelist() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
     actions = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(encoding="utf-8")
+    timing = (_root() / "frontend/src/components/automation-timing-form.tsx").read_text(encoding="utf-8")
 
     assert 'tiaRequest<AutomationOperationsOverview>("/automations/overview")' in page
     assert "attentionLabel" in page
@@ -84,14 +85,15 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
     assert "visibleProductRuleKeys" in page
     assert '"cancellation_recovery"' in page
     assert '"no_show_followup"' not in page
-    assert "saveAutomationTiming" in page
+    assert "AutomationTimingForm" in page
+    assert "saveAutomationTiming" in timing
     assert '/automations/jobs/${id}/retry' in actions
     assert '/automations/jobs/${id}/cancel' in actions
 
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0056_merge_automation_expenses"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:
@@ -100,11 +102,19 @@ def test_reminder_and_post_visit_fallback_copy_match_current_template_contract()
 
     reminder = service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split('if rule_key == "appointment_reminder_24h":', 1)[0]
     post = service.split('if rule_key == "post_visit_followup":', 1)[1].split('if rule_key == "no_show_followup":', 1)[0]
-    assert "بموعدك لـ" in reminder
+    assert "إن عندك جلسة" in reminder
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "إن عندك جلسة" not in reminder
+    assert "{data['date']}" not in reminder
+    assert "{data['branch_name']}" not in reminder
+    assert "مستنيينك" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post
-    assert "تحجزي الجلسة الجاية" in post
-    assert "تقييمك للجلسة" in post
-    assert "بموعدك لـ{{2}}" in setup
+    assert "كل حاجة تمام؟" in post
+    assert "جلسة {{2}}" in setup
     assert "بعد {{2}}" in setup
+
+
+def test_fixed_six_hour_meta_template_blocks_incompatible_admin_timing() -> None:
+    route = (_root() / "backend/app/api/routes/automations.py").read_text(encoding="utf-8")
+    assert 'rule.template_name == "tia_reminder_6h_01"' in route
+    assert 'changes["offset_minutes"] != -360' in route
+    assert 'Switch to the timing-neutral reminder template' in route

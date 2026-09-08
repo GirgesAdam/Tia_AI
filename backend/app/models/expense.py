@@ -28,6 +28,7 @@ EXPENSE_CATEGORIES = (
     "taxes",
     "other",
 )
+EXPENSE_TYPES = ("fixed", "variable")
 
 
 class Expense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -39,6 +40,10 @@ class Expense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "category IN ('rent', 'payroll', 'supplies', 'marketing', 'utilities', 'maintenance', 'software', 'taxes', 'other')",
             name="expense_category_valid",
+        ),
+        CheckConstraint(
+            "expense_type IN ('fixed', 'variable')",
+            name="expense_type_valid",
         ),
         ForeignKeyConstraint(
             ["workspace_id"],
@@ -67,6 +72,7 @@ class Expense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(24), nullable=False, default="other")
+    expense_type: Mapped[str] = mapped_column(String(16), nullable=False, default="variable")
     amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     incurred_on: Mapped[date] = mapped_column(Date, nullable=False)

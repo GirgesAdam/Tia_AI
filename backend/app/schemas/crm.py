@@ -103,6 +103,7 @@ class PatientCreate(BaseModel):
     source_detail: str | None = Field(default=None, max_length=200)
     status: PatientStatus = "active"
     marketing_consent: bool = False
+    whatsapp_opt_in: bool = False
 
     @field_validator("first_name")
     @classmethod
@@ -138,6 +139,7 @@ class PatientUpdate(BaseModel):
     source_detail: str | None = Field(default=None, max_length=200)
     status: PatientStatus | None = None
     marketing_consent: bool | None = None
+    whatsapp_opt_in: bool | None = None
 
     @field_validator("first_name")
     @classmethod
@@ -178,6 +180,9 @@ class PatientRead(BaseModel):
     status: PatientStatus
     marketing_consent: bool
     marketing_consent_at: datetime | None
+    whatsapp_opt_in: bool
+    whatsapp_opt_in_at: datetime | None
+    whatsapp_opt_in_source: str | None
     source_created_at: datetime | None = None
     last_contact_at: datetime | None
     created_at: datetime

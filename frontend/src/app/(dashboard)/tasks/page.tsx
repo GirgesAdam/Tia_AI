@@ -7,17 +7,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
-import { Select } from "@/components/ui/select";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import type { CRMTask, WorkspaceMember } from "@/lib/types";
-import { assignTask, claimTask, setTaskStatus } from "./actions";
+import { claimTask, setTaskStatus } from "./actions";
+import { ExecutorSelect } from "./executor-select";
 
 type TaskSearchParams = { scope?: string; status?: string; mine?: string };
 const scopes = [["all", "الكل"], ["overdue", "متأخرة"], ["today", "اليوم"], ["upcoming", "قادمة"]] as const;
-const statuses = [["", "كل الحالات"], ["pending", "قيد الانتظار"], ["in_progress", "قيد التنفيذ"], ["completed", "مكتملة"], ["cancelled", "ملغاة"]] as const;
+const statuses = [["", "كل الحالات"], ["pending", "قيد الانتظار"], ["completed", "مكتملة"], ["cancelled", "ملغاة"]] as const;
 
 function hrefFor(current: TaskSearchParams, key: keyof TaskSearchParams, value: string) {
   const params = new URLSearchParams();
@@ -43,6 +43,9 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     tiaRequest<CRMTask[]>(`/crm/tasks?${query.toString()}`),
     ctx.workspace.role === "admin" ? tiaRequest<WorkspaceMember[]>("/auth/workspace/members") : Promise.resolve([]),
   ]);
+  const memberOptions = members
+    .filter((member) => member.is_active)
+    .map((member) => ({ user_id: member.user_id, label: member.full_name || member.email }));
 
   const activeCount = tasks.filter((task) => task.status === "pending" || task.status === "in_progress").length;
   const overdueCount = tasks.filter((task) => task.is_overdue).length;
@@ -51,7 +54,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="المتابعات"
-        description="حدد موعد المتابعة ومن المسؤول عنها: Tia ترسلها تلقائيًا، أو موظف من الفريق يتولاها يدويًا."
+        description="حدد موعد المتابعة واختر Tia أو أحد أفراد الفريق من القائمة. Tia ترسل المتابعة تلقائيًا في موعدها."
       />
 
       <div className="surface-toolbar mb-4">
@@ -67,7 +70,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
           </FilterChip>
         ))}
         <FilterChip href={hrefFor(filters, "mine", filters.mine ? "" : "1")} active={Boolean(filters.mine)}>
-          مسندة لي
+          متابعتي
         </FilterChip>
         <div className="mr-auto flex gap-2 text-xs text-[var(--muted)]">
           <span>{activeCount} نشطة</span>
@@ -81,9 +84,10 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
           {tasks.length ? (
             <div className="divide-y divide-[var(--border)]">
               {tasks.map((task) => {
-                const canManage = task.execution_mode === "human" && (ctx.workspace.role === "admin" || task.assigned_user_id === ctx.me.user.id);
                 const active = task.status === "pending" || task.status === "in_progress";
-                const assignee = task.execution_mode === "ai" ? "Tia" : task.assigned_user_name || task.assigned_user_email || "غير مسندة";
+                const canManage = ctx.workspace.role === "admin" || (task.execution_mode === "human" && task.assigned_user_id === ctx.me.user.id);
+                const canClaim = active && (task.execution_mode === "ai" || !task.assigned_user_id);
+                const assignee = task.execution_mode === "ai" ? "Tia" : task.assigned_user_name || task.assigned_user_email || "بدون مسؤول";
                 const executorValue = task.execution_mode === "ai"
                   ? "tia"
                   : task.assigned_user_id
@@ -97,10 +101,10 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                         <ListTodo size={16} className="text-teal-700" />
                         <b className="text-slate-900">{task.title}</b>
                         <Badge tone={toneForStatus(task.status)}>{labelForStatus(task.status)}</Badge>
-                        {task.is_overdue && (
+                        {task.is_overdue && active && (
                           <Badge tone="red"><CircleAlert size={11} className="ml-1" />متأخرة</Badge>
                         )}
-                        {task.execution_mode === "ai" && <Badge tone="purple">Tia سترسلها تلقائيًا</Badge>}
+                        {task.execution_mode === "ai" && active && <Badge tone="purple">Tia</Badge>}
                       </div>
                       {task.description && <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{task.description}</p>}
                       <div className="mt-2 flex flex-wrap gap-3 text-xs text-[var(--muted)]">
@@ -114,7 +118,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                     </div>
 
                     <div className="space-y-2 text-sm">
-                      <div className={`flex items-center gap-2 ${task.is_overdue ? "font-bold text-red-700" : "text-[var(--muted)]"}`}>
+                      <div className={`flex items-center gap-2 ${task.is_overdue && active ? "font-bold text-red-700" : "text-[var(--muted)]"}`}>
                         <Clock3 size={14} /> {formatDateTime(task.due_at)}
                       </div>
                       <div className="flex items-center gap-2 text-[var(--muted)]">
@@ -123,30 +127,32 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                     </div>
 
                     <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
-                      {active && !task.assigned_user_id && task.execution_mode === "human" && (
+                      {canClaim && (
                         <form action={claimTask}>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
                           <Button size="sm" variant="outline">استلام</Button>
                         </form>
                       )}
-                      {canManage && task.status === "pending" && (
-                        <form action={setTaskStatus}>
-                          <input type="hidden" name="task_id" value={task.id} />
-                          <input type="hidden" name="patient_id" value={task.patient_id} />
-                          <input type="hidden" name="status" value="in_progress" />
-                          <Button size="sm" variant="outline">بدء المتابعة</Button>
-                        </form>
-                      )}
-                      {canManage && active && (
+
+                      {task.status === "completed" ? (
+                        <span className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white">
+                          <CheckCircle2 size={14} /> تم
+                        </span>
+                      ) : active && canManage ? (
                         <form action={setTaskStatus}>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
                           <input type="hidden" name="status" value="completed" />
-                          <Button size="sm"><CheckCircle2 size={14} /> تمت</Button>
+                          <Button size="sm" variant="outline"><CheckCircle2 size={14} /> تم</Button>
                         </form>
-                      )}
-                      {canManage && active && (
+                      ) : active ? (
+                        <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-400">
+                          <CheckCircle2 size={14} /> تم
+                        </span>
+                      ) : null}
+
+                      {active && canManage && (
                         <form action={setTaskStatus}>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
@@ -154,19 +160,15 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                           <Button size="sm" variant="ghost">إلغاء</Button>
                         </form>
                       )}
+
                       {ctx.workspace.role === "admin" && active && (
-                        <form action={assignTask} className="flex gap-1">
-                          <input type="hidden" name="task_id" value={task.id} />
-                          <input type="hidden" name="patient_id" value={task.patient_id} />
-                          <Select name="executor" defaultValue={executorValue} className="h-8 max-w-48 rounded-lg px-2 text-xs">
-                            {task.status === "pending" && <option value="tia">Tia</option>}
-                            <option value="unassigned">غير مسندة</option>
-                            {members.filter((member) => member.is_active).map((member) => (
-                              <option key={member.user_id} value={`staff:${member.user_id}`}>{member.full_name || member.email}</option>
-                            ))}
-                          </Select>
-                          <Button size="sm" variant="outline">حفظ الإسناد</Button>
-                        </form>
+                        <ExecutorSelect
+                          taskId={task.id}
+                          patientId={task.patient_id}
+                          value={executorValue}
+                          allowTia={task.status === "pending"}
+                          members={memberOptions}
+                        />
                       )}
                     </div>
                   </div>

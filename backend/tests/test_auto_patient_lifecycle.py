@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,13 +8,13 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_patient_lifecycle_keeps_only_essential_rule_enabled_by_default() -> None:
+def test_patient_lifecycle_keeps_fixed_confirmation_and_essential_reminder_enabled() -> None:
     rules = {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}
     assert rules["appointment_reminder_6h"].enabled_by_default is True
     assert "appointment_reminder_24h" not in rules
     assert "appointment_reminder_2h" not in rules
     assert rules["post_visit_followup"].enabled_by_default is False
-    assert rules["booking_confirmation"].enabled_by_default is False
+    assert rules["booking_confirmation"].enabled_by_default is True
     assert "no_show_followup" not in rules
 
 
@@ -64,12 +63,14 @@ def test_new_workspaces_materialize_rules_using_definition_default() -> None:
 
 def test_appointment_templates_use_rule_specific_db_owned_parameters() -> None:
     service = (_root() / "backend/app/services/automations.py").read_text(encoding="utf-8")
-    assert "def _appointment_template_body_parameters(rule_key: str, data: dict)" in service
+    assert "def _appointment_template_body_parameters(" in service
+    assert "template_name: str | None = None" in service
     assert 'rule_key == "appointment_reminder_6h"' in service
-    assert 'return [patient_name, service_name, date, time]' in service
+    assert 'return [patient_name, service_name, time]' in service
+    assert 'return [patient_name, service_name, time, branch_name]' in service
     assert 'rule_key == "post_visit_followup"' in service
     assert 'return [patient_name, service_name, date]' in service
-    assert '"body_parameters": _appointment_template_body_parameters(rule.key, display)' in service
+    assert 'template_name=template_name' in service
 
 
 def test_lifecycle_message_copy_matches_configurable_product_spec() -> None:
@@ -82,26 +83,46 @@ def test_lifecycle_message_copy_matches_configurable_product_spec() -> None:
     )[0]
 
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "تعدّلي الموعد" in reminder
+    assert "إن عندك جلسة" in reminder
+    assert "مستنيينك" in reminder
+    assert "{data['date']}" not in reminder
+    assert "{data['branch_name']}" not in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
-    assert "تحجزي الجلسة الجاية" in post_visit
-    assert "تقييمك للجلسة" in post_visit
+    assert "كل حاجة تمام؟" in post_visit
 
 
-def test_n8n_outbox_supports_three_four_and_five_parameter_templates() -> None:
-    workflow = json.loads(
-        (_root() / "n8n/workflows/tia_whatsapp_outbox_worker.json").read_text(encoding="utf-8")
-    )
+def test_native_whatsapp_transport_supports_three_four_and_five_parameter_templates() -> None:
+    from uuid import uuid4
+
+    from app.schemas.channel import DispatchClaimItem
+    from app.services.meta_whatsapp_transport import build_meta_message_payload
+
     for count in (3, 4, 5):
-        node = next(
-            row for row in workflow["nodes"]
-            if row["name"] == f"WhatsApp Send Template {count} Params"
+        body_parameters = [f"value-{index}" for index in range(count)]
+        item = DispatchClaimItem(
+            dispatch_id=uuid4(),
+            message_id=uuid4(),
+            channel="whatsapp",
+            provider="meta_cloud",
+            external_account_id="123456789",
+            external_user_id="201001112223",
+            external_conversation_id="201001112223",
+            message_type="template",
+            content=None,
+            metadata={
+                "whatsapp_template": {
+                    "name": "contract_template",
+                    "language_code": "ar",
+                    "body_parameters": body_parameters,
+                }
+            },
+            attempt=1,
         )
-        params = node["parameters"]["components"]["component"][0]["bodyParameters"]["parameter"]
+
+        payload = build_meta_message_payload(item)
+        params = payload["template"]["components"][0]["parameters"]
         assert len(params) == count
-        for index, param in enumerate(params):
-            assert param["type"] == "text"
-            assert f"body_parameters?.[{index}]" in param["text"]
+        assert [param["text"] for param in params] == body_parameters
 
 
 def test_setup_documents_exact_template_contract_and_optional_care_messages() -> None:
@@ -109,8 +130,8 @@ def test_setup_documents_exact_template_contract_and_optional_care_messages() ->
     assert "exact number of positional body parameters" in setup
     assert "**4 parameters**" in setup
     assert "**3 parameters**" in setup
-    assert "tia_appointment_reminder_ar" in setup
-    assert "tia_post_visit_followup_ar" in setup
+    assert "tia_reminder_01" in setup
+    assert "tia_post_visit_01" in setup
     assert "Only the appointment reminder is enabled by default" in setup
     assert "post-visit" in setup.lower()
 

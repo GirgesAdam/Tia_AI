@@ -48,11 +48,11 @@ class AutomationRuleRead(BaseModel):
 class AutomationRuleUpdate(BaseModel):
     enabled: bool | None = None
     template_variants: list[AutomationTemplateVariant] | None = Field(default=None, max_length=20)
-    offset_minutes: int | None = Field(default=None, ge=-10080, le=10080)
+    offset_minutes: int | None = None
     channel: AutomationChannel | None = None
     template_name: str | None = Field(default=None, min_length=1, max_length=160)
     template_language: str | None = Field(default=None, min_length=1, max_length=20)
-    max_lateness_minutes: int | None = Field(default=None, ge=0, le=10080)
+    max_lateness_minutes: int | None = Field(default=None, ge=0)
     config: dict[str, Any] | None = None
 
     @field_validator("template_name", "template_language")

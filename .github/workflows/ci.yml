@@ -1,4 +1,5 @@
 name: CI
+# Validates clean PostgreSQL migrations plus complete backend/frontend checks.
 on:
   pull_request:
   push:
@@ -11,6 +12,20 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -34,7 +49,25 @@ jobs:
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0056_merge_automation_expenses (head)"
+        run: test "$(python -m alembic heads)" = "0060_whatsapp_direct_credentials (head)"
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply migrations on clean PostgreSQL
+        run: python -m alembic upgrade head
       - run: python -m pytest -q
   frontend:
     runs-on: ubuntu-latest

@@ -11,3 +11,4 @@ pytest>=8.3,<9.0
 httpx>=0.28,<1.0
 ruff>=0.12,<1.0
 openpyxl>=3.1,<4.0
+cryptography>=45,<51

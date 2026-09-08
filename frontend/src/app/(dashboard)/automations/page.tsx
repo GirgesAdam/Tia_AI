@@ -1,17 +1,28 @@
 import { CircleAlert, Clock3, Workflow } from "lucide-react";
 
+import { AutomationTimingForm } from "@/components/automation-timing-form";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
-import type { AutomationJob, AutomationOperationsOverview, AutomationRule } from "@/lib/types";
-import { cancelAutomationJob, retryAutomationJob, saveAutomationTiming, toggleAutomation } from "./actions";
+import type {
+  AutomationJob,
+  AutomationOperationsOverview,
+  AutomationRule,
+  ChannelConnection,
+} from "@/lib/types";
+import {
+  cancelAutomationJob,
+  retryAutomationJob,
+  resumeWhatsappConnection,
+  toggleAutomation,
+} from "./actions";
+import { WhatsAppDirectOnboarding, type WhatsAppSetupState } from "./whatsapp-direct-onboarding";
 
 const names: Record<string, string> = {
   booking_confirmation: "تأكيد الحجز",
@@ -30,14 +41,18 @@ const descriptions: Record<string, string> = {
 };
 
 const visibleProductRuleKeys = new Set([
-  "booking_confirmation",
   "appointment_reminder_6h",
   "post_visit_followup",
   "cancellation_recovery",
   "lead_not_booked_followup",
 ]);
 
-const timingRuleKeys = new Set(["appointment_reminder_6h", "post_visit_followup", "cancellation_recovery", "lead_not_booked_followup"]);
+const timingRuleKeys = new Set([
+  "appointment_reminder_6h",
+  "post_visit_followup",
+  "cancellation_recovery",
+  "lead_not_booked_followup",
+]);
 
 function attentionLabel(job: AutomationJob): string | null {
   if (job.attention_reason === "execution_failed") return "لم تكتمل العملية تلقائيًا";
@@ -50,10 +65,17 @@ function jobKindLabel(job: AutomationJob) {
   return job.job_kind === "crm_follow_up" ? "متابعة عميل" : "رسالة مرتبطة بموعد";
 }
 
-function timingParts(rule: AutomationRule): { value: number; unit: "minutes" | "hours" | "days" } {
+function timingParts(rule: AutomationRule): {
+  value: number;
+  unit: "minutes" | "hours" | "days";
+} {
   const minutes = Math.abs(rule.offset_minutes);
-  if (minutes >= 1440 && minutes % 1440 === 0) return { value: minutes / 1440, unit: "days" };
-  if (minutes >= 60 && minutes % 60 === 0) return { value: minutes / 60, unit: "hours" };
+  if (minutes >= 1440 && minutes % 1440 === 0) {
+    return { value: minutes / 1440, unit: "days" };
+  }
+  if (minutes >= 60 && minutes % 60 === 0) {
+    return { value: minutes / 60, unit: "hours" };
+  }
   return { value: minutes, unit: "minutes" };
 }
 
@@ -67,29 +89,70 @@ function timingLabel(rule: AutomationRule): string {
 }
 
 function automationWarning(state: AutomationOperationsOverview["worker_state"]) {
-  if (state === "stale") return "محرك تنفيذ Automation غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
-  if (state === "missing") return "لم يتم ربط محرك تنفيذ Automation بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
+  if (state === "stale") {
+    return "محرك تنفيذ Automation غير متصل حاليًا، لذلك لن تُرسل الرسائل التلقائية حتى يعود الاتصال.";
+  }
+  if (state === "missing") {
+    return "لم يتم ربط محرك تنفيذ Automation بعد، لذلك لن تُرسل الرسائل التلقائية حتى يكتمل إعداد التشغيل.";
+  }
   return null;
 }
 
+function providerHealth(connection: ChannelConnection) {
+  const raw = connection.config_json?.provider_health;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : null;
+}
+
 export default async function AutomationsPage() {
-  const [rawRules, jobs, overview, ctx] = await Promise.all([
+  const ctx = await getAppContext();
+  const [rawRules, jobs, overview, connections, whatsappSetup] = await Promise.all([
     tiaRequest<AutomationRule[]>("/automations/rules"),
     tiaRequest<AutomationJob[]>("/automations/jobs?limit=50"),
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
-    getAppContext(),
+    tiaRequest<ChannelConnection[]>("/channels/connections"),
+    ctx.workspace.role === "admin"
+      ? tiaRequest<WhatsAppSetupState>("/channels/whatsapp/setup")
+      : Promise.resolve(null),
   ]);
   const rules = rawRules.filter((rule) => visibleProductRuleKeys.has(rule.key));
   const attentionJobs = jobs.filter((job) => Boolean(attentionLabel(job)));
   const recentJobs = jobs.slice(0, 12);
   const warning = automationWarning(overview.worker_state);
+  const whatsappConnections = connections.filter(
+    (connection) => connection.channel === "whatsapp" && connection.status !== "disconnected",
+  );
+  const templateStatusByName = new Map(
+    (whatsappSetup?.templates || []).map((template) => [template.name, template.status.toLowerCase()]),
+  );
+  const whatsappAttention = whatsappConnections.filter((connection) => {
+    const health = providerHealth(connection);
+    const healthState = typeof health?.state === "string" ? health.state : null;
+    if (healthState === "setup_pending") return false;
+    return connection.status === "paused" || healthState === "degraded" || healthState === "disabled";
+  });
 
   return (
     <>
       <PageHeader
         title="Automation"
-        description="فعّل فقط المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
+        description="فعّل المتابعات التي تحتاجها العيادة وحدد توقيتها، واربط واتساب مع Meta من نفس الصفحة."
       />
+
+      {ctx.workspace.role === "admin" && whatsappSetup && (
+        <Card className="mb-6 border-teal-200">
+          <CardHeader>
+            <CardTitle>تشغيل WhatsApp Automation</CardTitle>
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              إعداد مرة واحدة. كل خطوة فيها لينك مباشر لصفحة Meta المطلوبة، وTia تتحقق من البيانات وتخزن الأسرار مشفرة.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <WhatsAppDirectOnboarding state={whatsappSetup} />
+          </CardContent>
+        </Card>
+      )}
 
       {warning && (
         <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -98,11 +161,39 @@ export default async function AutomationsPage() {
             <b>تحتاج مراجعة</b>
             <p className="mt-1 leading-6">{warning}</p>
             {overview.worker_last_seen_at && (
-              <p className="mt-1 text-xs">آخر اتصال بمحرك التنفيذ: {formatDateTime(overview.worker_last_seen_at)}</p>
+              <p className="mt-1 text-xs">
+                آخر اتصال بمحرك التنفيذ: {formatDateTime(overview.worker_last_seen_at)}
+              </p>
             )}
           </div>
         </div>
       )}
+
+      {whatsappAttention.map((connection) => {
+        const health = providerHealth(connection);
+        const error = typeof health?.current_error === "string" ? health.current_error : null;
+        const errorCode = health?.current_error_code == null ? null : String(health.current_error_code);
+        const lastDelivery = typeof health?.last_delivery_at === "string" ? health.last_delivery_at : null;
+        return (
+          <div key={connection.id} className="mb-4 flex items-start justify-between gap-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-950">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <b>{connection.display_name || "WhatsApp"}</b>
+                <Badge tone="red">{connection.status === "paused" ? "متوقف تلقائيًا" : "يحتاج مراجعة"}</Badge>
+              </div>
+              <p className="mt-2 leading-6">Tia أوقفت الإرسال التلقائي لهذا الاتصال لحماية العيادة من retries غير المفيدة.</p>
+              {error && <p className="mt-1 text-xs">آخر خطأ: {error}{errorCode ? ` · ${errorCode}` : ""}</p>}
+              {lastDelivery && <p className="mt-1 text-xs">آخر تسليم ناجح: {formatDateTime(lastDelivery)}</p>}
+            </div>
+            {ctx.workspace.role === "admin" && connection.status === "paused" && (
+              <form action={resumeWhatsappConnection}>
+                <input type="hidden" name="connection_id" value={connection.id} />
+                <Button type="submit" size="sm" variant="outline">إعادة التفعيل بعد حل مشكلة Meta</Button>
+              </form>
+            )}
+          </div>
+        );
+      })}
 
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <Card>
@@ -121,20 +212,33 @@ export default async function AutomationsPage() {
         <Card>
           <CardContent className="p-4">
             <div className="text-xs font-semibold text-[var(--muted)]">التنفيذ التالي</div>
-            <div className="mt-1 font-bold text-slate-900">{overview.next_job_at ? formatDateTime(overview.next_job_at) : "لا يوجد إجراء قريب"}</div>
+            <div className="mt-1 font-bold text-slate-900">
+              {overview.next_job_at ? formatDateTime(overview.next_job_at) : "لا يوجد إجراء قريب"}
+            </div>
           </CardContent>
         </Card>
       </div>
 
       <div className="mb-3">
         <h2 className="text-lg font-black text-slate-950">الرسائل والمتابعات التلقائية</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">كل ميزة مستقلة. المزايا غير الضرورية يمكن تركها متوقفة وتفعيلها عند الحاجة.</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          كل ميزة مستقلة. المزايا غير الضرورية يمكن تركها متوقفة وتفعيلها عند الحاجة.
+        </p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         {rules.map((rule) => {
           const timing = timingParts(rule);
           const hasTiming = timingRuleKeys.has(rule.key);
+          const templateStatus = templateStatusByName.get(rule.template_name);
+          const running = Boolean(
+            rule.enabled &&
+            whatsappSetup?.connected &&
+            whatsappSetup.webhook_verified &&
+            whatsappSetup.transport_ready &&
+            templateStatus === "approved"
+          );
+          const waitingForSetup = rule.enabled && !running;
           return (
             <Card key={rule.id}>
               <CardContent className="p-5">
@@ -142,14 +246,17 @@ export default async function AutomationsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <b className="text-slate-950">{names[rule.key] || rule.name}</b>
-                      <Badge tone={rule.enabled ? "green" : "gray"}>{rule.enabled ? "مفعّلة" : "متوقفة"}</Badge>
+                      <Badge tone={running ? "green" : waitingForSetup ? "yellow" : "gray"}>
+                        {running ? "شغالة" : waitingForSetup ? "في انتظار التجهيز" : "متوقفة"}
+                      </Badge>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{descriptions[rule.key] || "تنفذ إجراءً تلقائيًا عند تحقق شروط هذه القاعدة."}</p>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      {descriptions[rule.key] || "تنفذ إجراءً تلقائيًا عند تحقق شروط هذه القاعدة."}
+                    </p>
                     <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
                       <Clock3 size={13} /> واتساب
                     </div>
                   </div>
-
                   {ctx.workspace.role === "admin" && (
                     <form action={toggleAutomation}>
                       <input type="hidden" name="rule_id" value={rule.id} />
@@ -162,39 +269,14 @@ export default async function AutomationsPage() {
                 </div>
 
                 {ctx.workspace.role === "admin" && hasTiming && (
-                  <form action={saveAutomationTiming} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                    <input type="hidden" name="rule_id" value={rule.id} />
-                    <input type="hidden" name="trigger_kind" value={rule.trigger_kind} />
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                      <label className="min-w-0 flex-1 text-xs font-bold text-slate-700">
-                        {timingLabel(rule)}
-                        <Input
-                          name="timing_value"
-                          type="number"
-                          min="0"
-                          max="10080"
-                          step="1"
-                          defaultValue={timing.value}
-                          required
-                          className="mt-1"
-                        />
-                      </label>
-                      <label className="text-xs font-bold text-slate-700">
-                        الوحدة
-                        <select
-                          name="timing_unit"
-                          defaultValue={timing.unit}
-                          className="mt-1 h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
-                        >
-                          <option value="minutes">دقيقة</option>
-                          <option value="hours">ساعة</option>
-                          <option value="days">يوم</option>
-                        </select>
-                      </label>
-                      <Button type="submit" size="sm" variant="outline">حفظ التوقيت</Button>
-                    </div>
-                    <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">الحد الأقصى الحالي 7 أيام حتى تظل المتابعات قريبة من الحدث ومفهومة.</p>
-                  </form>
+                  <AutomationTimingForm
+                    key={`${rule.id}:${rule.offset_minutes}`}
+                    ruleId={rule.id}
+                    triggerKind={rule.trigger_kind}
+                    label={timingLabel(rule)}
+                    initialValue={timing.value}
+                    initialUnit={timing.unit}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -206,22 +288,34 @@ export default async function AutomationsPage() {
         <Card className="mt-6 border-amber-200">
           <CardHeader>
             <CardTitle>حالات تحتاج تدخلًا</CardTitle>
-            <p className="text-xs leading-5 text-[var(--muted)]">هذه العمليات لم تكتمل تلقائيًا ويمكن للمدير إعادة المحاولة أو إلغاؤها.</p>
+            <p className="text-xs leading-5 text-[var(--muted)]">
+              هذه العمليات لم تكتمل تلقائيًا ويمكن للمدير إعادة المحاولة أو إلغاؤها.
+            </p>
           </CardHeader>
           <CardContent className="space-y-3">
             {attentionJobs.map((job) => {
               const attention = attentionLabel(job);
-              const canRetry = job.attention_reason === "execution_failed" || job.attention_reason === "delivery_failed";
-              const canCancel = job.status === "queued" || job.status === "failed" || (job.status === "dispatched" && job.dispatch_status === "queued");
+              const canRetry =
+                job.attention_reason === "execution_failed" ||
+                job.attention_reason === "delivery_failed";
+              const canCancel =
+                job.status === "queued" ||
+                job.status === "failed" ||
+                (job.status === "dispatched" && job.dispatch_status === "queued");
               return (
-                <div key={job.id} className="flex flex-col gap-3 rounded-xl bg-amber-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div
+                  key={job.id}
+                  className="flex flex-col gap-3 rounded-xl bg-amber-50/70 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <b className="text-sm text-slate-950">{jobKindLabel(job)}</b>
                       <Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge>
                     </div>
                     <p className="mt-1 text-xs font-semibold text-amber-800">{attention}</p>
-                    <div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      {formatDateTime(job.scheduled_for)}
+                    </div>
                   </div>
                   {ctx.workspace.role === "admin" && (canRetry || canCancel) && (
                     <div className="flex gap-2">
@@ -252,17 +346,26 @@ export default async function AutomationsPage() {
           {recentJobs.length ? (
             <div className="divide-y divide-[var(--border)]">
               {recentJobs.map((job) => (
-                <div key={job.id} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                <div
+                  key={job.id}
+                  className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+                >
                   <div>
                     <b className="text-sm">{jobKindLabel(job)}</b>
-                    <div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      {formatDateTime(job.scheduled_for)}
+                    </div>
                   </div>
                   <Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge>
                 </div>
               ))}
             </div>
           ) : (
-            <EmptyState icon={Workflow} title="لا يوجد نشاط بعد" description="سيظهر هنا آخر نشاط للرسائل والمتابعات التلقائية." />
+            <EmptyState
+              icon={Workflow}
+              title="لا يوجد نشاط بعد"
+              description="سيظهر هنا آخر نشاط للرسائل والمتابعات التلقائية."
+            />
           )}
         </div>
       </details>
