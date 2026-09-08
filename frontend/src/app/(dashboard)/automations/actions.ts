@@ -9,18 +9,16 @@ export type WhatsAppSetupActionState = {
   message: string | null;
 };
 
-const initialSetupActionState: WhatsAppSetupActionState = { ok: false, message: null };
-export { initialSetupActionState };
-
 function actionErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error:\s*/, "") || "تعذر إكمال الخطوة. حاول مرة أخرى.";
 }
 
 export async function connectWhatsappDirectAction(
-  _previous: WhatsAppSetupActionState,
+  previous: WhatsAppSetupActionState,
   formData: FormData,
 ): Promise<WhatsAppSetupActionState> {
+  void previous;
   const payload = {
     app_id: String(formData.get("app_id") || "").trim(),
     waba_id: String(formData.get("waba_id") || "").trim(),
@@ -50,9 +48,11 @@ export async function connectWhatsappDirectAction(
 }
 
 export async function finishWhatsappDirectSetupAction(
-  _previous: WhatsAppSetupActionState,
-  _formData: FormData,
+  previous: WhatsAppSetupActionState,
+  formData: FormData,
 ): Promise<WhatsAppSetupActionState> {
+  void previous;
+  void formData;
   try {
     await tiaRequest("/channels/whatsapp/setup/direct/finish", { method: "POST" });
     revalidatePath("/automations");
