@@ -20,6 +20,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Normalize patch formatting assumption
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply_reschedule_service_change_patch.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'class AppointmentOperationForbidden(AppointmentOperationError):\\n    pass\\n\\ndef appointment_allowed_actions(\\n',
+              'class AppointmentOperationForbidden(AppointmentOperationError):\\n    pass\\n\\n\\ndef appointment_allowed_actions(\\n',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Apply patch
         run: python scripts/apply_reschedule_service_change_patch.py
       - name: Remove one-shot patch machinery
