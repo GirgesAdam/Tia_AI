@@ -152,7 +152,9 @@ export default async function AutomationsPage() {
   );
   const whatsappAttention = whatsappConnections.filter((connection) => {
     const health = providerHealth(connection);
-    return connection.status === "paused" || health?.state === "degraded" || health?.state === "disabled";
+    const healthState = typeof health?.state === "string" ? health.state : null;
+    if (healthState === "setup_pending") return false;
+    return connection.status === "paused" || healthState === "degraded" || healthState === "disabled";
   });
 
   return (
