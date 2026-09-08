@@ -44,10 +44,11 @@ def test_meta_webhook_and_provider_results_are_owned_by_backend() -> None:
     route = (root / "backend/app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")
     transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
 
-    assert '@router.get("/webhook"' in route
-    assert '@router.post("/webhook"' in route
+    assert '@router.get("/webhook/{connection_id}"' in route
+    assert '@router.post("/webhook/{connection_id}"' in route
     assert "X-Hub-Signature-256" in route
-    assert "verify_meta_webhook_signature" in route
+    assert "app_secret_ciphertext" in route
+    assert "_verify_scoped_signature" in route
     assert "record_dispatch_result(" in transport
     assert "record_provider_status(" in transport
     assert '_graph_url(f"{phone_number_id}/messages")' in transport
