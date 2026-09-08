@@ -100,7 +100,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
     ? `${APPS_URL}${cleanAppId}/settings/basic/`
     : APPS_URL;
   const webhookConfigUrl = cleanAppId
-    ? `${APPS_URL}${cleanAppId}/whatsapp-business/wa-settings/`
+    ? `${APPS_URL}${cleanAppId}/use_cases/customize/configuration/?product_route=whatsapp-business&use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=configuration`
     : APPS_URL;
 
   const needsCredentials =
