@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 import {
   connectWhatsappDirectAction,
   finishWhatsappDirectSetupAction,
-  initialSetupActionState,
 } from "./actions";
+import type { WhatsAppSetupActionState } from "./actions";
 
 export type WhatsAppSetupState = {
   connected: boolean;
@@ -42,6 +42,7 @@ export type WhatsAppSetupState = {
 const APPS_URL = "https://developers.facebook.com/apps/";
 const SYSTEM_USERS_URL = "https://business.facebook.com/settings/system-users";
 const PHONE_NUMBERS_URL = "https://business.facebook.com/wa/manage/phone-numbers/";
+const initialSetupActionState: WhatsAppSetupActionState = { ok: false, message: null };
 
 function DirectLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
