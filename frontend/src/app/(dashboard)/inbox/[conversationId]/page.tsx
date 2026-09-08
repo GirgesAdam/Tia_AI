@@ -18,6 +18,7 @@ import {
   resolveHandoff,
   takeOverConversation,
 } from "../actions";
+import { ConversationScroll } from "./conversation-scroll";
 import { InboxReplyForm } from "./reply-form";
 
 const categoryLabels: Record<string, string> = {
@@ -83,8 +84,8 @@ export default async function ConversationPage({
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <Card className="min-h-[650px] overflow-hidden">
-          <CardHeader className="border-b border-[var(--border)] py-4">
+        <Card className="flex h-[calc(100dvh-9rem)] min-h-[520px] max-h-[900px] flex-col overflow-hidden">
+          <CardHeader className="shrink-0 border-b border-[var(--border)] py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <CardTitle>المحادثة</CardTitle>
               <div className="flex flex-wrap gap-2">
@@ -96,8 +97,8 @@ export default async function ConversationPage({
             </div>
           </CardHeader>
 
-          <CardContent className="flex min-h-[590px] flex-col p-0">
-            <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+          <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+            <ConversationScroll messageCount={conversation.messages.length}>
               {conversation.messages.map((message) => {
                 const incoming = message.sender_type === "patient";
                 const isAi = message.sender_type === "ai";
@@ -128,9 +129,9 @@ export default async function ConversationPage({
               {!conversation.messages.length && (
                 <div className="py-16 text-center text-sm text-[var(--muted)]">لا توجد رسائل حتى الآن.</div>
               )}
-            </div>
+            </ConversationScroll>
 
-            <div className="border-t border-[var(--border)] bg-white p-4">
+            <div className="shrink-0 border-t border-[var(--border)] bg-white p-4">
               {conversation.status === "closed" ? (
                 <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
                   هذه المحادثة مغلقة. يمكن متابعة العميل من ملفه عند الحاجة.
