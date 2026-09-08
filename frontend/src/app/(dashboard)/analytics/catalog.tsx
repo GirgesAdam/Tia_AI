@@ -20,6 +20,7 @@ import { runAnalyticsCatalogAction, type AnalyticsCatalogState } from "./actions
 const initialState: AnalyticsCatalogState = { result: null, error: null };
 
 type AnalyticsCategoryGroup = "performance" | "customers" | "team";
+type VisualAnalyticsChart = Exclude<AnalyticsCatalogChart, "table">;
 
 const categoryLabels: Partial<Record<AnalyticsCatalogCategory, string>> = {
   revenue: "الإيرادات",
@@ -292,9 +293,9 @@ async function downloadCsv(result: AnalyticsCatalogRun) {
 }
 
 function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
-  const visualCharts = result.supported_charts.filter((chart) => chart !== "table");
-  const initial = visualCharts.includes(result.chart) ? result.chart : visualCharts[0] || result.chart;
-  const [chartType, setChartType] = useState<AnalyticsCatalogChart>(initial);
+  const visualCharts = result.supported_charts.filter((chart): chart is VisualAnalyticsChart => chart !== "table");
+  const initial: VisualAnalyticsChart = result.chart !== "table" && visualCharts.includes(result.chart) ? result.chart : visualCharts[0] || "kpi";
+  const [chartType, setChartType] = useState<VisualAnalyticsChart>(initial);
   const [seriesKey, setSeriesKey] = useState(result.chart_data.series[0]?.key || "");
   const [exportPending, setExportPending] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
