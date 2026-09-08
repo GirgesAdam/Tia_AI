@@ -31,5 +31,8 @@ class ChannelProviderCredential(TimestampMixin, Base):
     )
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     access_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
-    token_type: Mapped[str] = mapped_column(String(32), nullable=False, default="bearer", server_default="bearer")
+    app_secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="bearer", server_default="bearer"
+    )
     expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
