@@ -6,35 +6,28 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 
-class WhatsAppEmbeddedSignupConfig(BaseModel):
-    available: bool
-    app_id: str | None = None
-    config_id: str | None = None
-    graph_api_version: str | None = None
-
-
-class WhatsAppEmbeddedSignupComplete(BaseModel):
-    code: str = Field(min_length=8, max_length=4096)
+class WhatsAppDirectConnect(BaseModel):
+    app_id: str = Field(min_length=1, max_length=64)
     waba_id: str = Field(min_length=1, max_length=64)
     phone_number_id: str = Field(min_length=1, max_length=64)
-    business_id: str | None = Field(default=None, max_length=64)
+    access_token: str = Field(min_length=16, max_length=8192)
+    app_secret: str = Field(min_length=8, max_length=512)
 
-    @field_validator("code", "waba_id", "phone_number_id", "business_id")
+    @field_validator("app_id", "waba_id", "phone_number_id")
     @classmethod
-    def clean_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        return value or None
-
-    @field_validator("waba_id", "phone_number_id", "business_id")
-    @classmethod
-    def validate_meta_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if not value.isdigit():
+    def validate_meta_id(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean.isdigit():
             raise ValueError("Meta identifiers must contain digits only.")
-        return value
+        return clean
+
+    @field_validator("access_token", "app_secret")
+    @classmethod
+    def clean_secret(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("Meta credential cannot be empty.")
+        return clean
 
 
 class WhatsAppSetupState(BaseModel):
@@ -47,13 +40,18 @@ class WhatsAppSetupState(BaseModel):
     provider_health_state: str | None = None
     provider_error_code: str | None = None
     provider_error: str | None = None
-    embedded_signup_available: bool = False
+    direct_setup_available: bool = False
     provider_credentials_ready: bool = False
     transport_ready: bool = False
     templates_ready: bool = False
     ready_for_automations: bool = False
+    meta_app_id: str | None = None
+    webhook_callback_url: str | None = None
+    webhook_verify_token: str | None = None
+    webhook_verified: bool = False
     admin_action: Literal[
-        "connect_meta",
+        "connect_meta_direct",
+        "configure_webhook",
         "resolve_meta_restriction",
         "wait_for_template_review",
         "none",
@@ -62,5 +60,5 @@ class WhatsAppSetupState(BaseModel):
     system_message: str | None = None
 
 
-class WhatsAppEmbeddedSignupResult(BaseModel):
+class WhatsAppDirectConnectResult(BaseModel):
     state: WhatsAppSetupState
