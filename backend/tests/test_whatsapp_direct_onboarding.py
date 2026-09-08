@@ -67,6 +67,7 @@ def test_direct_onboarding_has_meta_deep_links_and_scoped_webhook() -> None:
     assert "selected_tab=api-testing-v2" in automation
     assert "whatsapp-business/wa-settings/" in automation
     assert '"/webhook/{connection_id}"' in route
+    assert "x-forwarded-proto" in route
     assert "app_secret_ciphertext" in service
     assert '"webhook_verify_token"' in service
 
@@ -103,6 +104,13 @@ def test_http_client_info_logging_is_suppressed_for_provider_secret_safety() -> 
     logging_source = (backend / "app/core/logging.py").read_text(encoding="utf-8")
     assert 'logging.getLogger("httpx").setLevel(logging.WARNING)' in logging_source
     assert 'logging.getLogger("httpcore").setLevel(logging.WARNING)' in logging_source
+
+
+def test_setup_pending_pause_is_not_rendered_as_provider_failure() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    repo = backend.parent
+    page = (repo / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
+    assert 'if (healthState === "setup_pending") return false;' in page
 
 
 def test_automation_page_owns_whatsapp_onboarding() -> None:
