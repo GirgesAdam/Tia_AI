@@ -39,8 +39,10 @@ def _channel_turn_is_after_latest_handback(conversation: Conversation) -> bool:
     message arrives. Direct agent API turns have no channel event and are already
     explicit new customer requests, so they are unaffected.
     """
+    if not isinstance(conversation, Conversation):
+        return True
     db = object_session(conversation)
-    if db is None or not isinstance(conversation, Conversation):
+    if db is None:
         return True
 
     resolved_at = db.scalar(
@@ -224,21 +226,23 @@ def _now() -> datetime:
 def agent_can_reply(conversation: Conversation) -> bool:
     """Return whether this AI run still owns a valid customer-triggered turn.
 
-    The transient epoch is set when customer inbound is recorded. If ownership
-    changes while that run is thinking, a final refreshed ownership check sees a
-    different persisted timestamp and suppresses the stale reply even if staff has
-    already handed the conversation back to AI.
+    The ownership epoch is captured when the turn first checks authority. If
+    ownership changes while that run is thinking, a final refreshed ownership
+    check sees a different persisted timestamp and suppresses the stale reply even
+    if staff has already handed the conversation back to AI.
     """
     if conversation.owner_type != OWNER_AI or conversation.status != "open":
         return False
     if not _channel_turn_is_after_latest_handback(conversation):
         return False
 
-    run_epoch = getattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, None)
     ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
-    if run_epoch is None or not isinstance(ownership_changed_at, datetime):
+    run_epoch = getattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, None)
+    if run_epoch is None:
+        if isinstance(ownership_changed_at, datetime):
+            setattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, ownership_changed_at)
         return True
-    if not isinstance(run_epoch, datetime):
+    if not isinstance(run_epoch, datetime) or not isinstance(ownership_changed_at, datetime):
         return False
     return _as_utc(run_epoch) == _as_utc(ownership_changed_at)
 
