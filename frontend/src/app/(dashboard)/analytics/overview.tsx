@@ -117,7 +117,7 @@ export async function AnalyticsOverviewPanel({
   ]);
 
   const finance = profitability.currencies.find((item) => item.currency === "EGP") || profitability.currencies[0];
-  const newPatientCount = newPatients.chart_data.series[0]?.values.reduce((sum, value) => sum + (value || 0), 0) || 0;
+  const newPatientCount = newPatients.chart_data.series[0]?.values.reduce<number>((sum, value) => sum + (value ?? 0), 0) ?? 0;
 
   return (
     <section className="mb-7">
