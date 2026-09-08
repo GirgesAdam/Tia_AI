@@ -1,66 +1,92 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import type { Branch, Doctor, PatientPackage, Service, Staff } from "@/lib/types";
+import type { Doctor, PatientPackage, Service, Staff } from "@/lib/types";
 import { createManualAppointment, type ManualAppointmentState } from "./actions";
 
 const initialState: ManualAppointmentState = { ok: false, message: "" };
 
+function cairoNowForInput() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+}
+
 export function ManualAppointmentForm({
   mode,
+  phone,
   patientId,
   patientName,
-  branches,
   services,
   doctors,
   staff,
+  doctorBranchMap,
+  defaultBranchId,
   packages = [],
 }: {
   mode: "existing" | "new";
+  phone: string;
   patientId?: string;
   patientName?: string;
-  branches: Branch[];
   services: Service[];
   doctors: Doctor[];
   staff: Staff[];
+  doctorBranchMap: Record<string, string>;
+  defaultBranchId?: string;
   packages?: PatientPackage[];
 }) {
   const [state, formAction, pending] = useActionState(createManualAppointment, initialState);
-  const staffMap = new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()]));
+  const [doctorId, setDoctorId] = useState("");
+  const staffMap = useMemo(() => new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()])), [staff]);
+  const branchId = doctorBranchMap[doctorId] || defaultBranchId || "";
+  const defaultStart = useMemo(() => cairoNowForInput(), []);
 
   return (
     <form action={formAction} className="space-y-4">
       <input type="hidden" name="customer_mode" value={mode} />
+      <input type="hidden" name="branch_id" value={branchId} />
       {mode === "existing" && <input type="hidden" name="patient_id" value={patientId} />}
 
       {mode === "new" ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
+            الرقم غير مسجل. كمّل بيانات العميل لإنشاء ملفه مع الموعد.
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
             <label>
-              <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العميل</span>
+              <span className="mb-1.5 block text-xs font-bold text-slate-600">الاسم الأول</span>
               <Input name="first_name" required maxLength={120} placeholder="الاسم" />
             </label>
             <label>
+              <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم العائلة (اختياري)</span>
+              <Input name="last_name" maxLength={120} placeholder="اسم العائلة" />
+            </label>
+            <label>
               <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>
-              <Input name="phone" required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
+              <Input name="phone" required readOnly value={phone} dir="ltr" />
             </label>
           </div>
-          <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-700">
-            <input name="whatsapp_opt_in" type="checkbox" className="mt-0.5" />
-            <span>العميل وافق بوضوح أن العيادة تبدأ معه رسائل واتساب مثل تذكير الموعد والمتابعة.</span>
-          </label>
         </>
       ) : (
-        <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800">
-          العميل: {patientName || "عميل"}
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-950">
+          <div className="font-black">العميل موجود: {patientName || "عميل"}</div>
+          <div className="mt-1 font-semibold" dir="ltr">{phone}</div>
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-3">
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">الخدمة</span>
           <Select name="service_id" required defaultValue="">
@@ -70,23 +96,22 @@ export function ManualAppointmentForm({
         </label>
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">الدكتور</span>
-          <Select name="doctor_id" required defaultValue="">
+          <Select name="doctor_id" required value={doctorId} onChange={(event) => setDoctorId(event.target.value)}>
             <option value="" disabled>اختار الدكتور</option>
             {doctors.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{staffMap.get(item.staff_id) || "دكتور"}</option>)}
           </Select>
         </label>
         <label>
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">الفرع</span>
-          <Select name="branch_id" required defaultValue={branches.length === 1 ? branches[0].id : ""}>
-            {branches.length !== 1 && <option value="" disabled>اختار الفرع</option>}
-            {branches.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </Select>
-        </label>
-        <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">التاريخ والوقت</span>
-          <Input name="start_at" type="datetime-local" required />
+          <Input name="start_at" type="datetime-local" required defaultValue={defaultStart} />
         </label>
       </div>
+
+      {doctorId && !branchId && (
+        <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">
+          الدكتور مرتبط بأكثر من فرع من غير فرع أساسي. حدّد فرعه الأساسي من إعدادات العيادة قبل تسجيل الموعد.
+        </div>
+      )}
 
       {mode === "existing" && packages.length > 0 && (
         <label className="block max-w-md">
@@ -108,7 +133,7 @@ export function ManualAppointmentForm({
       )}
 
       <div className="flex justify-end">
-        <Button type="submit" disabled={pending}>{pending ? "جارٍ التسجيل..." : "تسجيل الموعد"}</Button>
+        <Button type="submit" disabled={pending || !branchId}>{pending ? "جارٍ التسجيل..." : "تسجيل الموعد"}</Button>
       </div>
     </form>
   );
