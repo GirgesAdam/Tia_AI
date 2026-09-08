@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.core.automation_rules import DEFAULT_AUTOMATION_RULES
+from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import (
     STANDARD_TEMPLATE_BY_RULE_KEY,
     STANDARD_WHATSAPP_TEMPLATES,
@@ -41,6 +42,7 @@ def test_booking_confirmation_is_fixed_on_by_default() -> None:
 
 def test_provisioning_creates_all_missing_templates(monkeypatch) -> None:
     calls = []
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v26.0")
 
     def fake_post(url, *, json, headers, timeout):
         calls.append((url, json, headers, timeout))
@@ -60,6 +62,7 @@ def test_provisioning_creates_all_missing_templates(monkeypatch) -> None:
 
 def test_provisioning_does_not_recreate_existing_templates(monkeypatch) -> None:
     approved = {template.name: "approved" for template in STANDARD_WHATSAPP_TEMPLATES}
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v26.0")
 
     def unexpected_post(*args, **kwargs):
         raise AssertionError("existing standard templates must not be recreated")
