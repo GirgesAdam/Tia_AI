@@ -54,17 +54,18 @@ export async function createManualAppointment(
 
     if (mode === "new") {
       const firstName = String(formData.get("first_name") || "").trim();
+      const lastName = String(formData.get("last_name") || "").trim();
       const phone = String(formData.get("phone") || "").trim();
       if (!firstName || !phone) return { ok: false, message: "اكتب اسم العميل ورقم الهاتف." };
       const patient = await tiaRequest<Patient>("/crm/patients", {
         method: "POST",
         body: JSON.stringify({
           first_name: firstName,
+          last_name: lastName || null,
           phone,
           source: "phone",
           status: "active",
           preferred_language: "ar",
-          whatsapp_opt_in: formData.get("whatsapp_opt_in") === "on",
         }),
       });
       patientId = patient.id;
