@@ -275,7 +275,7 @@ def whatsapp_booking_dispatch_metadata(
     *,
     message: Message,
 ) -> dict:
-    """Add Meta reply buttons only when this exact AI run successfully created a booking."""
+    """Offer only pending-booking confirmation; rescheduling stays natural-text only."""
     metadata = dict(message.metadata_json or {})
     run_id = _uuid(metadata.get("agent_run_id"))
     if run_id is None or message.sender_type != "ai":
@@ -309,12 +309,8 @@ def whatsapp_booking_dispatch_metadata(
                 "title": "تأكيد الحجز",
             }
         )
-    buttons.append(
-        {
-            "id": f"{_RESCHEDULE_PREFIX}{appointment_id}",
-            "title": "تغيير الميعاد",
-        }
-    )
+    if not buttons:
+        return metadata
     metadata["whatsapp_interactive"] = {
         "type": "button",
         "buttons": buttons,

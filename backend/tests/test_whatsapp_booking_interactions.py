@@ -38,7 +38,7 @@ def _booking_message(run_id):
     )
 
 
-def test_pending_booking_dispatch_gets_confirm_and_reschedule_buttons() -> None:
+def test_pending_booking_dispatch_gets_confirm_button_only() -> None:
     run_id = uuid4()
     appointment_id = str(uuid4())
     db = SimpleNamespace(
@@ -60,15 +60,11 @@ def test_pending_booking_dispatch_gets_confirm_and_reschedule_buttons() -> None:
         {
             "id": f"tia.booking.confirm:{appointment_id}",
             "title": "تأكيد الحجز",
-        },
-        {
-            "id": f"tia.booking.reschedule:{appointment_id}",
-            "title": "تغيير الميعاد",
-        },
+        }
     ]
 
 
-def test_confirmed_booking_dispatch_does_not_offer_redundant_confirm_button() -> None:
+def test_confirmed_booking_dispatch_uses_plain_text_without_buttons() -> None:
     run_id = uuid4()
     appointment_id = str(uuid4())
     db = SimpleNamespace(
@@ -85,12 +81,7 @@ def test_confirmed_booking_dispatch_does_not_offer_redundant_confirm_button() ->
 
     metadata = whatsapp_booking_dispatch_metadata(db, message=_booking_message(run_id))
 
-    assert metadata["whatsapp_interactive"]["buttons"] == [
-        {
-            "id": f"tia.booking.reschedule:{appointment_id}",
-            "title": "تغيير الميعاد",
-        }
-    ]
+    assert "whatsapp_interactive" not in metadata
 
 
 def test_reschedule_discovery_is_pinned_to_structured_appointment_id() -> None:
