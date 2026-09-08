@@ -38,18 +38,22 @@ def test_owner_contract_is_explicit_and_small() -> None:
     assert OWNER_HUMAN == "human"
 
 
-def test_transfer_to_human_and_return_to_ai_are_deterministic() -> None:
+def test_transfer_to_human_and_return_to_ai_waits_for_new_customer_turn() -> None:
     conversation = _conversation()
     user_id = uuid4()
     human_at = datetime(2026, 8, 24, 15, 0, tzinfo=UTC)
     ai_at = datetime(2026, 8, 24, 15, 5, tzinfo=UTC)
+    customer_at = datetime(2026, 8, 24, 15, 6, tzinfo=UTC)
+
+    # Capture the initial AI ownership epoch for the active customer turn.
+    assert agent_can_reply(conversation) is True  # type: ignore[arg-type]
 
     transfer_to_human(conversation, assigned_user_id=user_id, now=human_at)
     assert conversation.owner_type == "human"
     assert conversation.assigned_user_id == user_id
     assert conversation.status == "pending"
     assert conversation.ownership_changed_at == human_at
-    assert agent_can_reply(conversation) is False
+    assert agent_can_reply(conversation) is False  # type: ignore[arg-type]
 
     return_to_ai(conversation, now=ai_at)
     assert conversation.owner_type == "ai"
@@ -57,7 +61,10 @@ def test_transfer_to_human_and_return_to_ai_are_deterministic() -> None:
     assert conversation.status == "open"
     assert conversation.closed_at is None
     assert conversation.ownership_changed_at == ai_at
-    assert agent_can_reply(conversation) is True
+    assert agent_can_reply(conversation) is False  # type: ignore[arg-type]
+
+    record_customer_inbound(conversation, now=customer_at)
+    assert agent_can_reply(conversation) is True  # type: ignore[arg-type]
 
 
 def test_customer_inbound_updates_unread_state_and_read_clears_it() -> None:
@@ -74,7 +81,7 @@ def test_customer_inbound_updates_unread_state_and_read_clears_it() -> None:
 
 def test_pending_status_is_still_a_compatibility_pause() -> None:
     conversation = _conversation(owner_type="ai", status="pending")
-    assert agent_can_reply(conversation) is False
+    assert agent_can_reply(conversation) is False  # type: ignore[arg-type]
 
 
 def test_agent_runtime_rechecks_locked_ownership_before_outbound() -> None:
