@@ -29,6 +29,15 @@ export type WhatsAppSetupState = {
   webhook_callback_url: string | null;
   webhook_verify_token: string | null;
   webhook_verified: boolean;
+  templates: Array<{
+    rule_key: string;
+    label: string;
+    name: string;
+    language: string;
+    category: string;
+    status: string;
+    error: string | null;
+  }>;
   admin_action:
     | "connect_meta_direct"
     | "configure_webhook"
@@ -81,6 +90,40 @@ function CopyValue({ value }: { value: string }) {
   );
 }
 
+function TemplateStatusList({ templates }: { templates: WhatsAppSetupState["templates"] }) {
+  const statusLabel = (status: string) => {
+    const normalized = status.toLowerCase();
+    if (normalized === "approved") return "معتمد ✅";
+    if (normalized === "pending") return "قيد مراجعة Meta ⏳";
+    if (normalized === "rejected") return "مرفوض ❌";
+    if (normalized === "error") return "Tia هتعيد محاولة الإنشاء";
+    if (normalized === "disabled") return "متوقف في Meta";
+    return "قيد الإنشاء";
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="font-black text-slate-950">قوالب الرسائل</div>
+      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+        Tia بتنشيء كل القوالب القياسية تلقائيًا مرة واحدة في حساب واتساب بتاع العيادة، سواء الـAutomation مفعلة دلوقتي أو لأ.
+      </p>
+      <div className="mt-4 space-y-2">
+        {templates.map((template) => (
+          <div key={template.name} className="flex flex-col gap-1 rounded-xl bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-bold text-slate-900">{template.label}</div>
+              <div className="font-mono text-[11px] text-slate-500" dir="ltr">{template.name}</div>
+              {template.error && <div className="mt-1 text-[11px] text-rose-700">{template.error}</div>}
+            </div>
+            <div className="text-xs font-bold text-slate-700">{statusLabel(template.status)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState }) {
   const [appId, setAppId] = useState(state.meta_app_id || "");
   const [appSecret, setAppSecret] = useState("");
@@ -109,13 +152,16 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
 
   if (state.ready_for_automations) {
     return (
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-        <div className="flex items-center gap-2 font-black text-emerald-950">
-          <CheckCircle2 size={20} /> واتساب مربوط وجاهز للـAutomation
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+          <div className="flex items-center gap-2 font-black text-emerald-950">
+            <CheckCircle2 size={20} /> واتساب مربوط وجاهز للـAutomation
+          </div>
+          <p className="mt-2 text-sm leading-6 text-emerald-900">
+            {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل بـMeta، والـWebhook ومسار الإرسال وكل القوالب القياسية جاهزين.
+          </p>
         </div>
-        <p className="mt-2 text-sm leading-6 text-emerald-900">
-          {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل بـMeta، والـWebhook ومسار الإرسال والقوالب المطلوبة جاهزين.
-        </p>
+        <TemplateStatusList templates={state.templates || []} />
       </div>
     );
   }
@@ -268,6 +314,8 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
           </Button>
         </form>
       )}
+
+      {state.connected && <TemplateStatusList templates={state.templates || []} />}
 
       {state.connected && state.webhook_verified && !state.ready_for_automations && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">

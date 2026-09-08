@@ -6,7 +6,6 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
@@ -21,7 +20,6 @@ import {
   cancelAutomationJob,
   retryAutomationJob,
   resumeWhatsappConnection,
-  saveAiFollowupTemplates,
   toggleAutomation,
 } from "./actions";
 import { WhatsAppDirectOnboarding, type WhatsAppSetupState } from "./whatsapp-direct-onboarding";
@@ -43,7 +41,6 @@ const descriptions: Record<string, string> = {
 };
 
 const visibleProductRuleKeys = new Set([
-  "booking_confirmation",
   "appointment_reminder_6h",
   "post_visit_followup",
   "cancellation_recovery",
@@ -108,30 +105,6 @@ function providerHealth(connection: ChannelConnection) {
     : null;
 }
 
-function followupTemplateEntries(connection: ChannelConnection) {
-  const config = connection.config_json || {};
-  const pool = config.ai_followup_templates;
-  if (Array.isArray(pool)) {
-    const valid = pool.filter(
-      (entry): entry is { name: string; language_code?: string } =>
-        Boolean(entry) &&
-        typeof entry === "object" &&
-        typeof (entry as { name?: unknown }).name === "string",
-    );
-    if (valid.length) return valid;
-  }
-
-  const legacy = config.ai_followup_template;
-  if (
-    legacy &&
-    typeof legacy === "object" &&
-    typeof (legacy as { name?: unknown }).name === "string"
-  ) {
-    return [legacy as { name: string; language_code?: string }];
-  }
-  return [];
-}
-
 export default async function AutomationsPage() {
   const ctx = await getAppContext();
   const [rawRules, jobs, overview, connections, whatsappSetup] = await Promise.all([
@@ -149,6 +122,9 @@ export default async function AutomationsPage() {
   const warning = automationWarning(overview.worker_state);
   const whatsappConnections = connections.filter(
     (connection) => connection.channel === "whatsapp" && connection.status !== "disconnected",
+  );
+  const templateStatusByName = new Map(
+    (whatsappSetup?.templates || []).map((template) => [template.name, template.status.toLowerCase()]),
   );
   const whatsappAttention = whatsappConnections.filter((connection) => {
     const health = providerHealth(connection);
@@ -254,6 +230,15 @@ export default async function AutomationsPage() {
         {rules.map((rule) => {
           const timing = timingParts(rule);
           const hasTiming = timingRuleKeys.has(rule.key);
+          const templateStatus = templateStatusByName.get(rule.template_name);
+          const running = Boolean(
+            rule.enabled &&
+            whatsappSetup?.connected &&
+            whatsappSetup.webhook_verified &&
+            whatsappSetup.transport_ready &&
+            templateStatus === "approved"
+          );
+          const waitingForSetup = rule.enabled && !running;
           return (
             <Card key={rule.id}>
               <CardContent className="p-5">
@@ -261,8 +246,8 @@ export default async function AutomationsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <b className="text-slate-950">{names[rule.key] || rule.name}</b>
-                      <Badge tone={rule.enabled ? "green" : "gray"}>
-                        {rule.enabled ? "مفعّلة" : "متوقفة"}
+                      <Badge tone={running ? "green" : waitingForSetup ? "yellow" : "gray"}>
+                        {running ? "شغالة" : waitingForSetup ? "في انتظار التجهيز" : "متوقفة"}
                       </Badge>
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
@@ -353,58 +338,6 @@ export default async function AutomationsPage() {
             })}
           </CardContent>
         </Card>
-      )}
-
-      {ctx.workspace.role === "admin" && (
-        <details className="mt-6 rounded-2xl border border-[var(--border)] bg-white p-4">
-          <summary className="cursor-pointer text-sm font-bold text-slate-800">
-            إعدادات قوالب واتساب المعتمدة
-          </summary>
-          <div className="mt-4 space-y-4">
-            <p className="text-xs leading-6 text-[var(--muted)]">
-              تستخدم المتابعات خارج نافذة واتساب ذات الـ24 ساعة قوالب معتمدة من Meta. اكتب أسماء القوالب المعتمدة فقط، قالبًا في كل سطر. لا تضف مفاتيح API أو أي أسرار هنا.
-            </p>
-            {whatsappConnections.length ? (
-              whatsappConnections.map((connection) => {
-                const templates = followupTemplateEntries(connection);
-                const language = templates[0]?.language_code || "ar_EG";
-                return (
-                  <form
-                    key={connection.id}
-                    action={saveAiFollowupTemplates}
-                    className="rounded-xl border border-slate-200 bg-slate-50/70 p-4"
-                  >
-                    <input type="hidden" name="connection_id" value={connection.id} />
-                    <div className="mb-3 text-xs font-black text-slate-800">
-                      {connection.display_name || "WhatsApp"}
-                    </div>
-                    <label className="block text-xs font-bold text-slate-700">
-                      أسماء القوالب المعتمدة
-                      <textarea
-                        name="template_names"
-                        rows={4}
-                        defaultValue={templates.map((template) => template.name).join("\n")}
-                        placeholder={"tia_followup_01_ar\ntia_followup_02_ar"}
-                        className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
-                      />
-                    </label>
-                    <label className="mt-3 block max-w-xs text-xs font-bold text-slate-700">
-                      كود اللغة
-                      <Input name="template_language" defaultValue={language} className="mt-1" />
-                    </label>
-                    <Button type="submit" size="sm" variant="outline" className="mt-3">
-                      حفظ القوالب
-                    </Button>
-                  </form>
-                );
-              })
-            ) : (
-              <p className="rounded-xl bg-slate-50 p-3 text-xs text-[var(--muted)]">
-                لا يوجد اتصال واتساب متصل حاليًا. القواعد ستبقى آمنة ولن ترسل متابعة خارج نافذة الـ24 ساعة بدون route حقيقي وقالب معتمد.
-              </p>
-            )}
-          </div>
-        </details>
       )}
 
       <details className="mt-6 rounded-2xl border border-[var(--border)] bg-white p-4">

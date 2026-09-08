@@ -51,7 +51,6 @@ export function AutomationTimingForm({
             name="timing_value"
             type="number"
             min="0"
-            max="10080"
             step="1"
             value={value}
             onChange={(event) => setValue(event.target.value)}
@@ -74,7 +73,6 @@ export function AutomationTimingForm({
           {pending ? "جارٍ الحفظ..." : "حفظ التوقيت"}
         </Button>
       </div>
-      <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">الحد الأقصى الحالي 7 أيام حتى تظل المتابعات قريبة من الحدث ومفهومة.</p>
     </form>
   );
 }

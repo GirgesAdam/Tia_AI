@@ -104,6 +104,12 @@ def update_rule(
     changed_fields = sorted(changes)
     previous_enabled = rule.enabled
 
+    if rule.key == "booking_confirmation" and changes.get("enabled") is False:
+        raise HTTPException(
+            status_code=409,
+            detail="Booking confirmation is a fixed Tia message and cannot be disabled.",
+        )
+
     if (
         rule.key == "appointment_reminder_6h"
         and rule.template_name == "tia_reminder_6h_01"

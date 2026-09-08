@@ -30,6 +30,16 @@ class WhatsAppDirectConnect(BaseModel):
         return clean
 
 
+class WhatsAppTemplateSetupStatus(BaseModel):
+    rule_key: str
+    label: str
+    name: str
+    language: str
+    category: str
+    status: str
+    error: str | None = None
+
+
 class WhatsAppSetupState(BaseModel):
     connection_id: UUID | None = None
     connection_status: Literal["active", "paused", "disconnected"] | None = None
@@ -49,6 +59,7 @@ class WhatsAppSetupState(BaseModel):
     webhook_callback_url: str | None = None
     webhook_verify_token: str | None = None
     webhook_verified: bool = False
+    templates: list[WhatsAppTemplateSetupStatus] = Field(default_factory=list)
     admin_action: Literal[
         "connect_meta_direct",
         "configure_webhook",

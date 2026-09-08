@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
-import type { ChannelConnection } from "@/lib/types";
 
 export type WhatsAppSetupActionState = {
   ok: boolean;
@@ -111,8 +110,8 @@ export async function saveAutomationTiming(formData: FormData) {
   }
 
   const absoluteMinutes = value * multiplier;
-  if (absoluteMinutes > 10080) {
-    throw new Error("Automation timing cannot exceed 7 days.");
+  if (!Number.isSafeInteger(absoluteMinutes)) {
+    throw new Error("Invalid automation timing.");
   }
 
   let offsetMinutes = absoluteMinutes;
@@ -122,43 +121,6 @@ export async function saveAutomationTiming(formData: FormData) {
   await tiaRequest(`/automations/rules/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ offset_minutes: offsetMinutes }),
-  });
-  revalidatePath("/automations");
-}
-
-export async function saveAiFollowupTemplates(formData: FormData) {
-  const connectionId = String(formData.get("connection_id") || "").trim();
-  const languageCode = String(formData.get("template_language") || "ar_EG").trim() || "ar_EG";
-  const names = Array.from(
-    new Set(
-      String(formData.get("template_names") || "")
-        .split(/\r?\n/)
-        .map((name) => name.trim())
-        .filter(Boolean),
-    ),
-  );
-  if (!connectionId) return;
-
-  const connection = await tiaRequest<ChannelConnection>(`/channels/connections/${connectionId}`);
-  const config = { ...(connection.config_json || {}) } as Record<string, unknown>;
-
-  if (names.length) {
-    config.ai_followup_templates = names.map((name) => ({
-      name,
-      language_code: languageCode,
-    }));
-    config.ai_followup_template = {
-      name: names[0],
-      language_code: languageCode,
-    };
-  } else {
-    delete config.ai_followup_templates;
-    delete config.ai_followup_template;
-  }
-
-  await tiaRequest(`/channels/connections/${connectionId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ config }),
   });
   revalidatePath("/automations");
 }

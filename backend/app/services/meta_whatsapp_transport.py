@@ -10,7 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
-from app.models.automation_rule import AutomationRule
+from app.core.meta_whatsapp_templates import (
+    STANDARD_TEMPLATE_BY_RULE_KEY,
+    STANDARD_WHATSAPP_TEMPLATES,
+    template_create_payload,
+)
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.channel_provider_credential import ChannelProviderCredential
@@ -117,17 +121,8 @@ def _decrypt_connection_token(
 
 
 def _required_template_names(db: Session, connection: ChannelConnection) -> list[str]:
-    rows = list(
-        db.scalars(
-            select(AutomationRule).where(
-                AutomationRule.workspace_id == connection.workspace_id,
-                AutomationRule.enabled.is_(True),
-                AutomationRule.channel.in_(("whatsapp", "auto")),
-                AutomationRule.template_name.is_not(None),
-            )
-        )
-    )
-    return sorted({str(rule.template_name) for rule in rows if rule.template_name})
+    del db, connection
+    return [template.name for template in STANDARD_WHATSAPP_TEMPLATES]
 
 
 def _parse_utc_timestamp(value: object) -> datetime | None:
@@ -252,6 +247,49 @@ def _fetch_template_statuses(token: str, waba_id: str) -> dict[str, str]:
     return statuses
 
 
+def provision_standard_whatsapp_templates(
+    token: str,
+    waba_id: str,
+    *,
+    current_statuses: dict[str, str] | None = None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Create every Tia standard template that is missing from this clinic WABA."""
+    errors: dict[str, str] = {}
+    if current_statuses is None:
+        try:
+            statuses = _fetch_template_statuses(token, waba_id)
+        except (httpx.HTTPError, MetaWhatsAppTransportError) as exc:
+            return {}, {"__all__": str(exc)[:2000]}
+    else:
+        statuses = dict(current_statuses)
+
+    endpoint = _graph_url(f"{waba_id}/message_templates")
+    headers = {"Authorization": f"Bearer {token}"}
+    for template in STANDARD_WHATSAPP_TEMPLATES:
+        if template.name in statuses:
+            continue
+        try:
+            response = httpx.post(
+                endpoint,
+                json=template_create_payload(template),
+                headers=headers,
+                timeout=20.0,
+            )
+        except httpx.HTTPError as exc:
+            errors[template.name] = str(exc)[:2000]
+            statuses[template.name] = "error"
+            continue
+        if response.status_code >= 400:
+            message, _ = _provider_error_payload(response)
+            errors[template.name] = message[:2000]
+            statuses[template.name] = "error"
+            continue
+        payload = response.json()
+        raw_status = payload.get("status") if isinstance(payload, dict) else None
+        statuses[template.name] = str(raw_status or "pending").strip().lower()
+    return statuses, errors
+
+
 def _set_provider_health(
     connection: ChannelConnection,
     *,
@@ -300,6 +338,9 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
     try:
         phone_info = _fetch_phone_info(token, phone_number_id)
         template_statuses = _fetch_template_statuses(token, waba_id)
+        template_statuses, template_provisioning_errors = provision_standard_whatsapp_templates(
+            token, waba_id, current_statuses=template_statuses
+        )
     except (httpx.HTTPError, MetaWhatsAppTransportError) as exc:
         message = str(exc)
         error_code = exc.code if isinstance(exc, MetaWhatsAppTransportError) else None
@@ -335,7 +376,18 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
             "quality_rating": str(phone_info.get("quality_rating") or "").strip()
             or config.get("quality_rating"),
             "template_statuses": template_statuses,
+            "template_provisioning_errors": template_provisioning_errors,
             "templates_checked_at": datetime.now(UTC).isoformat(),
+            "ai_followup_templates": [
+                {
+                    "name": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].name,
+                    "language_code": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].language,
+                }
+            ],
+            "ai_followup_template": {
+                "name": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].name,
+                "language_code": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].language,
+            },
             "transport_ready": True,
             "transport": "tia_native_meta_cloud",
         }

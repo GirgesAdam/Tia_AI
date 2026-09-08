@@ -12,10 +12,13 @@ from sqlalchemy.orm import Session
 
 from app.core.channel_adapter import generate_adapter_token
 from app.core.meta_whatsapp_config import meta_whatsapp_settings as settings
-from app.models.automation_rule import AutomationRule
+from app.core.meta_whatsapp_templates import (
+    STANDARD_TEMPLATE_BY_RULE_KEY,
+    STANDARD_WHATSAPP_TEMPLATES,
+)
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
-from app.schemas.whatsapp_setup import WhatsAppSetupState
+from app.schemas.whatsapp_setup import WhatsAppSetupState, WhatsAppTemplateSetupStatus
 from app.services.provider_credentials import (
     ProviderCredentialError,
     decrypt_provider_access_token,
@@ -253,20 +256,26 @@ def build_whatsapp_setup_state(
     credential = (
         db.get(ChannelProviderCredential, connection.id) if connection is not None else None
     )
-    rules = list(
-        db.scalars(
-            select(AutomationRule).where(
-                AutomationRule.workspace_id == workspace_id,
-                AutomationRule.enabled.is_(True),
-                AutomationRule.channel.in_(("whatsapp", "auto")),
-            )
-        )
-    )
-    required_templates = [rule.template_name for rule in rules if rule.template_name]
     statuses = _template_statuses(connection)
-    templates_ready = not required_templates or all(
-        statuses.get(name, "").lower() == "approved" for name in required_templates
-    )
+    raw_template_errors = config.get("template_provisioning_errors")
+    template_errors = raw_template_errors if isinstance(raw_template_errors, dict) else {}
+    template_states = [
+        WhatsAppTemplateSetupStatus(
+            rule_key=template.rule_key,
+            label=template.label_ar,
+            name=template.name,
+            language=template.language,
+            category=template.category,
+            status=str(statuses.get(template.name) or "missing").lower(),
+            error=(
+                str(template_errors.get(template.name))
+                if template_errors.get(template.name)
+                else None
+            ),
+        )
+        for template in STANDARD_WHATSAPP_TEMPLATES
+    ]
+    templates_ready = all(item.status == "approved" for item in template_states)
     provider_health_state = (
         str(health.get("state")) if health.get("state") is not None else None
     )
@@ -324,9 +333,7 @@ def build_whatsapp_setup_state(
         system_message = "Tia بتفحص الرقم والقوالب ومسار الإرسال المباشر مع Meta."
     elif not templates_ready:
         rejected_templates = [
-            name
-            for name in required_templates
-            if statuses.get(name, "").lower() == "rejected"
+            item.name for item in template_states if item.status == "rejected"
         ]
         if rejected_templates:
             admin_action = "wait_for_template_review"
@@ -334,7 +341,7 @@ def build_whatsapp_setup_state(
                 "Meta رفضت قالب رسالة مطلوب للـAutomation. عدّل القالب أو اطلب مراجعته من WhatsApp Manager."
             )
         else:
-            system_message = "Tia بتتابع اعتماد القوالب المطلوبة للـAutomations المفعلة."
+            system_message = "Tia أنشأت القوالب القياسية تلقائيًا وبتتابع اعتمادها من Meta."
 
     return WhatsAppSetupState(
         connection_id=connection.id if connection else None,
@@ -369,6 +376,7 @@ def build_whatsapp_setup_state(
             else None
         ),
         webhook_verified=webhook_verified,
+        templates=template_states,
         admin_action=admin_action,  # type: ignore[arg-type]
         admin_message=admin_message,
         system_message=system_message,
@@ -498,6 +506,27 @@ def connect_direct_meta(
         credential.token_type = "bearer"
         credential.expires_at = None
 
+    db.commit()
+    db.refresh(connection)
+
+    from app.services.meta_whatsapp_transport import provision_standard_whatsapp_templates
+
+    template_statuses, template_errors = provision_standard_whatsapp_templates(
+        access_token,
+        waba_id,
+    )
+    current_config = dict(connection.config_json or {})
+    current_config["template_statuses"] = template_statuses
+    current_config["template_provisioning_errors"] = template_errors
+    lead_template = STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"]
+    current_config["ai_followup_templates"] = [
+        {"name": lead_template.name, "language_code": lead_template.language}
+    ]
+    current_config["ai_followup_template"] = {
+        "name": lead_template.name,
+        "language_code": lead_template.language,
+    }
+    connection.config_json = current_config
     db.commit()
     db.refresh(connection)
     return build_whatsapp_setup_state(db, workspace_id=workspace_id)

@@ -51,7 +51,7 @@ RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
 LEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {
     "appointment_reminder_6h": frozenset(
-        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar"}
+        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}
     ),
     "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),
 }
@@ -112,6 +112,15 @@ def ensure_default_rules(
             if row.template_name in legacy_names and row.template_name != definition.template_name:
                 row.template_name = definition.template_name
                 row.template_language = definition.template_language
+                changed = True
+            if (
+                row.template_name == definition.template_name
+                and row.template_language != definition.template_language
+            ):
+                row.template_language = definition.template_language
+                changed = True
+            if definition.key == "booking_confirmation" and not row.enabled:
+                row.enabled = True
                 changed = True
             continue
         row = AutomationRule(
@@ -201,18 +210,24 @@ def _candidate_appointments(
     horizon: datetime,
 ) -> list[Appointment]:
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
+        appointment_horizon = horizon
+        if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
+            appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
         return list(
             db.scalars(
                 select(Appointment).where(
                     Appointment.workspace_id == workspace_id,
                     Appointment.status.in_(("pending", "confirmed")),
                     Appointment.start_at > now,
-                    Appointment.start_at <= horizon,
+                    Appointment.start_at <= appointment_horizon,
                 )
             )
         )
     if rule.trigger_kind == "after_completed":
-        oldest = now - timedelta(days=14)
+        oldest = now - max(
+            timedelta(days=14),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -224,7 +239,10 @@ def _candidate_appointments(
             )
         )
     if rule.trigger_kind == "after_no_show":
-        oldest = now - timedelta(days=7)
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -236,7 +254,10 @@ def _candidate_appointments(
             )
         )
     if rule.trigger_kind == "after_cancelled":
-        oldest = now - timedelta(days=7)
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
         return list(
             db.scalars(
                 select(Appointment).where(
@@ -435,7 +456,10 @@ def _plan_lead_followup_rule(
     if not rule.enabled:
         return PlanningResult(planned=0, cancelled=cancelled)
 
-    oldest = now - timedelta(days=30)
+    oldest = now - max(
+        timedelta(days=30),
+        timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+    )
     leads = list(
         db.scalars(
             select(Lead).where(
@@ -1841,7 +1865,7 @@ def automation_operations_overview(
             .where(
                 AutomationRule.workspace_id == workspace_id,
                 AutomationRule.enabled.is_(True),
-                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS),
+                AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS | {"booking_confirmation"}),
             )
         )
         or 0
