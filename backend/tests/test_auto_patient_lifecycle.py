@@ -8,13 +8,13 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_patient_lifecycle_keeps_only_essential_rule_enabled_by_default() -> None:
+def test_patient_lifecycle_keeps_fixed_confirmation_and_essential_reminder_enabled() -> None:
     rules = {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}
     assert rules["appointment_reminder_6h"].enabled_by_default is True
     assert "appointment_reminder_24h" not in rules
     assert "appointment_reminder_2h" not in rules
     assert rules["post_visit_followup"].enabled_by_default is False
-    assert rules["booking_confirmation"].enabled_by_default is False
+    assert rules["booking_confirmation"].enabled_by_default is True
     assert "no_show_followup" not in rules
 
 
