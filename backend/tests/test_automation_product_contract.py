@@ -8,7 +8,7 @@ def _rules_by_key():
     return {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}
 
 
-def test_current_product_has_one_configurable_reminder_and_optional_followups() -> None:
+def test_current_product_has_fixed_booking_confirmation_and_optional_followups() -> None:
     rules = _rules_by_key()
     assert set(rules) == {
         "booking_confirmation",
@@ -25,7 +25,7 @@ def test_current_product_has_one_configurable_reminder_and_optional_followups() 
     assert reminder.template_name == "tia_reminder_01"
     assert reminder.enabled_by_default is True
 
-    assert rules["booking_confirmation"].enabled_by_default is False
+    assert rules["booking_confirmation"].enabled_by_default is True
     assert rules["post_visit_followup"].enabled_by_default is False
     assert rules["cancellation_recovery"].enabled_by_default is False
     assert rules["lead_not_booked_followup"].enabled_by_default is False
@@ -82,6 +82,7 @@ def test_admin_ui_keeps_optional_rules_and_timing_simple() -> None:
 
     assert '"cancellation_recovery"' in page
     assert '"lead_not_booked_followup"' in page
+    assert '"booking_confirmation"' not in page.split("const visibleProductRuleKeys", 1)[1].split("]);", 1)[0]
     assert '"no_show_followup"' not in page
     assert "AutomationTimingForm" in page
     assert "saveAutomationTiming" in component
