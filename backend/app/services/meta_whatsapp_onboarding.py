@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import hmac
+import secrets
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -13,10 +15,12 @@ from app.core.meta_whatsapp_config import meta_whatsapp_settings as settings
 from app.models.automation_rule import AutomationRule
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
-from app.schemas.whatsapp_setup import WhatsAppEmbeddedSignupConfig, WhatsAppSetupState
+from app.schemas.whatsapp_setup import WhatsAppSetupState
 from app.services.provider_credentials import (
     ProviderCredentialError,
+    decrypt_provider_access_token,
     encrypt_provider_access_token,
+    encrypt_provider_secret,
     provider_credential_encryption_ready,
 )
 
@@ -46,33 +50,12 @@ def _clean_optional(value: str | None) -> str | None:
     return value or None
 
 
-def embedded_signup_available() -> bool:
+def direct_setup_available() -> bool:
     return all(
         (
-            _clean_optional(settings.meta_app_id),
-            _clean_optional(settings.meta_app_secret),
-            _clean_optional(settings.meta_whatsapp_embedded_signup_config_id),
             _clean_optional(settings.meta_graph_api_version),
-            _clean_optional(settings.meta_webhook_verify_token),
-            _clean_optional(settings.channel_transport_worker_token),
             provider_credential_encryption_ready(),
         )
-    )
-
-
-def embedded_signup_public_config() -> WhatsAppEmbeddedSignupConfig:
-    available = embedded_signup_available()
-    return WhatsAppEmbeddedSignupConfig(
-        available=available,
-        app_id=_clean_optional(settings.meta_app_id) if available else None,
-        config_id=(
-            _clean_optional(settings.meta_whatsapp_embedded_signup_config_id)
-            if available
-            else None
-        ),
-        graph_api_version=(
-            _clean_optional(settings.meta_graph_api_version) if available else None
-        ),
     )
 
 
@@ -129,41 +112,45 @@ def _setup_provider_health(
     return health
 
 
-def _exchange_signup_code(code: str) -> tuple[str, datetime | None]:
-    app_id = _clean_optional(settings.meta_app_id)
-    app_secret = _clean_optional(settings.meta_app_secret)
-    if not app_id or not app_secret or not embedded_signup_available():
-        raise MetaWhatsAppConfigurationError(
-            "WhatsApp Embedded Signup is not configured on the Tia platform."
-        )
-
+def _validate_token_and_app(*, app_id: str, app_secret: str, token: str) -> None:
     try:
         response = httpx.get(
-            _graph_url("oauth/access_token"),
+            _graph_url("debug_token"),
             params={
-                "client_id": app_id,
-                "client_secret": app_secret,
-                "code": code,
+                "input_token": token,
+                "access_token": f"{app_id}|{app_secret}",
             },
             timeout=20.0,
         )
     except httpx.HTTPError as exc:
         raise MetaWhatsAppProviderError(
-            "Could not reach Meta while completing WhatsApp connection."
+            "Could not reach Meta while validating the app and access token."
         ) from exc
     if response.status_code >= 400:
-        raise _provider_error(response, "Meta rejected the Embedded Signup code.")
-    payload = response.json()
-    token = str(payload.get("access_token") or "").strip()
-    if not token:
-        raise MetaWhatsAppProviderError(
-            "Meta completed signup without returning a usable access token."
+        raise _provider_error(
+            response,
+            "Meta could not validate the App ID, App Secret, and System User token.",
         )
-    expires_at = None
-    expires_in = payload.get("expires_in")
-    if isinstance(expires_in, (int, float)) and expires_in > 0:
-        expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
-    return token, expires_at
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not bool(data.get("is_valid")):
+        raise MetaWhatsAppProviderError(
+            "Meta says this System User access token is not valid. Generate a new token and try again."
+        )
+    returned_app_id = str(data.get("app_id") or "").strip()
+    if returned_app_id and returned_app_id != app_id:
+        raise MetaWhatsAppProviderError(
+            "The System User token belongs to a different Meta App than the App ID entered in Tia."
+        )
+    raw_scopes = data.get("scopes")
+    scopes = {str(value) for value in raw_scopes} if isinstance(raw_scopes, list) else set()
+    required = {"whatsapp_business_management", "whatsapp_business_messaging"}
+    missing = sorted(required - scopes)
+    if missing:
+        raise MetaWhatsAppProviderError(
+            "The System User token is missing required WhatsApp permissions: "
+            + ", ".join(missing)
+        )
 
 
 def _read_phone_number(token: str, phone_number_id: str) -> dict[str, Any]:
@@ -176,12 +163,42 @@ def _read_phone_number(token: str, phone_number_id: str) -> dict[str, Any]:
         )
     except httpx.HTTPError as exc:
         raise MetaWhatsAppProviderError(
-            "Could not verify the selected WhatsApp number with Meta."
+            "Could not verify the WhatsApp phone number with Meta."
         ) from exc
     if response.status_code >= 400:
-        raise _provider_error(response, "Meta could not verify the selected WhatsApp number.")
+        raise _provider_error(response, "Meta could not verify this WhatsApp phone number.")
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
+
+
+def _verify_waba_contains_phone(token: str, waba_id: str, phone_number_id: str) -> None:
+    try:
+        response = httpx.get(
+            _graph_url(f"{waba_id}/phone_numbers"),
+            params={"fields": "id", "limit": 100},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20.0,
+        )
+    except httpx.HTTPError as exc:
+        raise MetaWhatsAppProviderError(
+            "Could not verify the WhatsApp Business Account with Meta."
+        ) from exc
+    if response.status_code >= 400:
+        raise _provider_error(
+            response,
+            "Meta could not verify this WhatsApp Business Account.",
+        )
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    phone_ids = {
+        str(item.get("id"))
+        for item in data if isinstance(data, list)
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+    if phone_number_id not in phone_ids:
+        raise MetaWhatsAppProviderError(
+            "The Phone Number ID does not belong to the WhatsApp Business Account ID entered in Tia."
+        )
 
 
 def _subscribe_app(token: str, waba_id: str) -> None:
@@ -193,7 +210,7 @@ def _subscribe_app(token: str, waba_id: str) -> None:
         )
     except httpx.HTTPError as exc:
         raise MetaWhatsAppProviderError(
-            "Could not subscribe the clinic WhatsApp account to Tia webhooks."
+            "Could not subscribe this WhatsApp account to its Meta webhook."
         ) from exc
     if response.status_code >= 400:
         raise _provider_error(
@@ -211,12 +228,8 @@ def _template_statuses(connection: ChannelConnection | None) -> dict[str, str]:
     return {str(key): str(value) for key, value in raw.items()}
 
 
-def build_whatsapp_setup_state(
-    db: Session,
-    *,
-    workspace_id: UUID,
-) -> WhatsAppSetupState:
-    connection = db.scalar(
+def _connection_for_workspace(db: Session, workspace_id: UUID) -> ChannelConnection | None:
+    return db.scalar(
         select(ChannelConnection)
         .where(
             ChannelConnection.workspace_id == workspace_id,
@@ -226,6 +239,14 @@ def build_whatsapp_setup_state(
         .order_by(ChannelConnection.created_at.desc())
         .limit(1)
     )
+
+
+def build_whatsapp_setup_state(
+    db: Session,
+    *,
+    workspace_id: UUID,
+) -> WhatsAppSetupState:
+    connection = _connection_for_workspace(db, workspace_id)
     config = dict(connection.config_json or {}) if connection is not None else {}
     health_raw = config.get("provider_health")
     health = health_raw if isinstance(health_raw, dict) else {}
@@ -257,13 +278,19 @@ def build_whatsapp_setup_state(
     provider_error = (
         str(health.get("current_error")) if health.get("current_error") else None
     )
-    credentials_ready = credential is not None and bool(credential.access_token_ciphertext)
+    credentials_ready = bool(
+        credential is not None
+        and credential.access_token_ciphertext
+        and credential.app_secret_ciphertext
+    )
     transport_ready = bool(config.get("transport_ready"))
+    webhook_verified = bool(config.get("webhook_verified_at"))
     connected = connection is not None
     ready = bool(
         connection is not None
         and connection.status == "active"
         and credentials_ready
+        and webhook_verified
         and transport_ready
         and templates_ready
         and provider_health_state not in {"disabled", "degraded"}
@@ -272,31 +299,42 @@ def build_whatsapp_setup_state(
     admin_action: str = "none"
     admin_message = None
     system_message = None
-    if connection is None:
-        admin_action = "connect_meta"
+    health_action = str(health.get("action_required") or "")
+    if connection is None or not credentials_ready:
+        admin_action = "connect_meta_direct"
         admin_message = (
-            "سجّل الدخول إلى Meta واختَر Business العيادة ورقم واتساب. "
-            "Tia ستتعامل مع IDs وTokens وإعداد الاتصال تلقائيًا."
+            "اربط Meta مرة واحدة من الخطوات الموجودة هنا. Tia ستتحقق من البيانات وتخزن الأسرار مشفرة."
         )
-    elif str(health.get("action_required") or "") == "reconnect_meta":
-        admin_action = "connect_meta"
-        admin_message = "جلسة Meta انتهت أو بيانات الربط لم تعد صالحة. أعد ربط واتساب من نفس الزر؛ لن تحتاج لإدخال IDs أو Tokens."
+    elif health_action == "reconnect_meta":
+        admin_action = "connect_meta_direct"
+        admin_message = (
+            "System User token لم يعد صالحًا. أنشئ Token جديد من Meta والصقه في Tia لإعادة الربط."
+        )
     elif provider_health_state == "disabled" or provider_error_code == "131031":
         admin_action = "resolve_meta_restriction"
         admin_message = (
             "Meta أوقفت أو قيّدت حساب واتساب. افتح Business Support Home ونفّذ المراجعة المطلوبة."
         )
+    elif not webhook_verified:
+        admin_action = "configure_webhook"
+        admin_message = (
+            "بيانات Meta صحيحة. انسخ Callback URL وVerify Token إلى صفحة WhatsApp Configuration ثم اضغط تحقق وكمل."
+        )
     elif not transport_ready:
-        system_message = "Tia بتجهز مسار الإرسال الآمن لهذا الرقم."
+        system_message = "Tia بتفحص الرقم والقوالب ومسار الإرسال المباشر مع Meta."
     elif not templates_ready:
         rejected_templates = [
-            name for name in required_templates if statuses.get(name, "").lower() == "rejected"
+            name
+            for name in required_templates
+            if statuses.get(name, "").lower() == "rejected"
         ]
         if rejected_templates:
             admin_action = "wait_for_template_review"
-            admin_message = "Meta رفضت قالب رسالة مطلوب للـAutomation. Tia ستعرض القالب المطلوب تعديله أو إعادة مراجعته."
+            admin_message = (
+                "Meta رفضت قالب رسالة مطلوب للـAutomation. عدّل القالب أو اطلب مراجعته من WhatsApp Manager."
+            )
         else:
-            system_message = "Tia بتتحقق من القوالب المطلوبة للـAutomations المفعلة."
+            system_message = "Tia بتتابع اعتماد القوالب المطلوبة للـAutomations المفعلة."
 
     return WhatsAppSetupState(
         connection_id=connection.id if connection else None,
@@ -308,44 +346,61 @@ def build_whatsapp_setup_state(
             if config.get("display_phone_number")
             else None
         ),
-        verified_name=str(config.get("verified_name")) if config.get("verified_name") else None,
+        verified_name=(
+            str(config.get("verified_name")) if config.get("verified_name") else None
+        ),
         provider_health_state=provider_health_state,
         provider_error_code=provider_error_code,
         provider_error=provider_error,
-        embedded_signup_available=embedded_signup_available(),
+        direct_setup_available=direct_setup_available(),
         provider_credentials_ready=credentials_ready,
         transport_ready=transport_ready,
         templates_ready=templates_ready,
         ready_for_automations=ready,
+        meta_app_id=str(config.get("meta_app_id")) if config.get("meta_app_id") else None,
+        webhook_callback_url=(
+            str(config.get("webhook_callback_url"))
+            if config.get("webhook_callback_url")
+            else None
+        ),
+        webhook_verify_token=(
+            str(config.get("webhook_verify_token"))
+            if config.get("webhook_verify_token")
+            else None
+        ),
+        webhook_verified=webhook_verified,
         admin_action=admin_action,  # type: ignore[arg-type]
         admin_message=admin_message,
         system_message=system_message,
     )
 
 
-def complete_embedded_signup(
+def connect_direct_meta(
     db: Session,
     *,
     workspace_id: UUID,
     created_by_user_id: UUID,
-    code: str,
+    app_id: str,
+    app_secret: str,
     waba_id: str,
     phone_number_id: str,
-    business_id: str | None,
+    access_token: str,
+    callback_base_url: str,
 ) -> WhatsAppSetupState:
-    token, expires_at = _exchange_signup_code(code)
+    if not direct_setup_available():
+        raise MetaWhatsAppConfigurationError(
+            "Direct WhatsApp setup is not configured on the Tia platform."
+        )
+
+    _validate_token_and_app(app_id=app_id, app_secret=app_secret, token=access_token)
+    _verify_waba_contains_phone(access_token, waba_id, phone_number_id)
+    phone_info = _read_phone_number(access_token, phone_number_id)
+
     try:
-        ciphertext = encrypt_provider_access_token(token)
+        token_ciphertext = encrypt_provider_access_token(access_token)
+        app_secret_ciphertext = encrypt_provider_secret(app_secret)
     except ProviderCredentialError as exc:
         raise MetaWhatsAppConfigurationError(str(exc)) from exc
-
-    phone_info: dict[str, Any] = {}
-    provider_error: MetaWhatsAppProviderError | None = None
-    try:
-        phone_info = _read_phone_number(token, phone_number_id)
-        _subscribe_app(token, waba_id)
-    except MetaWhatsAppProviderError as exc:
-        provider_error = exc
 
     same_connection = db.scalar(
         select(ChannelConnection).where(
@@ -372,7 +427,6 @@ def complete_embedded_signup(
     display_phone = str(phone_info.get("display_phone_number") or "").strip() or None
     verified_name = str(phone_info.get("verified_name") or "").strip() or None
     quality_rating = str(phone_info.get("quality_rating") or "").strip() or None
-    health = _setup_provider_health(provider_error, now=now)
 
     if same_connection is None:
         _, adapter_token_hash = generate_adapter_token()
@@ -395,17 +449,32 @@ def complete_embedded_signup(
         connection.status = "paused"
 
     current_config = dict(connection.config_json or {})
+    previous_app_id = str(current_config.get("meta_app_id") or "")
+    verify_token = str(current_config.get("webhook_verify_token") or "").strip()
+    if not verify_token:
+        verify_token = secrets.token_urlsafe(32)
+    callback_url = (
+        callback_base_url.rstrip("/")
+        + f"/api/v1/channels/whatsapp/webhook/{connection.id}"
+    )
+    if previous_app_id and previous_app_id != app_id:
+        current_config.pop("webhook_verified_at", None)
+
     current_config.update(
         {
+            "meta_app_id": app_id,
             "waba_id": waba_id,
             "phone_number_id": phone_number_id,
-            "business_id": business_id,
             "display_phone_number": display_phone,
             "verified_name": verified_name,
             "quality_rating": quality_rating,
-            "embedded_signup_completed_at": now.isoformat(),
+            "direct_setup_connected_at": now.isoformat(),
+            "webhook_callback_url": callback_url,
+            "webhook_verify_token": verify_token,
             "transport_ready": False,
-            "provider_health": health,
+            "runtime_kind": "real",
+            "transport": "tia_native_meta_cloud",
+            "provider_health": _setup_provider_health(None, now=now),
         }
     )
     connection.config_json = current_config
@@ -416,21 +485,87 @@ def complete_embedded_signup(
             channel_connection_id=connection.id,
             workspace_id=workspace_id,
             provider="meta_cloud",
-            access_token_ciphertext=ciphertext,
+            access_token_ciphertext=token_ciphertext,
+            app_secret_ciphertext=app_secret_ciphertext,
             token_type="bearer",
-            expires_at=expires_at,
+            expires_at=None,
         )
         db.add(credential)
     else:
         credential.provider = "meta_cloud"
-        credential.access_token_ciphertext = ciphertext
+        credential.access_token_ciphertext = token_ciphertext
+        credential.app_secret_ciphertext = app_secret_ciphertext
         credential.token_type = "bearer"
-        credential.expires_at = expires_at
+        credential.expires_at = None
 
     db.commit()
     db.refresh(connection)
-    if provider_error is None:
-        from app.services.meta_whatsapp_transport import refresh_meta_connection_readiness
+    return build_whatsapp_setup_state(db, workspace_id=workspace_id)
 
-        refresh_meta_connection_readiness(db, connection)
+
+def verify_direct_webhook_challenge(
+    db: Session,
+    *,
+    connection_id: UUID,
+    mode: str | None,
+    verify_token: str | None,
+) -> bool:
+    connection = db.get(ChannelConnection, connection_id)
+    if (
+        connection is None
+        or connection.channel != "whatsapp"
+        or connection.provider != "meta_cloud"
+    ):
+        return False
+    expected = str((connection.config_json or {}).get("webhook_verify_token") or "").strip()
+    supplied = (verify_token or "").strip()
+    if mode != "subscribe" or not expected or not supplied:
+        return False
+    if not hmac.compare_digest(expected, supplied):
+        return False
+    config = dict(connection.config_json or {})
+    config["webhook_verified_at"] = datetime.now(UTC).isoformat()
+    connection.config_json = config
+    db.commit()
+    return True
+
+
+def finish_direct_meta_setup(
+    db: Session,
+    *,
+    workspace_id: UUID,
+) -> WhatsAppSetupState:
+    connection = _connection_for_workspace(db, workspace_id)
+    if connection is None:
+        raise MetaWhatsAppConflictError("Connect the clinic WhatsApp account first.")
+    config = dict(connection.config_json or {})
+    if not config.get("webhook_verified_at"):
+        raise MetaWhatsAppConflictError(
+            "Meta has not verified the Callback URL yet. Open WhatsApp Configuration, click Verify and Save, then try again."
+        )
+    waba_id = str(config.get("waba_id") or "").strip()
+    credential = db.get(ChannelProviderCredential, connection.id)
+    if credential is None:
+        raise MetaWhatsAppConfigurationError("The stored Meta credential is missing.")
+    try:
+        token = decrypt_provider_access_token(credential.access_token_ciphertext)
+    except ProviderCredentialError as exc:
+        raise MetaWhatsAppConfigurationError(str(exc)) from exc
+    if not waba_id:
+        raise MetaWhatsAppConfigurationError("WhatsApp Business Account ID is missing.")
+
+    try:
+        _subscribe_app(token, waba_id)
+    except MetaWhatsAppProviderError as exc:
+        config = dict(connection.config_json or {})
+        config["transport_ready"] = False
+        config["provider_health"] = _setup_provider_health(exc, now=datetime.now(UTC))
+        connection.config_json = config
+        connection.status = "paused"
+        db.commit()
+        raise
+
+    from app.services.meta_whatsapp_transport import refresh_meta_connection_readiness
+
+    refresh_meta_connection_readiness(db, connection)
     return build_whatsapp_setup_state(db, workspace_id=workspace_id)
