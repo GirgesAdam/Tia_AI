@@ -56,19 +56,16 @@ def _graph_url(path: str) -> str:
     return f"https://graph.facebook.com/{normalized}/{path.lstrip('/')}"
 
 
-def verify_meta_webhook_signature(body: bytes, signature_header: str | None) -> bool:
-    app_secret = _clean(meta_whatsapp_settings.meta_app_secret)
+def verify_meta_webhook_signature(
+    body: bytes, signature_header: str | None, app_secret: str | None
+) -> bool:
+    secret = _clean(app_secret)
     signature = _clean(signature_header)
-    if not app_secret or not signature or not signature.startswith("sha256="):
+    if not secret or not signature or not signature.startswith("sha256="):
         return False
-    expected = hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     supplied = signature.removeprefix("sha256=").strip().lower()
     return bool(supplied) and hmac.compare_digest(expected, supplied)
-
-
-def verify_meta_webhook_challenge(mode: str | None, token: str | None) -> bool:
-    expected = _clean(meta_whatsapp_settings.meta_webhook_verify_token)
-    return bool(expected and mode == "subscribe" and token == expected)
 
 
 def _provider_error_payload(response: httpx.Response) -> tuple[str, dict[str, Any]]:

@@ -24,6 +24,7 @@ import {
   saveAiFollowupTemplates,
   toggleAutomation,
 } from "./actions";
+import { WhatsAppDirectOnboarding, type WhatsAppSetupState } from "./whatsapp-direct-onboarding";
 
 const names: Record<string, string> = {
   booking_confirmation: "تأكيد الحجز",
@@ -132,12 +133,15 @@ function followupTemplateEntries(connection: ChannelConnection) {
 }
 
 export default async function AutomationsPage() {
-  const [rawRules, jobs, overview, connections, ctx] = await Promise.all([
+  const ctx = await getAppContext();
+  const [rawRules, jobs, overview, connections, whatsappSetup] = await Promise.all([
     tiaRequest<AutomationRule[]>("/automations/rules"),
     tiaRequest<AutomationJob[]>("/automations/jobs?limit=50"),
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
     tiaRequest<ChannelConnection[]>("/channels/connections"),
-    getAppContext(),
+    ctx.workspace.role === "admin"
+      ? tiaRequest<WhatsAppSetupState>("/channels/whatsapp/setup")
+      : Promise.resolve(null),
   ]);
   const rules = rawRules.filter((rule) => visibleProductRuleKeys.has(rule.key));
   const attentionJobs = jobs.filter((job) => Boolean(attentionLabel(job)));
@@ -155,8 +159,22 @@ export default async function AutomationsPage() {
     <>
       <PageHeader
         title="Automation"
-        description="فعّل المتابعات التي تحتاجها العيادة وحدد توقيتها بدون إعداد workflows معقدة."
+        description="فعّل المتابعات التي تحتاجها العيادة وحدد توقيتها، واربط واتساب مع Meta من نفس الصفحة."
       />
+
+      {ctx.workspace.role === "admin" && whatsappSetup && (
+        <Card className="mb-6 border-teal-200">
+          <CardHeader>
+            <CardTitle>تشغيل WhatsApp Automation</CardTitle>
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              إعداد مرة واحدة. كل خطوة فيها لينك مباشر لصفحة Meta المطلوبة، وTia تتحقق من البيانات وتخزن الأسرار مشفرة.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <WhatsAppDirectOnboarding state={whatsappSetup} />
+          </CardContent>
+        </Card>
+      )}
 
       {warning && (
         <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

@@ -462,7 +462,7 @@ def test_phase63_migration_runtime_and_n8n_contracts_are_deterministic() -> None
     assert 'revision: str = "0036_sync_runtime"' in migration
     assert len("0036_sync_runtime") <= 32
     assert "clinic_integration_sync_schedules" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0059_channel_credentials"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
     assert '"/integration/sync/run"' in clinic_routes
     assert '"/integration/sync/schedule"' in clinic_routes
     assert '"/adapter/clinic-sync/tick"' in automation_routes

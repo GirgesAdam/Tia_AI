@@ -44,9 +44,9 @@ export default async function SetupPage() {
           <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2 font-bold text-slate-950"><MessageCircleMore size={18} /> واتساب والـAutomation</div>
-              <p className="mt-1 text-sm leading-6 text-[var(--muted)]">اربط رقم العيادة وتابع جاهزية Meta والقوالب ومحرك التنفيذ من مكان واحد، بدون التعامل مع IDs أو Tokens أو n8n.</p>
+              <p className="mt-1 text-sm leading-6 text-[var(--muted)]">اربط واتساب من صفحة Automation عبر خطوات Meta الموجهة، وبعدها Tia تتولى التحقق والتشفير والقوالب ومسار الإرسال.</p>
             </div>
-            <Link href="/setup/whatsapp" className={buttonVariants({ variant: "outline" })}>إعداد واتساب</Link>
+            <Link href="/automations" className={buttonVariants({ variant: "outline" })}>فتح Automation</Link>
           </CardContent>
         </Card>
       )}

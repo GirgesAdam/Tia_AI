@@ -19,7 +19,6 @@ from app.services.meta_whatsapp_transport import (
     _readiness_refresh_due,
     build_meta_message_payload,
     refresh_meta_connection_readiness,
-    verify_meta_webhook_challenge,
     verify_meta_webhook_signature,
 )
 
@@ -51,22 +50,11 @@ def test_meta_webhook_signature_requires_valid_hmac(
     secret = "meta-app-secret"
     body = b'{"object":"whatsapp_business_account"}'
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    monkeypatch.setattr(meta_whatsapp_settings, "meta_app_secret", secret)
-
-    assert verify_meta_webhook_signature(body, f"sha256={digest}") is True
-    assert verify_meta_webhook_signature(body + b"x", f"sha256={digest}") is False
-    assert verify_meta_webhook_signature(body, "sha256=deadbeef") is False
-    assert verify_meta_webhook_signature(body, None) is False
-
-
-def test_meta_webhook_challenge_uses_platform_verify_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(meta_whatsapp_settings, "meta_webhook_verify_token", "verify-me")
-
-    assert verify_meta_webhook_challenge("subscribe", "verify-me") is True
-    assert verify_meta_webhook_challenge("subscribe", "wrong") is False
-    assert verify_meta_webhook_challenge("unsubscribe", "verify-me") is False
+    assert verify_meta_webhook_signature(body, f"sha256={digest}", secret) is True
+    assert verify_meta_webhook_signature(body + b"x", f"sha256={digest}", secret) is False
+    assert verify_meta_webhook_signature(body, "sha256=deadbeef", secret) is False
+    assert verify_meta_webhook_signature(body, None, secret) is False
+    assert verify_meta_webhook_signature(body, f"sha256={digest}", None) is False
 
 
 def _connection_for_refresh(*, checked_at: datetime, template_status: str = "approved", ready: bool = True, status: str = "active"):
@@ -368,8 +356,8 @@ def test_native_routes_and_worker_are_platform_managed() -> None:
         )
     )
 
-    assert '@router.get("/webhook"' in route
-    assert '@router.post("/webhook"' in route
+    assert '@router.get("/webhook/{connection_id}"' in route
+    assert '@router.post("/webhook/{connection_id}"' in route
     assert "X-Hub-Signature-256" in route
     assert '@router.post("/transport/tick")' in route
     assert "X-Tia-Transport-Token" in route
@@ -388,13 +376,18 @@ def test_old_per_clinic_n8n_inbound_transport_is_removed() -> None:
     assert not (backend.parent / "n8n/workflows/tia_whatsapp_inbound_status.json").exists()
 
 
-def test_whatsapp_credential_revision_is_short_and_hardened() -> None:
+def test_whatsapp_credential_revisions_are_hardened() -> None:
     backend = Path(__file__).resolve().parent.parent
-    migration = (
+    base_migration = (
         backend / "alembic/versions/0059_channel_provider_credentials.py"
     ).read_text(encoding="utf-8")
+    secret_migration = (
+        backend / "alembic/versions/0060_whatsapp_direct_credentials.py"
+    ).read_text(encoding="utf-8")
 
-    assert 'revision: str = "0059_channel_credentials"' in migration
-    assert len("0059_channel_credentials") <= 32
-    assert "ENABLE ROW LEVEL SECURITY" in migration
-    assert "REVOKE ALL" in migration
+    assert 'revision: str = "0059_channel_credentials"' in base_migration
+    assert "ENABLE ROW LEVEL SECURITY" in base_migration
+    assert "REVOKE ALL" in base_migration
+    assert 'revision: str = "0060_whatsapp_direct_credentials"' in secret_migration
+    assert 'down_revision: str | Sequence[str] | None = "0059_channel_credentials"' in secret_migration
+    assert '"app_secret_ciphertext"' in secret_migration
