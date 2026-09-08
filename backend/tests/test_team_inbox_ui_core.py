@@ -111,21 +111,35 @@ def test_team_inbox_list_uses_conversation_endpoint_and_ownership_filters() -> N
     assert "conversation.unread_count" in source
     assert "conversation.assigned_user" in source
     assert "conversation.last_message" in source
+    assert "LiveRouteRefresh" in source
 
 
 def test_conversation_detail_exposes_takeover_claim_assign_reply_and_read_paths() -> None:
     detail = (_root() / "frontend/src/app/(dashboard)/inbox/[conversationId]/page.tsx").read_text(
         encoding="utf-8"
     )
+    reply_form = (
+        _root() / "frontend/src/app/(dashboard)/inbox/[conversationId]/reply-form.tsx"
+    ).read_text(encoding="utf-8")
     actions = (_root() / "frontend/src/app/(dashboard)/inbox/actions.ts").read_text(encoding="utf-8")
     marker = (_root() / "frontend/src/components/conversation-read-marker.tsx").read_text(encoding="utf-8")
+    live_refresh = (_root() / "frontend/src/components/live-route-refresh.tsx").read_text(
+        encoding="utf-8"
+    )
 
     assert "takeOverConversation" in detail
     assert "claimHandoff" in detail
     assert "assignHandoff" in detail
-    assert "replyToConversation" in detail
+    assert "InboxReplyForm" in detail
     assert "ConversationReadMarker" in detail
+    assert "LiveRouteRefresh" in detail
     assert 'ctx.workspace.role === "admin"' in detail
+    assert "سلّم المحادثة لـ Tia" in detail
+
+    assert "replyToConversation" in reply_form
+    assert 'event.key !== "Enter"' in reply_form
+    assert "event.shiftKey" in reply_form
+    assert "requestSubmit()" in reply_form
 
     assert "/takeover" in actions
     assert "/assign" in actions
@@ -133,3 +147,5 @@ def test_conversation_detail_exposes_takeover_claim_assign_reply_and_read_paths(
     assert "/read" in actions
     assert "markConversationRead" in marker
     assert "router.refresh()" in marker
+    assert "setInterval" in live_refresh
+    assert "router.refresh()" in live_refresh

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Bot, MessageSquareMore, UserRound } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
+import { LiveRouteRefresh } from "@/components/live-route-refresh";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -53,6 +54,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
+      <LiveRouteRefresh />
       <PageHeader
         title="الرسائل"
         description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Tia والمحادثات التي تحتاج تدخل الفريق."
