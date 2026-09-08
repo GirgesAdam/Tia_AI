@@ -41,7 +41,8 @@ export type WhatsAppSetupState = {
 
 const APPS_URL = "https://developers.facebook.com/apps/";
 const SYSTEM_USERS_URL = "https://business.facebook.com/settings/system-users";
-const PHONE_NUMBERS_URL = "https://business.facebook.com/wa/manage/phone-numbers/";
+const CURRENT_API_TESTING_URL =
+  "https://developers.facebook.com/apps/1370437594582187/use_cases/customize/api-testing-v2/?product_route=whatsapp-business&business_id=2086664822245784&use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=api-testing-v2";
 const initialSetupActionState: WhatsAppSetupActionState = { ok: false, message: null };
 
 function DirectLink({ href, children }: { href: string; children: React.ReactNode }) {
@@ -50,7 +51,7 @@ function DirectLink({ href, children }: { href: string; children: React.ReactNod
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center gap-1 text-xs font-bold text-teal-700 underline underline-offset-2"
+      className="inline-flex items-center gap-1 text-xs font-bold !text-teal-700 underline underline-offset-2"
     >
       {children} <ExternalLink size={12} />
     </a>
@@ -80,6 +81,10 @@ function CopyValue({ value }: { value: string }) {
 
 export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState }) {
   const [appId, setAppId] = useState(state.meta_app_id || "");
+  const [appSecret, setAppSecret] = useState("");
+  const [wabaId, setWabaId] = useState("");
+  const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [connectState, connectAction, connectPending] = useActionState(
     connectWhatsappDirectAction,
     initialSetupActionState,
@@ -91,9 +96,6 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
 
   const cleanAppId = appId.trim();
   const appDashboard = cleanAppId ? `${APPS_URL}${cleanAppId}/` : APPS_URL;
-  const apiSetupUrl = cleanAppId
-    ? `${APPS_URL}${cleanAppId}/whatsapp-business/wa-dev-console/`
-    : APPS_URL;
   const appSecretUrl = cleanAppId
     ? `${APPS_URL}${cleanAppId}/settings/basic/`
     : APPS_URL;
@@ -148,32 +150,63 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
 
             <label className="space-y-2 text-sm font-bold text-slate-900">
               <span>App Secret</span>
-              <Input name="app_secret" type="password" dir="ltr" autoComplete="off" required />
+              <Input
+                name="app_secret"
+                type="password"
+                dir="ltr"
+                autoComplete="off"
+                value={appSecret}
+                onChange={(event) => setAppSecret(event.target.value)}
+                required
+              />
               <DirectLink href={appSecretUrl}>افتح App Settings → Basic مباشرة</DirectLink>
             </label>
 
             <label className="space-y-2 text-sm font-bold text-slate-900">
               <span>WhatsApp Business Account ID (WABA ID)</span>
-              <Input name="waba_id" inputMode="numeric" dir="ltr" required />
-              <div className="flex flex-wrap gap-3">
-                <DirectLink href={apiSetupUrl}>افتح WhatsApp API Setup</DirectLink>
-                <DirectLink href={PHONE_NUMBERS_URL}>أو WhatsApp Manager</DirectLink>
-              </div>
+              <Input
+                name="waba_id"
+                inputMode="numeric"
+                dir="ltr"
+                value={wabaId}
+                onChange={(event) => setWabaId(event.target.value)}
+                required
+              />
+              <DirectLink href={CURRENT_API_TESTING_URL}>افتح WhatsApp API Testing وخد WABA ID</DirectLink>
             </label>
 
             <label className="space-y-2 text-sm font-bold text-slate-900">
               <span>Phone Number ID</span>
-              <Input name="phone_number_id" inputMode="numeric" dir="ltr" required />
-              <DirectLink href={apiSetupUrl}>افتح API Setup عند الرقم مباشرة</DirectLink>
+              <Input
+                name="phone_number_id"
+                inputMode="numeric"
+                dir="ltr"
+                value={phoneNumberId}
+                onChange={(event) => setPhoneNumberId(event.target.value)}
+                required
+              />
+              <DirectLink href={CURRENT_API_TESTING_URL}>افتح نفس صفحة API Testing وخد Phone Number ID</DirectLink>
             </label>
           </div>
 
           <label className="block space-y-2 text-sm font-bold text-slate-900">
             <span>System User Access Token</span>
-            <Input name="access_token" type="password" dir="ltr" autoComplete="off" required />
-            <div className="flex flex-wrap items-center gap-3 text-xs font-normal text-[var(--muted)]">
-              <span>اعمل System User بصلاحية Admin، Assign Assets للـApp وWhatsApp Account، وبعدها Generate Token بصلاحيات whatsapp_business_management وwhatsapp_business_messaging.</span>
-              <DirectLink href={SYSTEM_USERS_URL}>افتح System Users مباشرة</DirectLink>
+            <Input
+              name="access_token"
+              type="password"
+              dir="ltr"
+              autoComplete="off"
+              value={accessToken}
+              onChange={(event) => setAccessToken(event.target.value)}
+              required
+            />
+            <div className="text-xs font-normal text-[var(--muted)]">
+              <p>
+                اعمل System User بصلاحية Admin، Assign Assets للـApp وWhatsApp Account، وبعدها Generate Token بصلاحيات whatsapp_business_management وwhatsapp_business_messaging.
+              </p>
+              <div className="mt-2 w-full text-right">
+                <DirectLink href={SYSTEM_USERS_URL}>افتح System Users مباشرة</DirectLink>
+              </div>
             </div>
           </label>
 
@@ -182,7 +215,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
           </div>
 
           {connectState.message && (
-            <p className={`text-sm ${connectState.ok ? "text-emerald-700" : "text-rose-700"}`}>
+            <p className={`text-sm leading-6 ${connectState.ok ? "text-emerald-700" : "text-rose-700"}`}>
               {connectState.message}
             </p>
           )}
