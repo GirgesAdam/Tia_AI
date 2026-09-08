@@ -4,8 +4,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
+from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.conversation import Conversation
 from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
@@ -29,19 +30,19 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def customer_inbound_can_trigger_ai(
-    db: Session,
-    *,
-    conversation: Conversation,
-    inbound: Message,
-) -> bool:
-    """Allow AI only for customer activity newer than the latest human hand-back.
+def _channel_turn_is_after_latest_handback(conversation: Conversation) -> bool:
+    """Block a delayed provider event that belongs to the human-owned period.
 
-    A delayed provider event may be processed after staff has already returned the
-    conversation to AI. Comparing this exact inbound message with the persisted
-    handoff resolution time prevents an old customer turn from waking AI later.
-    The message itself stays in history; only its old reply trigger is suppressed.
+    Channel processing marks its event as `processing` before entering the agent.
+    Comparing that event's exact inbound message with the latest persisted handoff
+    resolution means returning ownership to AI is silent until a newer customer
+    message arrives. Direct agent API turns have no channel event and are already
+    explicit new customer requests, so they are unaffected.
     """
+    db = object_session(conversation)
+    if db is None or not isinstance(conversation, Conversation):
+        return True
+
     resolved_at = db.scalar(
         select(HandoffRequest.resolved_at)
         .where(
@@ -55,10 +56,24 @@ def customer_inbound_can_trigger_ai(
     )
     if not isinstance(resolved_at, datetime):
         return True
-    created_at = getattr(inbound, "created_at", None)
-    if not isinstance(created_at, datetime):
-        return False
-    return _as_utc(created_at) > _as_utc(resolved_at)
+
+    inbound_created_at = db.scalar(
+        select(Message.created_at)
+        .join(ChannelInboundEvent, ChannelInboundEvent.message_id == Message.id)
+        .where(
+            ChannelInboundEvent.workspace_id == conversation.workspace_id,
+            ChannelInboundEvent.status == "processing",
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.sender_type == "patient",
+            Message.direction == "inbound",
+        )
+        .order_by(ChannelInboundEvent.updated_at.desc())
+        .limit(1)
+    )
+    if not isinstance(inbound_created_at, datetime):
+        return True
+    return _as_utc(inbound_created_at) > _as_utc(resolved_at)
 
 
 def ai_dispatch_is_sendable(
@@ -207,7 +222,7 @@ def _now() -> datetime:
 
 
 def agent_can_reply(conversation: Conversation) -> bool:
-    """Return whether this AI run still owns an open conversation.
+    """Return whether this AI run still owns a valid customer-triggered turn.
 
     The transient epoch is set when customer inbound is recorded. If ownership
     changes while that run is thinking, a final refreshed ownership check sees a
@@ -215,6 +230,8 @@ def agent_can_reply(conversation: Conversation) -> bool:
     already handed the conversation back to AI.
     """
     if conversation.owner_type != OWNER_AI or conversation.status != "open":
+        return False
+    if not _channel_turn_is_after_latest_handback(conversation):
         return False
 
     run_epoch = getattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, None)
