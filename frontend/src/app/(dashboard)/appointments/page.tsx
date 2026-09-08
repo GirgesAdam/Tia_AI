@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarClock, ChevronLeft, Plus, Stethoscope } from "lucide-react";
+import { CalendarClock, ChevronLeft, Plus, Search, Stethoscope } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
@@ -7,16 +7,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
-import { Select } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
-import type { Appointment, AppointmentStatus, Branch, Doctor, Patient, PatientPackage, Service, Staff } from "@/lib/types";
+import type { Appointment, AppointmentStatus, Doctor, Patient, PatientPackage, Service, Staff } from "@/lib/types";
 import { changeAppointmentStatus } from "./actions";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 
-type SearchParams = { patient_id?: string; scope?: string; status?: string; manual_patient_id?: string };
+type SearchParams = { patient_id?: string; scope?: string; status?: string; manual_phone?: string };
+type BookingKnowledge = {
+  branches: Array<{ id: string; is_active: boolean }>;
+  doctors: Array<{
+    id: string;
+    branches: Array<{ id: string; is_primary: boolean }>;
+  }>;
+};
+
 const scopes = [["today", "اليوم"], ["upcoming", "القادمة"], ["past", "السابقة"], ["all", "الكل"]] as const;
 const statuses: Array<["" | AppointmentStatus, string]> = [
   ["", "كل الحالات"],
@@ -40,25 +48,26 @@ function bookingMethod(source: string) {
   return source === "ai" ? "Tia AI" : "الاستقبال";
 }
 
+function normalizePhoneIdentity(value: string | null | undefined) {
+  if (!value) return "";
+  let normalized = value.trim().replace(/[\s().-]/g, "");
+  if (normalized.startsWith("0020") && normalized.length === 14) normalized = `+${normalized.slice(2)}`;
+  else if (normalized.startsWith("01") && normalized.length === 11) normalized = `+20${normalized.slice(1)}`;
+  else if (normalized.startsWith("20") && normalized.length === 12) normalized = `+${normalized}`;
+  return normalized;
+}
+
 function availableManualStatuses(appointment: Appointment, now: number): AppointmentStatus[] {
   const started = new Date(appointment.start_at).getTime() <= now;
-  if (appointment.status === "pending") {
-    return started ? ["completed", "no_show"] : ["confirmed", "cancelled"];
-  }
-  if (appointment.status === "confirmed") {
-    return started ? ["completed", "no_show"] : ["cancelled"];
-  }
-  if ((appointment.status === "checked_in" || appointment.status === "in_progress") && started) {
-    return ["completed", "no_show"];
-  }
+  if (appointment.status === "pending") return started ? ["completed", "no_show"] : ["confirmed", "cancelled"];
+  if (appointment.status === "confirmed") return started ? ["completed", "no_show"] : ["cancelled"];
+  if ((appointment.status === "checked_in" || appointment.status === "in_progress") && started) return ["completed", "no_show"];
   return [];
 }
 
 function StatusControl({ appointment, patientId, canOverrideCancellation, now }: { appointment: Appointment; patientId: string; canOverrideCancellation: boolean; now: number }) {
   const options = availableManualStatuses(appointment, now);
-  if (!options.length) {
-    return <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>;
-  }
+  if (!options.length) return <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>;
 
   return (
     <form action={changeAppointmentStatus} className="flex min-w-[170px] items-center gap-1.5">
@@ -77,7 +86,7 @@ function StatusControl({ appointment, patientId, canOverrideCancellation, now }:
 export default async function AppointmentsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const raw = await searchParams;
   const patientId = raw.patient_id;
-  const manualPatientId = raw.manual_patient_id || "";
+  const manualPhone = (raw.manual_phone || "").trim();
   const defaultScope = patientId ? "all" : "today";
   const scope = scopes.some(([value]) => value === raw.scope) ? raw.scope! : defaultScope;
   const status = statuses.some(([value]) => value === raw.status) ? raw.status || "" : "";
@@ -87,7 +96,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   if (patientId) query.set("patient_id", patientId);
   if (status) query.set("status", status);
 
-  const [appointments, patients, services, doctors, staff, branches, ctx] = await Promise.all([
+  const [appointments, patients, services, doctors, staff, knowledge, ctx] = await Promise.all([
     tiaRequest<Appointment[]>(`/booking/appointments?${query.toString()}`),
     patientId
       ? tiaRequest<Patient>(`/crm/patients/${patientId}`).then((patient) => [patient])
@@ -95,16 +104,31 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<Doctor[]>("/clinic/doctors"),
     tiaRequest<Staff[]>("/clinic/staff"),
-    tiaRequest<Branch[]>("/clinic/branches"),
+    tiaRequest<BookingKnowledge>("/clinic/knowledge"),
     getAppContext(),
   ]);
 
-  const manualPatient = manualPatientId
-    ? await tiaRequest<Patient>(`/crm/patients/${manualPatientId}`).catch(() => null)
-    : null;
-  const manualPackages = manualPatient
-    ? await tiaRequest<PatientPackage[]>(`/booking/patients/${manualPatient.id}/packages?usable_only=true`).catch(() => [])
-    : [];
+  let manualPatient: Patient | null = null;
+  if (manualPhone) {
+    const candidates = await tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(manualPhone)}&limit=20`).catch(() => []);
+    const identity = normalizePhoneIdentity(manualPhone);
+    manualPatient = candidates.find((patient) => normalizePhoneIdentity(patient.phone) === identity) || null;
+  }
+
+  const [manualPackages, manualHistory] = manualPatient
+    ? await Promise.all([
+        tiaRequest<PatientPackage[]>(`/booking/patients/${manualPatient.id}/packages?usable_only=true`).catch(() => []),
+        tiaRequest<Appointment[]>(`/booking/appointments?patient_id=${manualPatient.id}&scope=all&limit=20`).catch(() => []),
+      ])
+    : [[], []];
+
+  const activeBranches = knowledge.branches.filter((branch) => branch.is_active);
+  const defaultBranchId = activeBranches.length === 1 ? activeBranches[0].id : undefined;
+  const doctorBranchMap = Object.fromEntries(knowledge.doctors.map((doctor) => {
+    const primary = doctor.branches.find((branch) => branch.is_primary);
+    const resolved = primary?.id || (doctor.branches.length === 1 ? doctor.branches[0].id : defaultBranchId || "");
+    return [doctor.id, resolved];
+  }));
 
   const patientMap = new Map(patients.map((item) => [item.id, `${item.first_name} ${item.last_name || ""}`.trim()]));
   const serviceMap = new Map(services.map((item) => [item.id, item.name]));
@@ -112,8 +136,6 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   const doctorMap = new Map(doctors.map((item) => [item.id, staffMap.get(item.staff_id) || "دكتور"]));
   const selectedPatient = patientId ? patients[0] : null;
   const canOverrideCancellation = ctx.workspace.role === "admin";
-  // This async Server Component takes one request-time snapshot for UI hints only.
-  // Every write is revalidated by the backend appointment state machine.
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
 
@@ -133,55 +155,67 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
         <Card className="mb-5">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Plus size={18} /> إضافة موعد يدوي</CardTitle>
-            <p className="text-xs font-semibold text-[var(--muted)]">استخدم نفس booking backend الحقيقي؛ لو الوقت غير متاح أو الباكدج غير مناسبة، الحجز سيرفض.</p>
+            <p className="text-xs font-semibold text-[var(--muted)]">ابدأ برقم الهاتف. Tia يحدد تلقائيًا إذا كان العميل موجودًا ويعرض تاريخه قبل تسجيل الموعد.</p>
           </CardHeader>
           <CardContent className="space-y-5">
-            <details open={Boolean(manualPatient)} className="rounded-xl border border-slate-200 p-4">
-              <summary className="cursor-pointer text-sm font-black text-slate-900">عميل موجود</summary>
-              <form method="get" className="mt-4 flex max-w-xl gap-2">
-                <Select name="manual_patient_id" defaultValue={manualPatient?.id || ""} required>
-                  <option value="" disabled>اختار العميل</option>
-                  {patients.map((patient) => <option key={patient.id} value={patient.id}>{patient.first_name} {patient.last_name || ""} {patient.phone ? `· ${patient.phone}` : ""}</option>)}
-                </Select>
-                <Button type="submit" variant="outline">متابعة</Button>
-              </form>
-              {manualPatient && (
-                <div className="mt-4 border-t border-slate-100 pt-4">
-                  <ManualAppointmentForm
-                    mode="existing"
-                    patientId={manualPatient.id}
-                    patientName={`${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim()}
-                    branches={branches}
-                    services={services}
-                    doctors={doctors}
-                    staff={staff}
-                    packages={manualPackages}
-                  />
-                </div>
-              )}
-            </details>
+            <form method="get" className="flex max-w-xl gap-2">
+              <label className="min-w-0 flex-1">
+                <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم هاتف العميل</span>
+                <Input name="manual_phone" defaultValue={manualPhone} required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
+              </label>
+              <Button type="submit" variant="outline" className="mt-6"><Search size={16} /> بحث</Button>
+            </form>
 
-            <details className="rounded-xl border border-slate-200 p-4">
-              <summary className="cursor-pointer text-sm font-black text-slate-900">عميل جديد</summary>
-              <div className="mt-4">
-                <ManualAppointmentForm mode="new" branches={branches} services={services} doctors={doctors} staff={staff} />
+            {manualPhone && (
+              <div className="border-t border-slate-100 pt-5">
+                {manualPatient && (
+                  <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-black text-slate-950">الحجوزات السابقة لـ {manualPatient.first_name} {manualPatient.last_name || ""}</div>
+                        <div className="mt-1 text-xs text-[var(--muted)]">آخر {Math.min(manualHistory.length, 20).toLocaleString("ar-EG")} موعد مسجل لهذا الرقم.</div>
+                      </div>
+                      <Link href={`/patients/${manualPatient.id}`} className="text-xs font-bold text-teal-700 hover:underline">فتح ملف العميل</Link>
+                    </div>
+                    {manualHistory.length ? (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {manualHistory.slice(0, 6).map((appointment) => (
+                          <div key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs">
+                            <div className="font-black text-slate-900">{serviceMap.get(appointment.service_id) || "خدمة"}</div>
+                            <div className="mt-1 text-slate-600">{formatDateTime(appointment.start_at)}</div>
+                            <div className="mt-1 font-bold text-slate-700">{appointmentLabels[appointment.status] || appointment.status}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="mt-3 text-xs text-[var(--muted)]">لا توجد حجوزات سابقة لهذا العميل.</div>}
+                  </div>
+                )}
+
+                <ManualAppointmentForm
+                  mode={manualPatient ? "existing" : "new"}
+                  phone={manualPhone}
+                  patientId={manualPatient?.id}
+                  patientName={manualPatient ? `${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim() : undefined}
+                  services={services}
+                  doctors={doctors}
+                  staff={staff}
+                  doctorBranchMap={doctorBranchMap}
+                  defaultBranchId={defaultBranchId}
+                  packages={manualPackages}
+                />
               </div>
-            </details>
+            )}
           </CardContent>
         </Card>
       )}
 
       <div className="surface-toolbar mb-4">
         <div className="flex flex-wrap gap-1">
-          {scopes.map(([value, label]) => (
-            <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>{label}</FilterChip>
-          ))}
+          {scopes.map(([value, label]) => <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={scope === value}>{label}</FilterChip>)}
         </div>
         <span className="hidden h-7 w-px bg-slate-200 sm:block" />
         <div className="flex flex-wrap gap-1">
-          {statuses.map(([value, label]) => (
-            <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>{label}</FilterChip>
-          ))}
+          {statuses.map(([value, label]) => <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={status === value}>{label}</FilterChip>)}
         </div>
         <span className="mr-auto hidden text-xs font-semibold text-[var(--muted)] sm:block">{appointments.length} موعد</span>
       </div>
