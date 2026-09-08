@@ -126,7 +126,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
               <KeyRound size={18} /> 1. اربط Meta مباشرة
             </div>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              مفيش Embedded Signup ولا طرف وسيط. العيادة تملك Meta App والرقم، وTia تستخدم Cloud API مباشرة. البيانات السرية تتخزن مشفرة ومش هتظهر بعد الحفظ.
+              الربط مباشر مع Meta Cloud API من غير طرف وسيط. العيادة تملك Meta App والرقم، وTia تستخدم Cloud API مباشرة. البيانات السرية تتخزن مشفرة ومش هتظهر بعد الحفظ.
             </p>
           </div>
 
