@@ -52,7 +52,7 @@ def test_embedded_signup_is_removed_from_product_routes_and_ui() -> None:
     assert "/setup/direct" in route
 
 
-def test_direct_onboarding_has_meta_deep_links_and_scoped_webhook() -> None:
+def test_direct_onboarding_has_clinic_scoped_meta_links_and_scoped_webhook() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
     automation = (
@@ -60,17 +60,34 @@ def test_direct_onboarding_has_meta_deep_links_and_scoped_webhook() -> None:
     ).read_text(encoding="utf-8")
     route = (backend / "app/api/routes/whatsapp_setup.py").read_text(encoding="utf-8")
     service = (backend / "app/services/meta_whatsapp_onboarding.py").read_text(encoding="utf-8")
+
     assert "https://developers.facebook.com/apps/" in automation
     assert "https://business.facebook.com/settings/system-users" in automation
     assert "use_cases/customize/api-testing-v2/" in automation
-    assert "business_id=2086664822245784" in automation
     assert "selected_tab=api-testing-v2" in automation
     assert "use_cases/customize/wa-configurations-v2/" in automation
     assert "selected_tab=wa-configurations-v2" in automation
+    assert "1370437594582187" not in automation
+    assert "2086664822245784" not in automation
+    assert "cleanAppId" in automation
     assert '"/webhook/{connection_id}"' in route
     assert "x-forwarded-proto" in route
     assert "app_secret_ciphertext" in service
     assert '"webhook_verify_token"' in service
+
+
+def test_direct_onboarding_warns_about_business_app_migration_before_connecting() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    repo = backend.parent
+    automation = (
+        repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "WhatsApp Business App" in automation
+    assert "WhatsApp Business Platform (Cloud API)" in automation
+    assert "Inbox داخل Tia" in automation
+    assert "مكالمات الموبايل العادية على الشريحة لا تتأثر" in automation
+    assert "Click-to-WhatsApp" in automation
 
 
 def test_direct_onboarding_keeps_entered_credentials_after_failed_action() -> None:
