@@ -69,6 +69,7 @@ ClearableFlowEntity = Literal[
     "not_before_time",
     "not_after_time",
     "appointment_reference",
+    "appointment_id",
 ]
 
 
@@ -124,6 +125,14 @@ class SemanticEntityHints(BaseModel):
     doctor_candidate_ids: list[str] = Field(
         default_factory=list,
         description="All plausible doctor UUIDs when no single doctor is selected.",
+    )
+    appointment_id: str | None = Field(
+        default=None,
+        description=(
+            "Canonical ID of the EXISTING appointment being acted on, selected only from the "
+            "supplied current-patient appointment catalog. In a reschedule flow this identifies "
+            "the old appointment; replacement date/time/service belong in the other fields."
+        ),
     )
     requested_date: str | None = Field(
         default=None,

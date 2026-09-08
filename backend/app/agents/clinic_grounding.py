@@ -249,6 +249,7 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
     service_ids = _catalog_ids(catalog, "services")
     branch_ids = _catalog_ids(catalog, "branches")
     doctor_ids = _catalog_ids(catalog, "doctors")
+    appointment_ids = _catalog_ids(catalog, "appointments")
 
     raw_service_id = getattr(entity_hints, "service_id", None)
     raw_branch_id = getattr(entity_hints, "branch_id", None)
@@ -264,6 +265,9 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
     doctor_id = _valid_id(getattr(entity_hints, "doctor_id", None), doctor_ids)
     doctor_candidate_ids = _valid_ids(
         getattr(entity_hints, "doctor_candidate_ids", []), doctor_ids
+    )
+    appointment_id = _valid_id(
+        getattr(entity_hints, "appointment_id", None), appointment_ids
     )
 
     doctor_row = _catalog_row_by_id(catalog, "doctors", doctor_id)
@@ -296,6 +300,7 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
             "branch_candidate_ids": branch_candidate_ids,
             "doctor_id": doctor_id,
             "doctor_candidate_ids": doctor_candidate_ids,
+            "appointment_id": appointment_id,
         }
     )
 
