@@ -188,25 +188,30 @@ def test_outside_24h_uses_configured_approved_template_without_llm() -> None:
     assert 'reason="approved_whatsapp_followup_template_required"' in service
 
 
-def test_automations_admin_can_configure_followup_template_pool_without_secrets() -> None:
+def test_followup_template_is_platform_managed_instead_of_admin_typed() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(
         encoding="utf-8"
     )
     action = (_root() / "frontend/src/app/(dashboard)/automations/actions.ts").read_text(
         encoding="utf-8"
     )
+    onboarding = (
+        _root() / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+    transport = (_root() / "backend/app/services/meta_whatsapp_transport.py").read_text(
+        encoding="utf-8"
+    )
     channels_page = (_root() / "frontend/src/app/(dashboard)/channels/page.tsx").read_text(
         encoding="utf-8"
     )
-    assert 'name="template_names"' in page
-    assert 'name="template_language"' in page
-    assert 'ctx.workspace.role === "admin"' in page
-    assert "saveAiFollowupTemplates" in page
-    assert "config.ai_followup_templates" in action
-    assert "config.ai_followup_template" in action
-    assert 'method: "PATCH"' in action
+
+    assert 'name="template_names"' not in page
+    assert 'name="template_language"' not in page
+    assert "saveAiFollowupTemplates" not in action
+    assert "provision_standard_whatsapp_templates" in transport
+    assert '"ai_followup_templates"' in transport
+    assert "قوالب الرسائل" in onboarding
     assert 'redirect("/automations")' in channels_page
-    assert "API" not in page or "لا تضف مفاتيح API" in page
 
 
 def test_automation_setup_documents_approved_template_fallback() -> None:
