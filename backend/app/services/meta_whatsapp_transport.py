@@ -15,9 +15,13 @@ from app.core.meta_whatsapp_templates import (
     STANDARD_WHATSAPP_TEMPLATES,
     template_create_payload,
 )
+from app.models.automation_job import AutomationJob
+from app.models.automation_rule import AutomationRule
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.channel_provider_credential import ChannelProviderCredential
+from app.models.message import Message
+from app.models.message_dispatch import MessageDispatch
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.services.channels import (
     accept_normalized_inbound,
@@ -773,6 +777,87 @@ def _process_pending_inbound(
     return processed, failed
 
 
+def _automation_delivery_expired(
+    *,
+    scheduled_for: datetime,
+    max_lateness_minutes: int,
+    now: datetime,
+) -> bool:
+    scheduled = scheduled_for if scheduled_for.tzinfo is not None else scheduled_for.replace(tzinfo=UTC)
+    current = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    latest_allowed = scheduled.astimezone(UTC) + timedelta(minutes=max(0, max_lateness_minutes))
+    return latest_allowed < current.astimezone(UTC)
+
+
+def _cancel_expired_automation_dispatches(
+    db: Session,
+    *,
+    connection: ChannelConnection,
+    now: datetime | None = None,
+) -> int:
+    """Cancel automation messages that became too old before provider delivery.
+
+    This runs before provider claiming, so a template that stays pending at Meta
+    can never become sendable hours later after its business-validity window has
+    already passed. Only queued appointment-rule deliveries are touched; anything
+    already processing/sent is deliberately left alone.
+    """
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    rows = list(
+        db.execute(
+            select(AutomationJob, AutomationRule, MessageDispatch, Message)
+            .join(
+                AutomationRule,
+                AutomationRule.id == AutomationJob.rule_id,
+            )
+            .join(
+                MessageDispatch,
+                MessageDispatch.id == AutomationJob.dispatch_id,
+            )
+            .join(Message, Message.id == AutomationJob.message_id)
+            .where(
+                AutomationJob.workspace_id == connection.workspace_id,
+                AutomationJob.job_kind == "appointment_rule",
+                AutomationJob.status == "dispatched",
+                MessageDispatch.workspace_id == connection.workspace_id,
+                MessageDispatch.channel_connection_id == connection.id,
+                MessageDispatch.status == "queued",
+            )
+            .with_for_update()
+        )
+    )
+
+    cancelled = 0
+    for job, rule, dispatch, message in rows:
+        if not _automation_delivery_expired(
+            scheduled_for=job.scheduled_for,
+            max_lateness_minutes=rule.max_lateness_minutes,
+            now=current,
+        ):
+            continue
+
+        reason = "Automation delivery expired before provider send."
+        dispatch.status = "cancelled"
+        dispatch.next_attempt_at = None
+        dispatch.locked_at = None
+        dispatch.last_error = reason
+        message.delivery_status = "cancelled"
+        job.status = "cancelled"
+        job.completed_at = current
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.result_json = {
+            **(job.result_json or {}),
+            "reason": "expired_before_provider_send",
+            "expired_at": current.isoformat(),
+        }
+        cancelled += 1
+
+    if cancelled:
+        db.commit()
+    return cancelled
+
+
 def run_meta_transport_tick(
     db: Session,
     *,
@@ -815,6 +900,11 @@ def run_meta_transport_tick(
         )
         inbound_processed += processed
         inbound_failed += failed
+
+        # Expiration is independent of provider readiness. A pending template or
+        # temporary Meta issue must not cause an old automation to send later.
+        _cancel_expired_automation_dispatches(db, connection=connection)
+
         if not ready or connection.status != "active":
             continue
 
