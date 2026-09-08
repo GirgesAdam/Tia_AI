@@ -43,6 +43,8 @@ const APPS_URL = "https://developers.facebook.com/apps/";
 const SYSTEM_USERS_URL = "https://business.facebook.com/settings/system-users";
 const CURRENT_API_TESTING_URL =
   "https://developers.facebook.com/apps/1370437594582187/use_cases/customize/api-testing-v2/?product_route=whatsapp-business&business_id=2086664822245784&use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=api-testing-v2";
+const CURRENT_WHATSAPP_CONFIGURATION_URL =
+  "https://developers.facebook.com/apps/1370437594582187/use_cases/customize/wa-configurations-v2/?use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=wa-configurations-v2&product_route=whatsapp-business&business_id=2086664822245784";
 const initialSetupActionState: WhatsAppSetupActionState = { ok: false, message: null };
 
 function DirectLink({ href, children }: { href: string; children: React.ReactNode }) {
@@ -99,9 +101,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
   const appSecretUrl = cleanAppId
     ? `${APPS_URL}${cleanAppId}/settings/basic/`
     : APPS_URL;
-  const webhookConfigUrl = cleanAppId
-    ? `${APPS_URL}${cleanAppId}/use_cases/customize/configuration/?product_route=whatsapp-business&use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=configuration`
-    : APPS_URL;
+  const webhookConfigUrl = CURRENT_WHATSAPP_CONFIGURATION_URL;
 
   const needsCredentials =
     !state.connected || state.admin_action === "connect_meta_direct" || !state.provider_credentials_ready;
