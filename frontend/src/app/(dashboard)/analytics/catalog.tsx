@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Download, Filter, Info, LoaderCircle, Play, Search, SlidersHorizontal } from "lucide-react";
+import { BarChart3, BookmarkPlus, Download, Filter, Info, LoaderCircle, Play, Search, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format";
@@ -15,9 +15,15 @@ import type {
   AnalyticsCatalogRun,
   AnalyticsSavedView,
 } from "@/lib/types";
-import { runAnalyticsCatalogAction, type AnalyticsCatalogState } from "./actions";
+import {
+  runAnalyticsCatalogAction,
+  saveAnalyticsViewAction,
+  type AnalyticsCatalogState,
+  type AnalyticsSavedViewState,
+} from "./actions";
 
 const initialState: AnalyticsCatalogState = { result: null, error: null };
+const initialSavedViewState: AnalyticsSavedViewState = { view: null, error: null };
 
 type AnalyticsCategoryGroup = "performance" | "customers" | "team";
 type VisualAnalyticsChart = Exclude<AnalyticsCatalogChart, "table">;
@@ -44,6 +50,8 @@ const chartLabels: Partial<Record<AnalyticsCatalogChart, string>> = {
   heatmap: "خريطة حرارية",
   funnel: "مسار",
 };
+
+const quickAccessKeys = ["revenue_overview", "appointment_overview", "revenue_by_doctor", "new_patients_trend"] as const;
 
 const REPORT_GUIDES: Record<string, { benefit: string; calculation: string }> = {
   revenue_overview: {
@@ -265,9 +273,14 @@ function FunnelVisualization({ result }: { result: AnalyticsCatalogRun }) {
       {result.chart_data.labels.map((label, index) => {
         const value = values[index] || 0;
         const ratio = first > 0 ? Math.max(0, Math.min(100, value / first * 100)) : 0;
+        const previous = index > 0 ? values[index - 1] || 0 : first;
+        const fromPrevious = index > 0 && previous > 0 ? Math.max(0, Math.min(100, value / previous * 100)) : 100;
         return (
           <div key={`${label}-${index}`} className="rounded-2xl border border-[var(--border)] bg-slate-50 p-4">
-            <div className="flex items-end justify-between gap-3"><div><div className="text-xs text-[var(--muted)]">{label}</div><div className="mt-1 text-xl font-black">{seriesValue(series, series.values[index] ?? null)}</div></div><div className="text-xs font-bold text-slate-600">{ratio.toLocaleString("ar-EG", { maximumFractionDigits: 1 })}% من البداية</div></div>
+            <div className="flex items-end justify-between gap-3">
+              <div><div className="text-xs text-[var(--muted)]">{label}</div><div className="mt-1 text-xl font-black">{seriesValue(series, series.values[index] ?? null)}</div></div>
+              {index > 0 && <div className="text-left text-[11px] text-[var(--muted)]"><div><span className="font-black text-slate-800">{fromPrevious.toLocaleString("ar-EG", { maximumFractionDigits: 1 })}%</span> من المرحلة السابقة</div><div>{ratio.toLocaleString("ar-EG", { maximumFractionDigits: 1 })}% من البداية</div></div>}
+            </div>
             <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-teal-700" style={{ width: `${ratio}%` }} /></div>
           </div>
         );
@@ -292,6 +305,26 @@ async function downloadCsv(result: AnalyticsCatalogRun) {
   URL.revokeObjectURL(url);
 }
 
+function SaveViewControl({ result, chart }: { result: AnalyticsCatalogRun; chart: VisualAnalyticsChart }) {
+  const [state, action, pending] = useActionState<AnalyticsSavedViewState, FormData>(saveAnalyticsViewAction, initialSavedViewState);
+  const suggestedName = `${result.title} — ${result.period_label}`.slice(0, 160);
+  return (
+    <details className="relative">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-bold"><BookmarkPlus size={16} /> حفظ العرض</summary>
+      <form action={action} className="absolute left-0 z-20 mt-2 w-72 rounded-2xl border border-[var(--border)] bg-white p-3 shadow-xl">
+        <input type="hidden" name="request" value={JSON.stringify(result.request)} />
+        <input type="hidden" name="chart" value={chart} />
+        <input type="hidden" name="display_mode" value="visual" />
+        <label className="text-xs font-black">اسم العرض<input name="name" defaultValue={suggestedName} maxLength={160} className="form-control mt-1" /></label>
+        <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">هنحفظ التقرير والفلاتر وطريقة الرسم فقط؛ الأرقام تتحدث كل مرة تفتحه.</p>
+        <Button type="submit" className="mt-3 w-full" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <BookmarkPlus size={15} />} حفظ</Button>
+        {state.view && <div className="mt-2 text-[11px] font-bold text-emerald-700">اتحفظ باسم «{state.view.name}».</div>}
+        {state.error && <div className="mt-2 text-[11px] font-bold text-red-700">{state.error}</div>}
+      </form>
+    </details>
+  );
+}
+
 function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
   const visualCharts = result.supported_charts.filter((chart): chart is VisualAnalyticsChart => chart !== "table");
   const initial: VisualAnalyticsChart = result.chart !== "table" && visualCharts.includes(result.chart) ? result.chart : visualCharts[0] || "kpi";
@@ -302,13 +335,16 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
   const activeSeries = result.chart_data.series.find((series) => series.key === seriesKey) || result.chart_data.series[0];
   const guide = REPORT_GUIDES[result.analysis_key];
 
-  if (!result.rows.length) return <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><div className="font-black">مفيش بيانات مطابقة للفترة دي</div><p className="mt-2 text-sm text-[var(--muted)]">غيّر الفترة وشغّل التقرير مرة أخرى.</p></div>;
+  if (!result.rows.length) return <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><div className="font-black">مفيش بيانات مطابقة للفترة دي</div><p className="mt-2 text-sm text-[var(--muted)]">غيّر الفترة وشغّل التقرير مرة أخرى.</p>{result.definitions.length > 0 && <ul className="mx-auto mt-4 max-w-2xl list-disc space-y-1 pr-5 text-right text-xs leading-6 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>;
 
   return (
     <div className="mt-6 space-y-4 border-t border-[var(--border)] pt-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h3 className="text-lg font-black">{result.title}</h3><div className="mt-1 text-xs text-[var(--muted)]">{result.period_label}</div></div>
-        <Button type="button" variant="outline" disabled={exportPending} onClick={async () => { setExportPending(true); setExportError(null); try { await downloadCsv(result); } catch (error) { setExportError(error instanceof Error ? error.message : "تعذر التصدير."); } finally { setExportPending(false); } }}>{exportPending ? <LoaderCircle size={16} className="animate-spin" /> : <Download size={16} />} تصدير CSV</Button>
+        <div className="flex flex-wrap gap-2">
+          <SaveViewControl result={result} chart={chartType} />
+          <Button type="button" variant="outline" disabled={exportPending} onClick={async () => { setExportPending(true); setExportError(null); try { await downloadCsv(result); } catch (error) { setExportError(error instanceof Error ? error.message : "تعذر التصدير."); } finally { setExportPending(false); } }}>{exportPending ? <LoaderCircle size={16} className="animate-spin" /> : <Download size={16} />} تصدير CSV</Button>
+        </div>
       </div>
       {exportError && <div className="rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">{exportError}</div>}
 
@@ -330,7 +366,7 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-2xl border border-teal-100 bg-teal-50/50 p-4"><div className="flex items-center gap-2 text-sm font-black text-teal-950"><Info size={16} /> تستفيد منه إزاي؟</div><p className="mt-2 text-xs leading-6 text-teal-950/80">{guide?.benefit || "استخدم اتجاه الرسم والمقارنات لتحديد التغيرات المهمة واتخاذ قرار تشغيلي بناءً على البيانات المسجلة."}</p></div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">بيتحسب إزاي؟</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || result.definitions.join(" ") || "الحساب يتم من البيانات المسجلة في Tia وبنفس التعريف كل مرة."}</p></div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">بيتحسب إزاي؟</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || "الحساب يتم من البيانات المسجلة في Tia وبنفس التعريف كل مرة."}</p>{result.definitions.length > 0 && <ul className="mt-2 list-disc space-y-1 pr-5 text-[11px] leading-5 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>
       </div>
     </div>
   );
@@ -356,7 +392,8 @@ export function AnalyticsCatalogPanel({ catalog, savedViews }: { catalog: Analyt
   const selected = visibleAnalyses.find((item) => item.key === selectedKey) || visibleAnalyses[0];
   const presetRequest = preset && selected && preset.analysis_key === selected.key ? preset.request : null;
   const result = selected && !dirty && !pending && state.result?.analysis_key === selected.key ? state.result : null;
-  const visibleSavedViews = savedViews.filter((view) => analyses.some((item) => item.key === view.analysis_key));
+  const quickAccess = quickAccessKeys.map((key) => analyses.find((item) => item.key === key)).filter((item): item is AnalyticsCatalogDefinition => Boolean(item));
+  const hasEntityFilters = selected ? hasFilter(selected, "doctor") : false;
 
   useEffect(() => { if (result) resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [result]);
 
@@ -372,7 +409,13 @@ export function AnalyticsCatalogPanel({ catalog, savedViews }: { catalog: Analyt
         <label className="relative w-full max-w-sm"><Search size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث عن تقرير" className="form-control pr-9" /></label>
       </div>
 
-      {visibleSavedViews.length > 0 && <div className="mt-4 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">محفوظة:</span>{visibleSavedViews.slice(0, 8).map((view) => <button key={view.id} type="button" onClick={() => { const definition = analyses.find((item) => item.key === view.analysis_key); if (!definition) return; setSelectedKey(definition.key); setPreset(view); setDirty(true); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold hover:border-teal-300">{view.name}</button>)}</div>}
+      {quickAccess.length > 0 && <div className="mt-4 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">وصول سريع:</span>{quickAccess.map((item) => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setPreset(null); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(item.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold hover:border-teal-300">{item.title}</button>)}</div>}
+
+      {savedViews.length > 0 && <div className="mt-3 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">محفوظة:</span>{savedViews.map((view) => {
+        const definition = analyses.find((item) => item.key === view.analysis_key);
+        if (!definition) return null;
+        return <button key={view.id} type="button" onClick={() => { setSelectedKey(definition.key); setPreset(view); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(definition.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold hover:border-teal-300">{view.name}</button>;
+      })}</div>}
 
       {!normalizedQuery && <div className="mt-5 grid gap-2 sm:grid-cols-3">{groups.map((group) => <button key={group.key} type="button" onClick={() => { setGroupKey(group.key); setQuery(""); setPreset(null); setDirty(true); const first = analyses.find((item) => group.categories.includes(item.category)); if (first) setSelectedKey(first.key); }} className={`rounded-2xl border p-3 text-right ${groupKey === group.key ? "border-teal-600 bg-teal-50" : "border-[var(--border)]"}`}><div className="text-sm font-black">{group.label}</div><div className="mt-1 text-[11px] text-[var(--muted)]">{group.description}</div></button>)}</div>}
 
@@ -386,7 +429,7 @@ export function AnalyticsCatalogPanel({ catalog, savedViews }: { catalog: Analyt
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             {hasFilter(selected, "period") && <label className="text-xs font-bold">الفترة<select name="period" defaultValue={periodDefault} className="form-control mt-1"><option value="7">آخر 7 أيام</option><option value="30">آخر 30 يوم</option><option value="90">آخر 90 يوم</option><option value="180">آخر 6 شهور</option><option value="365">آخر سنة</option><option value="730">آخر سنتين</option><option value="all">كل التاريخ</option></select></label>}
-            {hasFilter(selected, "doctor") && <label className="text-xs font-bold">الدكتور (اختياري)<select name="doctor_id" defaultValue={presetRequest?.doctor_ids[0] || ""} className="form-control mt-1"><option value="">كل الدكاترة</option>{catalog.doctors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+            {hasEntityFilters && <label className="text-xs font-bold">الدكتور (اختياري)<select name="doctor_id" defaultValue={presetRequest?.doctor_ids[0] || ""} className="form-control mt-1"><option value="">كل الدكاترة</option>{catalog.doctors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           </div>
 
           {(hasFilter(selected, "granularity") || hasFilter(selected, "limit") || hasFilter(selected, "comparison")) && <details className="mt-3 rounded-xl border border-[var(--border)] bg-white p-3"><summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-black"><SlidersHorizontal size={15} /> خيارات إضافية</summary><div className="mt-3 grid gap-3 md:grid-cols-2">{hasFilter(selected, "granularity") && <label className="text-xs font-bold">تجميع الفترة<select name="granularity" defaultValue={presetRequest?.granularity || selected.default_granularity || "month"} className="form-control mt-1"><option value="day">يومي</option><option value="week">أسبوعي</option><option value="month">شهري</option></select></label>}{hasFilter(selected, "limit") && <label className="text-xs font-bold">عدد العناصر<select name="limit" defaultValue={String(presetRequest?.limit ?? selected.default_limit)} className="form-control mt-1"><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="25">25</option></select></label>}</div>{hasFilter(selected, "comparison") && <label className="mt-3 flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="comparison" defaultChecked={presetRequest?.comparison || false} /> مقارنة بالفترة السابقة</label>}</details>}
