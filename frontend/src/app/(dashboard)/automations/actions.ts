@@ -4,6 +4,68 @@ import { revalidatePath } from "next/cache";
 import { tiaRequest } from "@/lib/tia/api";
 import type { ChannelConnection } from "@/lib/types";
 
+export type WhatsAppSetupActionState = {
+  ok: boolean;
+  message: string | null;
+};
+
+const initialSetupActionState: WhatsAppSetupActionState = { ok: false, message: null };
+export { initialSetupActionState };
+
+function actionErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error:\s*/, "") || "تعذر إكمال الخطوة. حاول مرة أخرى.";
+}
+
+export async function connectWhatsappDirectAction(
+  _previous: WhatsAppSetupActionState,
+  formData: FormData,
+): Promise<WhatsAppSetupActionState> {
+  const payload = {
+    app_id: String(formData.get("app_id") || "").trim(),
+    waba_id: String(formData.get("waba_id") || "").trim(),
+    phone_number_id: String(formData.get("phone_number_id") || "").trim(),
+    access_token: String(formData.get("access_token") || "").trim(),
+    app_secret: String(formData.get("app_secret") || "").trim(),
+  };
+
+  if (!payload.app_id || !payload.waba_id || !payload.phone_number_id || !payload.access_token || !payload.app_secret) {
+    return { ok: false, message: "كمّل الخانات الخمسة قبل التحقق والربط." };
+  }
+
+  try {
+    await tiaRequest("/channels/whatsapp/setup/direct", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    revalidatePath("/automations");
+    revalidatePath("/setup");
+    return {
+      ok: true,
+      message: "بيانات Meta صحيحة واتخزنت بأمان. كمّل خطوة الـWebhook الظاهرة في الصفحة.",
+    };
+  } catch (error) {
+    return { ok: false, message: actionErrorMessage(error) };
+  }
+}
+
+export async function finishWhatsappDirectSetupAction(
+  _previous: WhatsAppSetupActionState,
+  _formData: FormData,
+): Promise<WhatsAppSetupActionState> {
+  try {
+    await tiaRequest("/channels/whatsapp/setup/direct/finish", { method: "POST" });
+    revalidatePath("/automations");
+    revalidatePath("/setup");
+    return {
+      ok: true,
+      message: "Tia تحققت من الـWebhook وبدأت فحص الرقم والقوالب ومسار الإرسال.",
+    };
+  } catch (error) {
+    return { ok: false, message: actionErrorMessage(error) };
+  }
+}
+
 export async function toggleAutomation(formData: FormData) {
   const id = String(formData.get("rule_id"));
   const enabled = String(formData.get("enabled")) === "true";
@@ -67,7 +129,6 @@ export async function saveAiFollowupTemplates(formData: FormData) {
       name,
       language_code: languageCode,
     }));
-    // Keep the legacy single-template key so older workers/config readers remain compatible.
     config.ai_followup_template = {
       name: names[0],
       language_code: languageCode,
