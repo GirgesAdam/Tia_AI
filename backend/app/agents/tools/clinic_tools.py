@@ -1316,13 +1316,13 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     if appointment.appointment_id == appointment_id
                 ]
 
-            if service_id:
+            if service_id and not appointment_id:
                 appointments = [
                     appointment
                     for appointment in appointments
                     if appointment.service_id == service_id
                 ]
-            elif service_search.strip():
+            elif service_search.strip() and not appointment_id:
                 # Legacy rollback path only. Grounded unified turns pass service_id.
                 matching_service_ids = {
                     str(service.id) for service in _service_matches(ctx, service_search)
@@ -1370,10 +1370,11 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 return _json(payload)
 
             current = appointments[0]
+            target_service_id = service_id or current.service_id
             availability = _availability_payload(
                 ctx,
                 branch_id=current.branch_id,
-                service_id=current.service_id,
+                service_id=target_service_id,
                 booking_date=requested_date,
                 doctor_id=doctor_id or current.doctor_id,
                 requested_start=requested_start,
@@ -1794,6 +1795,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         start_at: str,
         branch_id: str = "",
         doctor_id: str = "",
+        service_id: str = "",
         reason: str = "",
     ) -> str:
         """Reschedule the customer's pending/confirmed appointment to an exact slot."""
@@ -1802,6 +1804,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
             "start_at": start_at,
             "branch_id": branch_id,
             "doctor_id": doctor_id,
+            "service_id": service_id,
             "reason": reason,
         }
         try:
@@ -1821,6 +1824,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     operation_id=str(ctx.run_id),
                     branch_id=branch_id or None,
                     doctor_id=doctor_id or None,
+                    service_id=service_id or None,
                     reason=reason,
                 )
             )
@@ -1841,6 +1845,26 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 appointment_id=_native_action_appointment_id(
                     result.appointment.appointment_id
                 ),
+            )
+            return _json(payload)
+        except ClinicActionRequiresHuman as exc:
+            ctx.db.rollback()
+            payload = {
+                "ok": False,
+                "requires_human": True,
+                "handoff_category": "payment",
+                "handoff_priority": "normal",
+                "error": str(exc),
+            }
+            _record_action(
+                ctx,
+                tool_name="reschedule_appointment",
+                action_type="appointment_reschedule",
+                status="blocked",
+                input_payload=inputs,
+                output_payload=payload,
+                appointment_id=_native_action_appointment_id(exc.appointment_id or appointment_id),
+                error_message=str(exc),
             )
             return _json(payload)
         except (ValueError, BookingRuleError, IntegrityError) as exc:

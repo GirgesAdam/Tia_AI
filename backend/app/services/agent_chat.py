@@ -976,6 +976,14 @@ def _prefetch_read_tools(
     doctor_id = text_value("doctor_id")
     appointment_id = text_value("appointment_id")
     if not appointment_id and flow is not None and getattr(flow, "flow_type", None) == "appointment_reschedule":
+        current_appointment = state.get("current_appointment")
+        if isinstance(current_appointment, dict) and current_appointment.get("appointment_id"):
+            appointment_id = str(current_appointment["appointment_id"])
+        elif isinstance(flow.option_snapshot, dict):
+            snapshot_current = flow.option_snapshot.get("current_appointment")
+            if isinstance(snapshot_current, dict) and snapshot_current.get("appointment_id"):
+                appointment_id = str(snapshot_current["appointment_id"])
+    if not appointment_id and flow is not None and getattr(flow, "flow_type", None) == "appointment_reschedule":
         appointment_reference = text_value("appointment_reference")
         if appointment_reference:
             try:
@@ -2034,6 +2042,29 @@ def _structured_flow_write(
         tool_name=tool_name,
         arguments=arguments,
     )
+    if result and result.get("requires_human") is True:
+        handoff_reason = str(result.get("error") or "Changing this booking needs staff review.")
+        handoff_result = _invoke_tool(
+            tool_context=tool_context,
+            tool_name="escalate_to_human",
+            arguments={
+                "reason": handoff_reason,
+                "category": str(result.get("handoff_category") or "payment"),
+                "priority": str(result.get("handoff_priority") or "normal"),
+            },
+        )
+        if handoff_result and handoff_result.get("ok") is True:
+            interrupt_flow(
+                db,
+                flow,
+                run_id=run_id,
+                reason="reschedule_service_change_requires_human",
+            )
+            return (
+                "تغيير الخدمة في الحجز ده محتاج مراجعة من فريق العيادة بسبب حالة الدفع أو الباكدج، فحوّلت المحادثة للفريق عشان يكملوا معاك.",
+                "flow-interpreter:reschedule-service-change-handoff",
+            )
+        return None
     if not result or result.get("ok") is not True:
         return None
 
