@@ -1,130 +1,167 @@
-import { CalendarCheck2, ContactRound, Percent, WalletCards } from "lucide-react";
+import { CalendarCheck2, ContactRound, ReceiptText, TrendingUp } from "lucide-react";
 
 import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format";
 import { tiaRequest } from "@/lib/tia/api";
+import type { AnalyticsCatalogRun, AnalyticsCatalogRunRequest } from "@/lib/types";
 
-type AnalyticsMoney = {
-  currency: string;
-  recorded_paid_minor: number;
-  outstanding_balance_minor: number;
+type Profitability = {
+  start_date: string;
+  end_date: string;
+  currencies: Array<{
+    currency: string;
+    gross_payments_minor: number;
+    refunds_minor: number;
+    net_revenue_minor: number;
+    expenses_minor: number;
+    profit_minor: number;
+  }>;
 };
 
-type AnalyticsBreakdown = {
-  id: string;
-  name: string;
-  appointments: number;
-  completed: number;
-  no_show: number;
-};
-
-type AnalyticsDaily = {
-  date: string;
-  appointments: number;
-  completed: number;
-  no_show: number;
-  new_patients: number;
-};
-
-type AnalyticsOverview = {
-  total_appointments: number;
-  completed_appointments: number;
-  no_show_appointments: number;
-  cancelled_appointments: number;
-  attendance_rate_percent: number;
-  new_patients: number;
-  conversations_started: number;
-  money: AnalyticsMoney[];
-  top_services: AnalyticsBreakdown[];
-  daily: AnalyticsDaily[];
-};
-
-function percent(value: number) {
-  return `${Math.round(value * 10) / 10}%`;
+function requestFor(analysisKey: string, startDate: string, endDate: string, granularity: "day" | "month" | null = null): AnalyticsCatalogRunRequest {
+  return {
+    analysis_key: analysisKey,
+    lookback_days: null,
+    all_history: false,
+    start_date: startDate,
+    end_date: endDate,
+    service_ids: [],
+    branch_ids: [],
+    doctor_ids: [],
+    comparison: false,
+    granularity,
+    limit: null,
+    inactivity_days: null,
+    min_visits: null,
+    max_visits: null,
+    has_future_appointment: null,
+    marketing_consent: null,
+  };
 }
 
-function shortDate(value: string) {
-  return new Intl.DateTimeFormat("ar-EG", { day: "numeric", month: "short" }).format(new Date(`${value}T12:00:00`));
+function metricNumber(result: AnalyticsCatalogRun, key: string) {
+  const metric = result.rows[0]?.metrics.find((item) => item.key === key);
+  return typeof metric?.value === "number" ? metric.value : 0;
 }
 
-export async function AnalyticsOverviewPanel() {
-  const overview = await tiaRequest<AnalyticsOverview>("/analytics/overview?days=30");
-  const primaryMoney = overview.money[0];
-  const recentDays = overview.daily.slice(-7);
+function RevenueLineChart({ result }: { result: AnalyticsCatalogRun }) {
+  const series = result.chart_data.series.find((item) => item.key === "net_paid_minor") || result.chart_data.series[0];
+  if (!series || !series.values.length) return <div className="py-16 text-center text-sm text-[var(--muted)]">لا توجد حركة دخل مسجلة في الفترة المختارة.</div>;
+
+  const values = series.values.map((value) => value ?? 0);
+  const width = 900;
+  const height = 260;
+  const padding = 30;
+  const min = Math.min(0, ...values);
+  const max = Math.max(1, ...values);
+  const span = Math.max(1, max - min);
+  const points = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : padding + index * ((width - padding * 2) / (values.length - 1));
+    const y = height - padding - ((value - min) / span) * (height - padding * 2);
+    return { x, y, value };
+  });
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const total = values.reduce((sum, value) => sum + value, 0);
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted)]">
+        <span>صافي الدخل = المدفوعات المسجلة ناقص المرتجعات.</span>
+        <span className="font-black text-slate-800">إجمالي الفترة: {formatMoney(total, series.currency || "EGP")}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-64 min-w-[650px] w-full" role="img" aria-label="تطور الدخل خلال الفترة">
+          <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="stroke-slate-200" />
+          <polyline points={polyline} fill="none" className="stroke-teal-700" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
+          {points.map((point, index) => (
+            <circle key={`${result.chart_data.labels[index]}-${index}`} cx={point.x} cy={point.y} r="4" className="fill-white stroke-teal-700" strokeWidth="3">
+              <title>{`${result.chart_data.labels[index] || ""}: ${formatMoney(point.value, series.currency || "EGP")}`}</title>
+            </circle>
+          ))}
+        </svg>
+      </div>
+      <div className="mt-1 flex justify-between gap-2 text-[10px] text-[var(--muted)]">
+        <span>{result.chart_data.labels[0] || "—"}</span>
+        <span>{result.chart_data.labels[result.chart_data.labels.length - 1] || "—"}</span>
+      </div>
+    </div>
+  );
+}
+
+export async function AnalyticsOverviewPanel({
+  startDate,
+  endDate,
+  periodLabel,
+  fullYear,
+}: {
+  startDate: string;
+  endDate: string;
+  periodLabel: string;
+  fullYear: boolean;
+}) {
+  const [appointments, newPatients, revenue, profitability] = await Promise.all([
+    tiaRequest<AnalyticsCatalogRun>("/analytics/catalog/run", {
+      method: "POST",
+      body: JSON.stringify(requestFor("appointment_overview", startDate, endDate)),
+    }),
+    tiaRequest<AnalyticsCatalogRun>("/analytics/catalog/run", {
+      method: "POST",
+      body: JSON.stringify(requestFor("new_patients_trend", startDate, endDate, fullYear ? "month" : "day")),
+    }),
+    tiaRequest<AnalyticsCatalogRun>("/analytics/catalog/run", {
+      method: "POST",
+      body: JSON.stringify(requestFor("revenue_trend", startDate, endDate, fullYear ? "month" : "day")),
+    }),
+    tiaRequest<Profitability>(`/finance/profitability?start_date=${startDate}&end_date=${endDate}`),
+  ]);
+
+  const finance = profitability.currencies.find((item) => item.currency === "EGP") || profitability.currencies[0];
+  const newPatientCount = newPatients.chart_data.series[0]?.values.reduce((sum, value) => sum + (value || 0), 0) || 0;
 
   return (
     <section className="mb-7">
       <div className="mb-3">
-        <h2 className="text-lg font-black text-slate-950">ملخص آخر 30 يوم</h2>
-        <p className="mt-1 text-xs text-[var(--muted)]">أهم مؤشرات الحجز والحضور والعملاء والتحصيل.</p>
+        <h2 className="text-lg font-black text-slate-950">ملخص {periodLabel}</h2>
+        <p className="mt-1 text-xs text-[var(--muted)]">الأرقام تخص الفترة التقويمية المختارة، وليست آخر 30 يوم.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="إجمالي المواعيد" value={overview.total_appointments} detail={`${overview.completed_appointments} موعد مكتمل`} icon={CalendarCheck2} />
-        <StatCard label="نسبة الحضور" value={percent(overview.attendance_rate_percent)} detail={`${overview.no_show_appointments} عدم حضور · ${overview.cancelled_appointments} إلغاء`} icon={Percent} />
-        <StatCard label="عملاء جدد" value={overview.new_patients} detail={`${overview.conversations_started} محادثة بدأت خلال الفترة`} icon={ContactRound} />
         <StatCard
-          label="المبالغ المحصلة"
-          value={primaryMoney ? formatMoney(primaryMoney.recorded_paid_minor, primaryMoney.currency) : "—"}
-          detail={primaryMoney ? `المتبقي ${formatMoney(primaryMoney.outstanding_balance_minor, primaryMoney.currency)}` : "لا توجد حركة مالية مسجلة"}
-          icon={WalletCards}
+          label="إجمالي المواعيد"
+          value={metricNumber(appointments, "appointments")}
+          detail={`${metricNumber(appointments, "completed_appointments").toLocaleString("ar-EG")} جلسة مكتملة`}
+          icon={CalendarCheck2}
+        />
+        <StatCard
+          label="المصروفات"
+          value={finance ? formatMoney(finance.expenses_minor, finance.currency) : "—"}
+          detail="المصروفات المسجلة بتاريخ وقوعها خلال الفترة"
+          icon={ReceiptText}
+        />
+        <StatCard
+          label="عملاء جدد"
+          value={newPatientCount.toLocaleString("ar-EG")}
+          detail="حسب تاريخ انضمام العميل المسجل"
+          icon={ContactRound}
+        />
+        <StatCard
+          label="الأرباح"
+          value={finance ? formatMoney(finance.profit_minor, finance.currency) : "—"}
+          detail={finance ? `صافي دخل ${formatMoney(finance.net_revenue_minor, finance.currency)} − مصروفات` : "لا توجد حركة مالية مسجلة"}
+          icon={TrendingUp}
         />
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>حركة آخر 7 أيام</CardTitle>
-            <p className="mt-1 text-xs text-[var(--muted)]">المواعيد والعملاء الجدد يومًا بيوم.</p>
-          </CardHeader>
-          <CardContent className="p-0 pt-0 sm:p-0 sm:pt-0">
-            <div className="table-shell border-0">
-              <table className="data-table min-w-[560px]">
-                <thead>
-                  <tr>
-                    <th>اليوم</th>
-                    <th>المواعيد</th>
-                    <th>مكتملة</th>
-                    <th>عدم حضور</th>
-                    <th>عملاء جدد</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentDays.map((day) => (
-                    <tr key={day.date}>
-                      <td className="font-bold">{shortDate(day.date)}</td>
-                      <td>{day.appointments}</td>
-                      <td>{day.completed}</td>
-                      <td>{day.no_show}</td>
-                      <td>{day.new_patients}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>أكثر الخدمات حجزًا</CardTitle>
-            <p className="mt-1 text-xs text-[var(--muted)]">أعلى الخدمات حسب عدد المواعيد خلال آخر 30 يوم.</p>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {overview.top_services.slice(0, 6).map((service, index) => (
-              <div key={service.id} className="flex items-center justify-between gap-4 rounded-xl bg-slate-50 px-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-bold text-slate-900">{index + 1}. {service.name}</div>
-                  <div className="mt-0.5 text-[11px] text-[var(--muted)]">{service.completed} مكتملة · {service.no_show} عدم حضور</div>
-                </div>
-                <div className="shrink-0 text-lg font-black text-slate-900">{service.appointments}</div>
-              </div>
-            ))}
-            {!overview.top_services.length && <div className="py-6 text-center text-sm text-[var(--muted)]">لا توجد بيانات كافية للفترة الحالية.</div>}
-          </CardContent>
-        </Card>
-      </div>
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>تطور الدخل</CardTitle>
+          <p className="mt-1 text-xs text-[var(--muted)]">يساعدك تعرف هل دخل العيادة بيتحسن أو بيتراجع داخل الفترة المختارة، وتحدد الأيام أو الشهور الأقوى والأضعف.</p>
+        </CardHeader>
+        <CardContent>
+          <RevenueLineChart result={revenue} />
+        </CardContent>
+      </Card>
     </section>
   );
 }
