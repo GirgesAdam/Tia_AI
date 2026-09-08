@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, Bot, CheckCircle2, UserRound } from "lucide-react";
 import { ConversationReadMarker } from "@/components/conversation-read-marker";
+import { LiveRouteRefresh } from "@/components/live-route-refresh";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -14,10 +15,10 @@ import type { InboxConversation, WorkspaceMember } from "@/lib/types";
 import {
   assignHandoff,
   claimHandoff,
-  replyToConversation,
   resolveHandoff,
   takeOverConversation,
 } from "../actions";
+import { InboxReplyForm } from "./reply-form";
 
 const categoryLabels: Record<string, string> = {
   customer_request: "طلب من العميل",
@@ -66,6 +67,7 @@ export default async function ConversationPage({
 
   return (
     <>
+      <LiveRouteRefresh />
       <ConversationReadMarker
         conversationId={conversation.id}
         unreadCount={conversation.unread_count}
@@ -142,16 +144,7 @@ export default async function ConversationPage({
                   </form>
                 </div>
               ) : handoff && assignedToMe ? (
-                <form action={replyToConversation} className="flex flex-col gap-3 sm:flex-row">
-                  <input type="hidden" name="conversation_id" value={conversation.id} />
-                  <Textarea
-                    name="content"
-                    placeholder="اكتب ردك للعميل..."
-                    className="min-h-20 flex-1"
-                    required
-                  />
-                  <Button className="self-end">إرسال الرد</Button>
-                </form>
+                <InboxReplyForm conversationId={conversation.id} />
               ) : handoff && unassigned ? (
                 <div className="flex flex-col gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
                   <span>هذه المحادثة تحتاج متابعة من أحد أعضاء الفريق.</span>
@@ -256,11 +249,11 @@ export default async function ConversationPage({
                       <Textarea name="resolution_note" placeholder="ملاحظة ختامية - اختياري" />
                       <label className="flex items-start gap-2 text-xs leading-5 text-[var(--muted)]">
                         <input type="checkbox" name="close_conversation" className="mt-1" />
-                        إغلاق المحادثة بعد إنهاء المتابعة
+                        إغلاق المحادثة وعدم إعادتها لـ Tia
                       </label>
                       <Button variant="secondary" className="w-full">
                         <CheckCircle2 size={16} />
-                        إنهاء المتابعة
+                        سلّم المحادثة لـ Tia
                       </Button>
                     </form>
                   )}
