@@ -123,5 +123,5 @@ def test_native_whatsapp_bridge_is_present_without_per_clinic_n8n_provider_nodes
     outbox_text = outbox.read_text(encoding="utf-8")
     assert "/api/v1/channels/whatsapp/transport/tick" in outbox_text
     assert "n8n-nodes-base.whatsApp" not in outbox_text
-    assert '@router.post("/webhook"' in route
+    assert '@router.post("/webhook/{connection_id}"' in route
     assert "record_provider_status(" in transport
