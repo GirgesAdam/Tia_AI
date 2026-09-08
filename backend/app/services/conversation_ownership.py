@@ -4,8 +4,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
+from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.conversation import Conversation
 from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
@@ -16,10 +17,65 @@ OWNER_HUMAN = "human"
 
 
 DISPATCH_SEND_LEASE = timedelta(minutes=10)
+_AGENT_OWNERSHIP_EPOCH_ATTR = "_tia_agent_ownership_epoch"
 
 
 class OwnershipTransitionBlockedError(RuntimeError):
     """Raised when ownership cannot safely change while a provider send is in flight."""
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _channel_turn_is_after_latest_handback(conversation: Conversation) -> bool:
+    """Block a delayed provider event that belongs to the human-owned period.
+
+    Channel processing marks its event as `processing` before entering the agent.
+    Comparing that event's exact inbound message with the latest persisted handoff
+    resolution means returning ownership to AI is silent until a newer customer
+    message arrives. Direct agent API turns have no channel event and are already
+    explicit new customer requests, so they are unaffected.
+    """
+    if not isinstance(conversation, Conversation):
+        return True
+    db = object_session(conversation)
+    if db is None:
+        return True
+
+    resolved_at = db.scalar(
+        select(HandoffRequest.resolved_at)
+        .where(
+            HandoffRequest.workspace_id == conversation.workspace_id,
+            HandoffRequest.conversation_id == conversation.id,
+            HandoffRequest.status == "resolved",
+            HandoffRequest.resolved_at.is_not(None),
+        )
+        .order_by(HandoffRequest.resolved_at.desc())
+        .limit(1)
+    )
+    if not isinstance(resolved_at, datetime):
+        return True
+
+    inbound_created_at = db.scalar(
+        select(Message.created_at)
+        .join(ChannelInboundEvent, ChannelInboundEvent.message_id == Message.id)
+        .where(
+            ChannelInboundEvent.workspace_id == conversation.workspace_id,
+            ChannelInboundEvent.status == "processing",
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.sender_type == "patient",
+            Message.direction == "inbound",
+        )
+        .order_by(ChannelInboundEvent.updated_at.desc())
+        .limit(1)
+    )
+    if not isinstance(inbound_created_at, datetime):
+        return True
+    return _as_utc(inbound_created_at) > _as_utc(resolved_at)
 
 
 def ai_dispatch_is_sendable(
@@ -42,6 +98,17 @@ def ai_dispatch_is_sendable(
             and active_handoff.status == "pending"
             and active_handoff.assigned_user_id is None
         )
+
+    # Conversational replies belong to the ownership epoch in which they were
+    # created. A queued reply from before a takeover/hand-back must never become
+    # sendable again. Templates and independent automations do not carry this
+    # in-reply-to marker and are intentionally unaffected.
+    if metadata.get("in_reply_to_message_id"):
+        created_at = getattr(message, "created_at", None)
+        ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
+        if isinstance(created_at, datetime) and isinstance(ownership_changed_at, datetime):
+            if _as_utc(created_at) <= _as_utc(ownership_changed_at):
+                return False
 
     return agent_can_reply(conversation) and active_handoff is None
 
@@ -157,13 +224,27 @@ def _now() -> datetime:
 
 
 def agent_can_reply(conversation: Conversation) -> bool:
-    """Return whether the AI currently owns an open conversation.
+    """Return whether this AI run still owns a valid customer-triggered turn.
 
-    `status=pending` remains a compatibility guard for conversations created
-    before first-class ownership existed. New runtime routing should use
-    `owner_type` as the source of truth.
+    The ownership epoch is captured when the turn first checks authority. If
+    ownership changes while that run is thinking, a final refreshed ownership
+    check sees a different persisted timestamp and suppresses the stale reply even
+    if staff has already handed the conversation back to AI.
     """
-    return conversation.owner_type == OWNER_AI and conversation.status == "open"
+    if conversation.owner_type != OWNER_AI or conversation.status != "open":
+        return False
+    if not _channel_turn_is_after_latest_handback(conversation):
+        return False
+
+    ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
+    run_epoch = getattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, None)
+    if run_epoch is None:
+        if isinstance(ownership_changed_at, datetime):
+            setattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, ownership_changed_at)
+        return True
+    if not isinstance(run_epoch, datetime) or not isinstance(ownership_changed_at, datetime):
+        return False
+    return _as_utc(run_epoch) == _as_utc(ownership_changed_at)
 
 
 def transfer_to_human(
@@ -200,6 +281,9 @@ def record_customer_inbound(
 ) -> None:
     conversation.unread_count = max(0, int(conversation.unread_count or 0)) + 1
     conversation.last_message_at = now or _now()
+    ownership_changed_at = getattr(conversation, "ownership_changed_at", None)
+    if isinstance(ownership_changed_at, datetime):
+        setattr(conversation, _AGENT_OWNERSHIP_EPOCH_ATTR, ownership_changed_at)
 
 
 def record_outbound_activity(
