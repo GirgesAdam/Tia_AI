@@ -40,6 +40,8 @@ from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.agents.turn_interpreter import interpret_customer_turn
 from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
 from app.core.config import settings
+from app.integrations.clinic.base import AppointmentReadRequest
+from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.branch import Branch
@@ -94,6 +96,55 @@ def _workspace_clock(workspace: Workspace) -> tuple[str, datetime]:
         timezone_name = "Africa/Cairo"
         tz = ZoneInfo(timezone_name)
     return timezone_name, datetime.now(tz)
+
+
+def _with_current_patient_appointments(
+    *,
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    clinic_catalog: dict[str, object],
+) -> dict[str, object]:
+    """Add verified upcoming appointment choices without polluting the workspace catalog cache.
+
+    This is used only while a reschedule workflow is already active. The existing semantic model
+    can then resolve a natural customer reference to a canonical appointment ID in the same call;
+    Python still validates that ID against this current-patient list before any tool receives it.
+    """
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    result = adapter.get_patient_appointments(
+        AppointmentReadRequest(
+            patient_id=str(patient.id),
+            include_past=False,
+            limit=10,
+        )
+    )
+    catalog = dict(clinic_catalog)
+    appointments: list[dict[str, object]] = []
+    for appointment in result.appointments:
+        if appointment.status not in {"pending", "confirmed"}:
+            continue
+        timezone_name = appointment.timezone or workspace.timezone or "Africa/Cairo"
+        try:
+            clinic_tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            clinic_tz = ZoneInfo("Africa/Cairo")
+        appointments.append(
+            {
+                "id": str(appointment.appointment_id),
+                "appointment_id": str(appointment.appointment_id),
+                "service_id": str(appointment.service_id),
+                "service_name": appointment.service_name,
+                "doctor_id": str(appointment.doctor_id),
+                "doctor_name": appointment.doctor_name,
+                "status": appointment.status,
+                "start_local": appointment.start_at.astimezone(clinic_tz).isoformat(),
+                "end_local": appointment.end_at.astimezone(clinic_tz).isoformat(),
+            }
+        )
+    catalog["appointments"] = appointments
+    return catalog
+
 
 def _uuid_from_metadata(value: object) -> UUID | None:
     if value is None:
@@ -2153,6 +2204,13 @@ def _run_after_inbound(
     grounded_mode = True
     catalog_started = perf_counter()
     clinic_catalog = build_clinic_catalog(db, workspace)
+    if flow is not None and flow.is_active and flow.flow_type == "appointment_reschedule":
+        clinic_catalog = _with_current_patient_appointments(
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            clinic_catalog=clinic_catalog,
+        )
     logger.info(
         "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
         run_id,
