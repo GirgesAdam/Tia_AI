@@ -64,6 +64,10 @@ export default async function ConversationPage({
   );
   const latestCustomerMessage = contextString(handoff?.context_json?.latest_customer_message);
   const patientName = `${conversation.patient.first_name} ${conversation.patient.last_name || ""}`.trim();
+  const visibleMessages = conversation.messages.filter(
+    (message) =>
+      message.delivery_status !== "cancelled" && message.metadata_json.test_artifact !== true,
+  );
 
   return (
     <>
@@ -98,7 +102,7 @@ export default async function ConversationPage({
 
           <CardContent className="flex min-h-[590px] flex-col p-0">
             <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
-              {conversation.messages.map((message) => {
+              {visibleMessages.map((message) => {
                 const incoming = message.sender_type === "patient";
                 const isAi = message.sender_type === "ai";
                 return (
@@ -125,7 +129,7 @@ export default async function ConversationPage({
                   </div>
                 );
               })}
-              {!conversation.messages.length && (
+              {!visibleMessages.length && (
                 <div className="py-16 text-center text-sm text-[var(--muted)]">لا توجد رسائل حتى الآن.</div>
               )}
             </div>
