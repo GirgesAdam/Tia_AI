@@ -89,7 +89,10 @@ def test_timing_neutral_reminder_keeps_three_parameter_contract() -> None:
     assert params == ["سارة", "ليزر", "15:00"]
 
 
-def test_legacy_active_template_is_not_auto_migrated_before_new_meta_approval() -> None:
+def test_legacy_six_hour_template_is_migrated_to_canonical_after_auto_provisioning() -> None:
     source = (Path(__file__).resolve().parents[1] / "app/services/automations.py").read_text(encoding="utf-8")
     legacy_block = source.split("LEGACY_DEFAULT_TEMPLATE_NAMES", 1)[1].split("@dataclass", 1)[0]
-    assert "tia_reminder_6h_01" not in legacy_block
+    assert "tia_reminder_6h_01" in legacy_block
+    assert 'template_name="tia_reminder_01"' in (
+        Path(__file__).resolve().parents[1] / "app/core/automation_rules.py"
+    ).read_text(encoding="utf-8")
