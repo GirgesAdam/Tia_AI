@@ -55,6 +55,7 @@ from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
     AppointmentOperationNotFound,
+    AppointmentServiceChangeRequiresHuman,
     cancel_appointment_operation,
     confirm_appointment_operation,
     reschedule_appointment_operation,
@@ -593,9 +594,10 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         requested_start = self._require_aware_start(request.start_at)
         new_branch_id = self._native_uuid(request.branch_id, "branch_id") if request.branch_id else None
         new_doctor_id = self._native_uuid(request.doctor_id, "doctor_id") if request.doctor_id else None
+        new_service_id = self._native_uuid(request.service_id, "service_id") if request.service_id else None
         idempotency_key = (
             f"agent:{request.operation_id}:reschedule:{appointment_id}:"
-            f"{new_doctor_id or 'same'}:{requested_start.isoformat()}"
+            f"{new_doctor_id or 'same'}:{new_service_id or 'same'}:{requested_start.isoformat()}"
         )[:128]
 
         try:
@@ -607,11 +609,17 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 requested_start_at=requested_start,
                 branch_id=new_branch_id,
                 doctor_id=new_doctor_id,
+                service_id=new_service_id,
                 changed_by_user_id=None,
                 reason=request.reason.strip() or "appointment_rescheduled_by_ai",
                 idempotency_key=idempotency_key,
                 actor_type="ai",
             )
+        except AppointmentServiceChangeRequiresHuman as exc:
+            raise ClinicActionRequiresHuman(
+                str(exc),
+                appointment_id=str(appointment_id),
+            ) from exc
         except AppointmentOperationNotFound as exc:
             raise ValueError("Appointment not found for this customer.") from exc
         except AppointmentOperationError as exc:

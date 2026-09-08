@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
+from app.models.payment_transaction import PaymentAllocation
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
@@ -45,6 +46,30 @@ class AppointmentCancellationOverrideRequired(AppointmentOperationError):
 
 class AppointmentOperationForbidden(AppointmentOperationError):
     pass
+
+
+class AppointmentServiceChangeRequiresHuman(AppointmentOperationError):
+    pass
+
+
+def service_change_requires_human(
+    *,
+    payment_status: str,
+    amount_paid_minor: int | None,
+    billing_context: str,
+    patient_package_id: UUID | None,
+    package_external_id: str | None,
+    has_payment_allocation: bool,
+) -> bool:
+    """Fail closed when changing service could alter money or package entitlement."""
+    return bool(
+        patient_package_id is not None
+        or billing_context == "package_prepaid"
+        or package_external_id
+        or payment_status not in {"unknown", "unpaid"}
+        or int(amount_paid_minor or 0) > 0
+        or has_payment_allocation
+    )
 
 
 def appointment_allowed_actions(
@@ -316,6 +341,7 @@ def reschedule_appointment_operation(
     changed_by_user_id: UUID | None,
     branch_id: UUID | None = None,
     doctor_id: UUID | None = None,
+    service_id: UUID | None = None,
     patient_id: UUID | None = None,
     reason: str = "appointment_rescheduled",
     idempotency_key: str | None = None,
@@ -356,12 +382,39 @@ def reschedule_appointment_operation(
 
     new_branch_id = branch_id or current.branch_id
     new_doctor_id = doctor_id or current.doctor_id
+    new_service_id = service_id or current.service_id
+    service_changed = new_service_id != current.service_id
+    if service_changed:
+        has_payment_allocation = (
+            db.scalar(
+                select(PaymentAllocation.id)
+                .where(
+                    PaymentAllocation.workspace_id == workspace.id,
+                    PaymentAllocation.appointment_id == current.id,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if service_change_requires_human(
+            payment_status=current.payment_status,
+            amount_paid_minor=current.amount_paid_minor,
+            billing_context=current.billing_context,
+            patient_package_id=current.patient_package_id,
+            package_external_id=current.package_external_id,
+            has_payment_allocation=has_payment_allocation,
+        ):
+            raise AppointmentServiceChangeRequiresHuman(
+                "Changing the service on this appointment needs staff review because "
+                "payment or package state is attached to the booking."
+            )
+
     try:
         slot = find_exact_slot(
             db=db,
             workspace=workspace,
             branch_id=new_branch_id,
-            service_id=current.service_id,
+            service_id=new_service_id,
             doctor_id=new_doctor_id,
             requested_start_at=requested_start_at,
             exclude_appointment_id=current.id,
@@ -378,7 +431,7 @@ def reschedule_appointment_operation(
         patient_id=current.patient_id,
         branch_id=new_branch_id,
         doctor_id=new_doctor_id,
-        service_id=current.service_id,
+        service_id=new_service_id,
         patient_package_id=current.patient_package_id,
         lead_id=current.lead_id,
         created_by_user_id=changed_by_user_id,
@@ -440,6 +493,9 @@ def reschedule_appointment_operation(
             "old_end_at": old_end.isoformat(),
             "new_start_at": replacement.start_at.isoformat(),
             "new_end_at": replacement.end_at.isoformat(),
+            "old_service_id": str(current.service_id),
+            "new_service_id": str(replacement.service_id),
+            "service_changed": service_changed,
         },
     )
     add_appointment_history(
@@ -471,6 +527,9 @@ def reschedule_appointment_operation(
             "from_status": old_status,
             "old_start_at": old_start,
             "new_start_at": replacement.start_at,
+            "old_service_id": current.service_id,
+            "new_service_id": replacement.service_id,
+            "service_changed": service_changed,
         },
     )
     db.flush()

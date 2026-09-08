@@ -240,6 +240,7 @@ class RescheduleAppointmentRequest:
     operation_id: str
     branch_id: str | None = None
     doctor_id: str | None = None
+    service_id: str | None = None
     reason: str = ""
 
 

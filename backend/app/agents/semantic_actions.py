@@ -100,7 +100,12 @@ def format_reschedule_success(appointment: dict[str, Any]) -> str:
     doctor = str(
         appointment.get("doctor") or appointment.get("doctor_name") or ""
     ).strip()
+    service = str(
+        appointment.get("service") or appointment.get("service_name") or ""
+    ).strip()
     details: list[str] = []
+    if service:
+        details.append(f"لـ{service}")
     if start is not None:
         details.append(f"ليوم {start.strftime('%d/%m/%Y')} الساعة {_clock_ar(start)}")
     if doctor:
@@ -130,6 +135,7 @@ def reschedule_tool_args(
         "start_at": str(slot["start_local"]),
         "branch_id": str(slot.get("branch_id") or ""),
         "doctor_id": str(slot.get("doctor_id") or ""),
+        "service_id": str(slot.get("service_id") or ""),
         "reason": "Customer selected a replacement slot in the active workflow.",
     }
 
