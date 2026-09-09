@@ -9,6 +9,12 @@ function numberValue(value: FormDataEntryValue | null) {
   return result;
 }
 
+function integerValue(value: FormDataEntryValue | null) {
+  const result = numberValue(value);
+  if (!Number.isInteger(result)) throw new Error("اكتب عدد صحيح.");
+  return result;
+}
+
 export async function createClinicProduct(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   if (!name) return;
@@ -17,7 +23,19 @@ export async function createClinicProduct(formData: FormData) {
     body: JSON.stringify({
       name,
       description: String(formData.get("description") || "").trim() || null,
+      quantity_on_hand: integerValue(formData.get("quantity_on_hand")),
     }),
+  });
+  revalidatePath("/inventory");
+  revalidatePath("/appointments");
+}
+
+export async function updateClinicProductQuantity(formData: FormData) {
+  const id = String(formData.get("product_id") || "");
+  if (!id) return;
+  await tiaRequest(`/inventory/products/${id}/quantity`, {
+    method: "PUT",
+    body: JSON.stringify({ quantity_on_hand: integerValue(formData.get("quantity_on_hand")) }),
   });
   revalidatePath("/inventory");
   revalidatePath("/appointments");
@@ -29,7 +47,6 @@ export async function createInventoryItem(formData: FormData) {
     body: JSON.stringify({
       name: String(formData.get("name") || "").trim(),
       quantity_ml: numberValue(formData.get("quantity_ml")),
-      concentration_mg_per_ml: numberValue(formData.get("concentration_mg_per_ml")),
       low_stock_threshold_ml: formData.get("low_stock_threshold_ml") ? numberValue(formData.get("low_stock_threshold_ml")) : null,
       notes: String(formData.get("notes") || "").trim() || null,
     }),
@@ -53,8 +70,7 @@ export async function recordInventoryUsage(formData: FormData) {
   await tiaRequest(`/inventory/items/${id}/usage`, {
     method: "POST",
     body: JSON.stringify({
-      used_mg: numberValue(formData.get("used_mg")),
-      appointment_id: String(formData.get("appointment_id") || "").trim() || null,
+      used_ml: numberValue(formData.get("used_ml")),
       note: String(formData.get("note") || "").trim() || null,
     }),
   });
