@@ -6,12 +6,12 @@ from app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for
 def test_default_rules_cover_core_clinic_automations() -> None:
     keys = {rule.key for rule in DEFAULT_AUTOMATION_RULES}
     assert keys == {
-        "booking_confirmation",
         "appointment_reminder_6h",
         "post_visit_followup",
         "cancellation_recovery",
         "lead_not_booked_followup",
     }
+    assert "booking_confirmation" not in keys
 
 
 def test_6_hour_reminder_is_scheduled_before_appointment() -> None:
