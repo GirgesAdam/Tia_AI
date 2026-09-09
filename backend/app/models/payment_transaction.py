@@ -21,9 +21,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base, UUIDPrimaryKeyMixin
 
 PAYMENT_TRANSACTION_TYPES = ("payment", "refund")
+# Keep legacy values readable for imported/history rows. New staff/API writes are
+# intentionally limited by the request schema to cash / visa / instapay.
 PAYMENT_METHODS = (
     "unknown",
     "cash",
+    "visa",
+    "instapay",
     "card",
     "bank_transfer",
     "wallet",
@@ -51,7 +55,7 @@ class PaymentTransaction(UUIDPrimaryKeyMixin, Base):
         ),
         CheckConstraint("amount_minor > 0", name="payment_transaction_amount_positive"),
         CheckConstraint(
-            "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'online', 'other')",
+            "payment_method IN ('unknown', 'cash', 'visa', 'instapay', 'card', 'bank_transfer', 'wallet', 'online', 'other')",
             name="payment_transaction_method_valid",
         ),
         CheckConstraint(
