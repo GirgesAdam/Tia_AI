@@ -28,6 +28,7 @@ from app.services.inventory import (
     list_laser_device_prices,
 )
 from app.services.laser_booking_context import current_laser_device_key
+from app.services.laser_slot_metadata import encode_laser_slot_branch
 
 
 class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
@@ -166,7 +167,11 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
         slots = tuple(
             AvailabilitySlot(
                 branch_id=str(slot.branch_id),
-                branch_name=branch.name,
+                branch_name=encode_laser_slot_branch(
+                    branch.name,
+                    device_key=device_price.device_key,
+                    device_name=device_price.device_name,
+                ),
                 doctor_id=str(slot.doctor_id),
                 doctor_name=doctor_names.get(slot.doctor_id, "الدكتور المتاح"),
                 service_id=str(slot.service_id),
@@ -204,6 +209,11 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
             return record
         return replace(
             record,
+            branch_name=encode_laser_slot_branch(
+                record.branch_name,
+                device_key=appointment.laser_device_key,
+                device_name=appointment.laser_device_name,
+            ),
             laser_device_key=appointment.laser_device_key,
             laser_device_name=appointment.laser_device_name,
         )
@@ -224,7 +234,6 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
         device_key = request.laser_device_key or current_laser_device_key()
         device_price = self._device_price(service_id=service_id, device_key=device_key)
         assert device_price is not None
-        # Revalidate the exact doctor + device intersection before any write.
         find_exact_slot(
             db=self.db,
             workspace=self.workspace,
@@ -234,7 +243,9 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
             requested_start_at=request.start_at,
             laser_device_key=device_price.device_key,
         )
-        result = super().create_appointment(replace(request, laser_device_key=device_price.device_key))
+        result = super().create_appointment(
+            replace(request, laser_device_key=device_price.device_key)
+        )
         appointment_id = UUID(result.appointment.appointment_id)
         appointment = self.db.get(Appointment, appointment_id)
         if appointment is None:
@@ -243,10 +254,10 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
         appointment.laser_device_name = device_price.device_name
         appointment.price_minor = int(device_price.price_minor or 0)
         appointment.currency = device_price.currency
-        # This flush activates the DB exclusion constraint, protecting concurrent
-        # requests from double-booking the same physical device.
         self.db.flush()
-        return AppointmentMutationResult(appointment=self._appointment_record(appointment_id=appointment.id))
+        return AppointmentMutationResult(
+            appointment=self._appointment_record(appointment_id=appointment.id)
+        )
 
     def reschedule_appointment(self, request: RescheduleAppointmentRequest) -> AppointmentMutationResult:
         appointment_id = self._native_uuid(request.appointment_id, "appointment_id")
