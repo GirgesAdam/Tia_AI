@@ -22,6 +22,46 @@ def _secure(table: str) -> None:
     op.execute(sa.text(f'REVOKE ALL ON TABLE public."{table}" FROM anon, authenticated'))
 
 
+def _drop_payment_method_check(table: str) -> None:
+    """Drop the real payment-method check without assuming a naming convention.
+
+    Older migrations mixed explicit names with SQLAlchemy naming conventions, so
+    the physical PostgreSQL constraint name is not stable across these tables.
+    Discover the check by table + expression instead of guessing the identifier.
+    """
+    op.execute(
+        sa.text(
+            f"""
+            DO $$
+            DECLARE
+                check_name text;
+            BEGIN
+                SELECT c.conname
+                  INTO check_name
+                  FROM pg_constraint c
+                  JOIN pg_class t ON t.oid = c.conrelid
+                  JOIN pg_namespace n ON n.oid = t.relnamespace
+                 WHERE n.nspname = 'public'
+                   AND t.relname = '{table}'
+                   AND c.contype = 'c'
+                   AND pg_get_constraintdef(c.oid) ILIKE '%payment_method%'
+                 ORDER BY c.oid
+                 LIMIT 1;
+
+                IF check_name IS NOT NULL THEN
+                    EXECUTE format(
+                        'ALTER TABLE public.%I DROP CONSTRAINT %I',
+                        '{table}',
+                        check_name
+                    );
+                END IF;
+            END
+            $$;
+            """
+        )
+    )
+
+
 def upgrade() -> None:
     op.create_table(
         "service_device_prices",
@@ -139,13 +179,13 @@ def upgrade() -> None:
         "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
     )
 
-    op.drop_constraint(op.f("ck_appointments_appointment_payment_method_valid"), "appointments", type_="check")
+    _drop_payment_method_check("appointments")
     op.create_check_constraint(
         "appointment_payment_method_valid",
         "appointments",
         "payment_method IN ('unknown', 'cash', 'visa', 'instapay', 'card', 'bank_transfer', 'wallet', 'other')",
     )
-    op.drop_constraint(op.f("ck_payment_transactions_payment_transaction_method_valid"), "payment_transactions", type_="check")
+    _drop_payment_method_check("payment_transactions")
     op.create_check_constraint(
         "payment_transaction_method_valid",
         "payment_transactions",
@@ -163,13 +203,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(op.f("ck_payment_transactions_payment_transaction_method_valid"), "payment_transactions", type_="check")
+    _drop_payment_method_check("payment_transactions")
     op.create_check_constraint(
         "payment_transaction_method_valid",
         "payment_transactions",
         "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'online', 'other')",
     )
-    op.drop_constraint(op.f("ck_appointments_appointment_payment_method_valid"), "appointments", type_="check")
+    _drop_payment_method_check("appointments")
     op.create_check_constraint(
         "appointment_payment_method_valid",
         "appointments",
