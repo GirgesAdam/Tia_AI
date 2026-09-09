@@ -1,0 +1,30 @@
+name: Apply final package backend patch
+
+on:
+  push:
+    branches:
+      - feat/laser-package-offers
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[package-backend-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/laser-package-offers
+          fetch-depth: 0
+      - name: Apply final backend patch
+        run: |
+          python backend/scripts/patch_package_backend_final_temp.py
+          git diff --check
+      - name: Commit product files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py backend/app/agents/tools/clinic_tools.py backend/app/integrations/clinic/tia_database.py backend/app/integrations/clinic/tia_database_laser.py backend/app/services/appointment_operations.py backend/app/services/package_offers.py backend/app/services/patient_packages.py backend/app/schemas/patient_packages.py
+          git commit -m "fix(packages): enforce device-safe package lifecycle [package-backend-patched]"
+          git push origin HEAD:feat/laser-package-offers
