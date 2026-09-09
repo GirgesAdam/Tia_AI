@@ -8,15 +8,22 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# Agent orchestration: use the selected laser device before choosing package entitlement.
-path = Path("backend/app/services/agent_chat.py")
+# Canonical adapter contract: reschedules carry the chosen laser device explicitly.
+path = Path("backend/app/integrations/clinic/base.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
     text,
-    "    return None\ndef _package_booking_success_reply",
-    "    return None\n\n\ndef _package_booking_success_reply",
-    "agent function spacing",
+    '''    doctor_id: str | None = None\n    service_id: str | None = None\n    reason: str = ""\n''',
+    '''    doctor_id: str | None = None\n    service_id: str | None = None\n    laser_device_key: str | None = None\n    reason: str = ""\n''',
+    "reschedule canonical laser device",
 )
+path.write_text(text, encoding="utf-8")
+
+
+# Agent orchestration: choose only package entitlement compatible with the booked device.
+path = Path("backend/app/services/agent_chat.py")
+text = path.read_text(encoding="utf-8")
+text = text.replace("    return None\ndef _package_booking_success_reply", "    return None\n\n\ndef _package_booking_success_reply", 1)
 apply_start = text.index("def _apply_single_matching_package_to_booking(")
 apply_end = text.index("\ndef _prefetch_read_tools(", apply_start)
 block = text[apply_start:apply_end]
@@ -24,25 +31,39 @@ block = replace_once(
     block,
     '''    usable = list_patient_packages(\n        db,\n        workspace_id=workspace_id,\n        patient_id=patient_id,\n        service_id=appointment.service_id,\n        usable_only=True,\n        on_date=appointment.start_at.date(),\n    )\n    selected = _preferred_usable_package(list(usable))\n''',
     '''    usable = list_patient_packages(\n        db,\n        workspace_id=workspace_id,\n        patient_id=patient_id,\n        service_id=appointment.service_id,\n        usable_only=True,\n        on_date=appointment.start_at.date(),\n    )\n    usable = [\n        item\n        for item in usable\n        if item.laser_device_key is None\n        or item.laser_device_key == appointment.laser_device_key\n    ]\n    selected = _preferred_usable_package(list(usable))\n''',
-    "agent compatible package selection",
+    "agent device-compatible package selection",
 )
 text = text[:apply_start] + block + text[apply_end:]
+
+# Prefetch carries the structured device selected by the semantic interpreter.
 text = replace_once(
     text,
-    '''            laser_device_key=str((flow.entity_state or {}).get("laser_device_key") or "") or None,\n''',
-    '''            laser_device_key=(\n                str(\n                    slot.get("laser_device_key")\n                    or (flow.entity_state or {}).get("laser_device_key")\n                    or ""\n                )\n                or None\n            ),\n''',
-    "agent selected-slot package device",
+    '''    doctor_id = text_value("doctor_id")\n    appointment_id = text_value("appointment_id")\n''',
+    '''    doctor_id = text_value("doctor_id")\n    laser_device_key = text_value("laser_device_key")\n    appointment_id = text_value("appointment_id")\n''',
+    "agent prefetch device state",
 )
 text = replace_once(
     text,
-    '''                "doctor_name": appointment.doctor_name,\n                "status": appointment.status,\n''',
-    '''                "doctor_name": appointment.doctor_name,\n                "laser_device_key": appointment.laser_device_key,\n                "laser_device_name": appointment.laser_device_name,\n                "status": appointment.status,\n''',
-    "agent current appointment device grounding",
+    '''                    "doctor_id": doctor_id,\n                }\n''',
+    '''                    "doctor_id": doctor_id,\n                    "laser_device_key": laser_device_key,\n                }\n''',
+    "agent booking prefetch device",
+)
+text = replace_once(
+    text,
+    '''                "doctor_id": doctor_id,\n                "requested_start_time": requested_start_time,\n''',
+    '''                "doctor_id": doctor_id,\n                "laser_device_key": laser_device_key,\n                "requested_start_time": requested_start_time,\n''',
+    "agent next-available device",
+)
+text = replace_once(
+    text,
+    '''            reschedule_arguments["service_id"] = service_id\n            reschedule_arguments["doctor_id"] = doctor_id\n''',
+    '''            reschedule_arguments["service_id"] = service_id\n            reschedule_arguments["doctor_id"] = doctor_id\n            reschedule_arguments["laser_device_key"] = laser_device_key\n''',
+    "agent reschedule prefetch device",
 )
 path.write_text(text, encoding="utf-8")
 
 
-# Agent tools: keep device metadata explicit in verified slot/appointment payloads.
+# Agent tools: carry laser device metadata in verified reads and writes.
 path = Path("backend/app/agents/tools/clinic_tools.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -51,20 +72,104 @@ text = replace_once(
     '''        "package_external_id": getattr(appointment, "package_external_id", None),\n        "laser_device_key": getattr(appointment, "laser_device_key", None),\n        "laser_device_name": getattr(appointment, "laser_device_name", None),\n    }\n''',
     "canonical appointment device metadata",
 )
-price_line = '                "price": _money(slot.price_minor, slot.currency),\n'
-replacement = (
-    price_line
-    + '                "laser_device_key": getattr(slot, "laser_device_key", None),\n'
-    + '                "laser_device_name": getattr(slot, "laser_device_name", None),\n'
+text = replace_once(
+    text,
+    '''    doctor_id: str | None = None,\n    exclude_appointment_id: str | None = None,\n) -> AvailabilityResult:\n''',
+    '''    doctor_id: str | None = None,\n    exclude_appointment_id: str | None = None,\n    laser_device_key: str | None = None,\n) -> AvailabilityResult:\n''',
+    "adapter availability helper device parameter",
 )
-count = text.count(price_line)
-if count != 2:
-    raise RuntimeError(f"slot device metadata: expected two price markers, found {count}")
-text = text.replace(price_line, replacement)
+text = replace_once(
+    text,
+    '''            doctor_id=doctor_id,\n            exclude_appointment_id=exclude_appointment_id,\n        )\n''',
+    '''            doctor_id=doctor_id,\n            exclude_appointment_id=exclude_appointment_id,\n            laser_device_key=laser_device_key,\n        )\n''',
+    "adapter availability request device",
+)
+text = replace_once(
+    text,
+    '''    upper_bound: time | None,\n    exclude_appointment_id: str | UUID | None = None,\n) -> dict:\n''',
+    '''    upper_bound: time | None,\n    exclude_appointment_id: str | UUID | None = None,\n    laser_device_key: str | None = None,\n) -> dict:\n''',
+    "availability payload device parameter",
+)
+text = replace_once(
+    text,
+    '''        exclude_appointment_id=(\n            str(exclude_appointment_id) if exclude_appointment_id is not None else None\n        ),\n    )\n''',
+    '''        exclude_appointment_id=(\n            str(exclude_appointment_id) if exclude_appointment_id is not None else None\n        ),\n        laser_device_key=laser_device_key,\n    )\n''',
+    "availability payload adapter device",
+)
+# Both verified slot renderers carry device identity.
+slot_price = '                "price": _money(slot.price_minor, slot.currency),\n'
+if text.count(slot_price) != 2:
+    raise RuntimeError(f"slot device metadata: expected two markers, found {text.count(slot_price)}")
+text = text.replace(
+    slot_price,
+    slot_price
+    + '                "laser_device_key": getattr(slot, "laser_device_key", None),\n'
+    + '                "laser_device_name": getattr(slot, "laser_device_name", None),\n',
+)
+
+# Booking discovery accepts a grounded device key and constrains availability to it.
+text = replace_once(
+    text,
+    '''        doctor_id: str = "",\n        requested_start_time: str = "",\n''',
+    '''        doctor_id: str = "",\n        laser_device_key: str = "",\n        requested_start_time: str = "",\n''',
+    "booking tool device parameter",
+)
+text = replace_once(
+    text,
+    '''            "doctor_id": doctor_id,\n            "branch_search": branch_search,\n''',
+    '''            "doctor_id": doctor_id,\n            "laser_device_key": laser_device_key or None,\n            "branch_search": branch_search,\n''',
+    "booking tool input device",
+)
+text = replace_once(
+    text,
+    '''                requested_start=requested_start,\n                lower_bound=lower_bound,\n                upper_bound=upper_bound,\n            )\n''',
+    '''                requested_start=requested_start,\n                lower_bound=lower_bound,\n                upper_bound=upper_bound,\n                laser_device_key=laser_device_key or None,\n            )\n''',
+    "booking availability device",
+)
+
+# Reschedule discovery carries the current/new device explicitly.
+text = replace_once(
+    text,
+    '''        service_id: str = "",\n        doctor_id: str = "",\n        service_search: str = "",\n''',
+    '''        service_id: str = "",\n        doctor_id: str = "",\n        laser_device_key: str = "",\n        service_search: str = "",\n''',
+    "reschedule discovery device parameter",
+)
+text = replace_once(
+    text,
+    '''            "doctor_id": doctor_id or None,\n            "service_search": service_search,\n''',
+    '''            "doctor_id": doctor_id or None,\n            "laser_device_key": laser_device_key or None,\n            "service_search": service_search,\n''',
+    "reschedule discovery input device",
+)
+text = replace_once(
+    text,
+    '''                upper_bound=upper_bound,\n                exclude_appointment_id=current.appointment_id,\n            )\n''',
+    '''                upper_bound=upper_bound,\n                exclude_appointment_id=current.appointment_id,\n                laser_device_key=(laser_device_key or current.laser_device_key),\n            )\n''',
+    "reschedule availability device",
+)
+
+# Actual writes also carry the selected device through the canonical adapter request.
+text = replace_once(
+    text,
+    '''                    customer_note=customer_note,\n                    patient_package_id=patient_package_id.strip() or None,\n                )\n''',
+    '''                    customer_note=customer_note,\n                    patient_package_id=patient_package_id.strip() or None,\n                    laser_device_key=current_laser_device_key(),\n                )\n''',
+    "booking write device",
+)
+text = replace_once(
+    text,
+    "from app.services.handoffs import create_handoff\nfrom app.services.patient_history import build_patient_history_context\n",
+    "from app.services.handoffs import create_handoff\nfrom app.services.laser_booking_context import current_laser_device_key\nfrom app.services.patient_history import build_patient_history_context\n",
+    "tool laser context import",
+)
+text = replace_once(
+    text,
+    '''                    service_id=service_id or None,\n                    reason=reason,\n                )\n''',
+    '''                    service_id=service_id or None,\n                    laser_device_key=current_laser_device_key(),\n                    reason=reason,\n                )\n''',
+    "reschedule write device",
+)
 path.write_text(text, encoding="utf-8")
 
 
-# Native adapter: propagate laser resource identity into availability, booking and reschedule.
+# Native DB adapter: pass device identity into booking engine/package validation.
 path = Path("backend/app/integrations/clinic/tia_database.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -81,14 +186,10 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    '''            package_external_id=getattr(appointment, "package_external_id", None),\n            patient_package_id=(\n''',
-    '''            package_external_id=getattr(appointment, "package_external_id", None),\n            patient_package_id=(\n''',
-    "adapter appointment package marker",
+    '''                else None\n            ),\n        )\n\n    def _add_status_history''',
+    '''                else None\n            ),\n            laser_device_key=getattr(appointment, "laser_device_key", None),\n            laser_device_name=getattr(appointment, "laser_device_name", None),\n        )\n\n    def _add_status_history''',
+    "adapter appointment record device",
 )
-# Insert device fields after the patient-package expression in the returned record.
-record_marker = '''                else None\n            ),\n        )\n\n    def _add_status_history'''
-record_replacement = '''                else None\n            ),\n            laser_device_key=getattr(appointment, "laser_device_key", None),\n            laser_device_name=getattr(appointment, "laser_device_name", None),\n        )\n\n    def _add_status_history'''
-text = replace_once(text, record_marker, record_replacement, "adapter appointment record device")
 create_start = text.index("    def create_appointment(")
 create_end = text.index("\n    def confirm_appointment(", create_start)
 block = text[create_start:create_end]
@@ -130,7 +231,7 @@ text = text[:reschedule_start] + block + text[reschedule_end:]
 path.write_text(text, encoding="utf-8")
 
 
-# Appointment operation: service/device changes share the existing paid/package handoff rule.
+# Appointment operation: changing service OR device on financially-sensitive bookings needs staff review.
 path = Path("backend/app/services/appointment_operations.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -146,7 +247,7 @@ text = replace_once(
     "appointment operation device parameter",
 )
 old_logic = '''    new_branch_id = branch_id or current.branch_id\n    new_doctor_id = doctor_id or current.doctor_id\n    new_service_id = service_id or current.service_id\n    service_changed = new_service_id != current.service_id\n    if service_changed:\n        has_payment_allocation = (\n            db.scalar(\n                select(PaymentAllocation.id)\n                .where(\n                    PaymentAllocation.workspace_id == workspace.id,\n                    PaymentAllocation.appointment_id == current.id,\n                )\n                .limit(1)\n            )\n            is not None\n        )\n        if service_change_requires_human(\n            payment_status=current.payment_status,\n            amount_paid_minor=current.amount_paid_minor,\n            billing_context=current.billing_context,\n            patient_package_id=current.patient_package_id,\n            package_external_id=current.package_external_id,\n            has_payment_allocation=has_payment_allocation,\n        ):\n            raise AppointmentServiceChangeRequiresHuman(\n                "Changing the service on this appointment needs staff review because "\n                "payment or package state is attached to the booking."\n            )\n\n    try:\n        slot = find_exact_slot(\n            db=db,\n            workspace=workspace,\n            branch_id=new_branch_id,\n            service_id=new_service_id,\n            doctor_id=new_doctor_id,\n            requested_start_at=requested_start_at,\n            exclude_appointment_id=current.id,\n        )\n'''
-new_logic = '''    new_branch_id = branch_id or current.branch_id\n    new_doctor_id = doctor_id or current.doctor_id\n    new_service_id = service_id or current.service_id\n    target_service = db.scalar(\n        select(Service).where(\n            Service.workspace_id == workspace.id,\n            Service.id == new_service_id,\n            Service.is_active.is_(True),\n        )\n    )\n    if target_service is None:\n        raise AppointmentOperationError("Replacement service not found or inactive.")\n    if bool(getattr(target_service, "requires_laser_device", False)):\n        new_laser_device_key = laser_device_key or current.laser_device_key\n    else:\n        new_laser_device_key = None\n    service_changed = new_service_id != current.service_id\n    device_changed = new_laser_device_key != current.laser_device_key\n    if service_changed or device_changed:\n        has_payment_allocation = (\n            db.scalar(\n                select(PaymentAllocation.id)\n                .where(\n                    PaymentAllocation.workspace_id == workspace.id,\n                    PaymentAllocation.appointment_id == current.id,\n                )\n                .limit(1)\n            )\n            is not None\n        )\n        if service_change_requires_human(\n            payment_status=current.payment_status,\n            amount_paid_minor=current.amount_paid_minor,\n            billing_context=current.billing_context,\n            patient_package_id=current.patient_package_id,\n            package_external_id=current.package_external_id,\n            has_payment_allocation=has_payment_allocation,\n        ):\n            raise AppointmentServiceChangeRequiresHuman(\n                "Changing the service or laser device on this appointment needs staff review because "\n                "payment or package state is attached to the booking."\n            )\n\n    try:\n        slot = find_exact_slot(\n            db=db,\n            workspace=workspace,\n            branch_id=new_branch_id,\n            service_id=new_service_id,\n            doctor_id=new_doctor_id,\n            requested_start_at=requested_start_at,\n            exclude_appointment_id=current.id,\n            laser_device_key=new_laser_device_key,\n        )\n'''
+new_logic = '''    new_branch_id = branch_id or current.branch_id\n    new_doctor_id = doctor_id or current.doctor_id\n    new_service_id = service_id or current.service_id\n    target_service = db.scalar(\n        select(Service).where(\n            Service.workspace_id == workspace.id,\n            Service.id == new_service_id,\n            Service.is_active.is_(True),\n        )\n    )\n    if target_service is None:\n        raise AppointmentOperationError("Replacement service not found or inactive.")\n    new_laser_device_key = (\n        laser_device_key or current.laser_device_key\n        if bool(getattr(target_service, "requires_laser_device", False))\n        else None\n    )\n    service_changed = new_service_id != current.service_id\n    device_changed = new_laser_device_key != current.laser_device_key\n    if service_changed or device_changed:\n        has_payment_allocation = (\n            db.scalar(\n                select(PaymentAllocation.id)\n                .where(\n                    PaymentAllocation.workspace_id == workspace.id,\n                    PaymentAllocation.appointment_id == current.id,\n                )\n                .limit(1)\n            )\n            is not None\n        )\n        if service_change_requires_human(\n            payment_status=current.payment_status,\n            amount_paid_minor=current.amount_paid_minor,\n            billing_context=current.billing_context,\n            patient_package_id=current.patient_package_id,\n            package_external_id=current.package_external_id,\n            has_payment_allocation=has_payment_allocation,\n        ):\n            raise AppointmentServiceChangeRequiresHuman(\n                "Changing the service or laser device on this appointment needs staff review because "\n                "payment or package state is attached to the booking."\n            )\n\n    try:\n        slot = find_exact_slot(\n            db=db,\n            workspace=workspace,\n            branch_id=new_branch_id,\n            service_id=new_service_id,\n            doctor_id=new_doctor_id,\n            requested_start_at=requested_start_at,\n            exclude_appointment_id=current.id,\n            laser_device_key=new_laser_device_key,\n        )\n'''
 text = replace_once(text, old_logic, new_logic, "appointment operation service/device logic")
 text = replace_once(
     text,
@@ -156,18 +257,20 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    '''            "service_changed": service_changed,\n        },\n''',
-    '''            "service_changed": service_changed,\n            "old_laser_device_key": current.laser_device_key,\n            "new_laser_device_key": replacement.laser_device_key,\n            "laser_device_changed": device_changed,\n        },\n''',
+    '''            "old_service_id": str(current.service_id),\n            "new_service_id": str(replacement.service_id),\n            "service_changed": service_changed,\n        },\n    )\n    add_appointment_history(\n''',
+    '''            "old_service_id": str(current.service_id),\n            "new_service_id": str(replacement.service_id),\n            "service_changed": service_changed,\n            "old_laser_device_key": current.laser_device_key,\n            "new_laser_device_key": replacement.laser_device_key,\n            "laser_device_changed": device_changed,\n        },\n    )\n    add_appointment_history(\n''',
     "appointment history device metadata",
 )
-# Activity metadata has a second service_changed marker.
-activity_marker = '''            "new_service_id": replacement.service_id,\n            "service_changed": service_changed,\n        },\n    )\n    db.flush()\n    return replacement, current\n'''
-activity_replacement = '''            "new_service_id": replacement.service_id,\n            "service_changed": service_changed,\n            "old_laser_device_key": current.laser_device_key,\n            "new_laser_device_key": replacement.laser_device_key,\n            "laser_device_changed": device_changed,\n        },\n    )\n    db.flush()\n    return replacement, current\n'''
-text = replace_once(text, activity_marker, activity_replacement, "activity device metadata")
+text = replace_once(
+    text,
+    '''            "old_service_id": current.service_id,\n            "new_service_id": replacement.service_id,\n            "service_changed": service_changed,\n        },\n    )\n    db.flush()\n    return replacement, current\n''',
+    '''            "old_service_id": current.service_id,\n            "new_service_id": replacement.service_id,\n            "service_changed": service_changed,\n            "old_laser_device_key": current.laser_device_key,\n            "new_laser_device_key": replacement.laser_device_key,\n            "laser_device_changed": device_changed,\n        },\n    )\n    db.flush()\n    return replacement, current\n''',
+    "appointment activity device metadata",
+)
 path.write_text(text, encoding="utf-8")
 
 
-# Laser adapter: pass the selected device through the canonical request before package transfer.
+# Laser adapter: pass the selected device into the canonical reschedule request.
 path = Path("backend/app/integrations/clinic/tia_database_laser.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -179,7 +282,7 @@ text = replace_once(
 path.write_text(text, encoding="utf-8")
 
 
-# Sold package names include the service and read models expose financial facts only as information.
+# Sold package names include service context and read models expose financial facts as information only.
 path = Path("backend/app/services/package_offers.py")
 text = path.read_text(encoding="utf-8")
 text = replace_once(
@@ -207,7 +310,7 @@ text = path.read_text(encoding="utf-8")
 text = replace_once(
     text,
     '''    if effective == "active" and remaining == 0:\n        effective = "exhausted"\n    return PatientPackageRead(\n''',
-    '''    if effective == "active" and remaining == 0:\n        effective = "exhausted"\n    payments, refunds = _package_financial_rows(\n        db, workspace_id=package.workspace_id, package=package, for_update=False\n    )\n    amount_paid_minor = sum(int(row.amount_minor) for row in payments)\n    amount_refunded_minor = sum(int(row.amount_minor) for row in refunds)\n    balance_due_minor = max(int(package.sale_price_minor) - amount_paid_minor, 0)\n    return PatientPackageRead(\n''',
+    '''    if effective == "active" and remaining == 0:\n        effective = "exhausted"\n    payments, refunds = _package_financial_rows(\n        db, workspace_id=package.workspace_id, package=package, for_update=False\n    )\n    amount_paid_minor = sum(int(row.amount_minor) for row in payments)\n    amount_refunded_minor = sum(int(row.amount_minor) for row in refunds)\n    balance_due_minor = (\n        max(int(package.sale_price_minor) - amount_paid_minor, 0)\n        if effective == "active"\n        else 0\n    )\n    return PatientPackageRead(\n''',
     "package financial read calculation",
 )
 text = replace_once(
