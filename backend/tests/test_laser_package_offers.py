@@ -6,7 +6,12 @@ import pytest
 
 import app.services.package_offers as offers_module
 import app.services.patient_packages as packages_module
-from app.services.patient_packages import PackageOperationError, validate_package_for_booking
+from app.models.service_package_offer import PACKAGE_SESSION_COUNTS
+from app.services.patient_packages import (
+    PackageOperationError,
+    package_read,
+    validate_package_for_booking,
+)
 
 
 def _package(*, device_key: str | None = "candela_gentle") -> SimpleNamespace:
@@ -21,6 +26,10 @@ def _package(*, device_key: str | None = "candela_gentle") -> SimpleNamespace:
         purchased_at=datetime(2026, 9, 1, tzinfo=UTC),
         sessions_purchased=6,
     )
+
+
+def test_only_three_six_and_nine_session_offers_are_supported() -> None:
+    assert PACKAGE_SESSION_COUNTS == (3, 6, 9)
 
 
 def test_device_specific_package_requires_matching_laser_device(monkeypatch) -> None:
@@ -119,16 +128,19 @@ def test_purchase_offer_allows_zero_initial_payment(monkeypatch) -> None:
         return SimpleNamespace(id=uuid4())
 
     monkeypatch.setattr(offers_module, "create_patient_package", fake_create_patient_package)
+    fake_db = SimpleNamespace(
+        scalar=lambda *args, **kwargs: SimpleNamespace(name="Underarm Laser", is_active=True)
+    )
 
     offers_module.purchase_package_offer(
-        object(),
+        fake_db,
         workspace_id=workspace_id,
         patient_id=patient_id,
         offer_id=offer.id,
         amount_paid_minor=0,
         payment_method="unknown",
         created_by_user_id=None,
-        actor_type="staff",
+        actor_type="ai",
     )
 
     assert captured["amount_paid_minor"] == 0
@@ -136,3 +148,49 @@ def test_purchase_offer_allows_zero_initial_payment(monkeypatch) -> None:
     assert captured["sessions_purchased"] == 9
     assert captured["laser_device_key"] == "prime_lase"
     assert captured["standalone_session_price_minor_at_purchase"] == 25000
+    assert captured["name"] == "Underarm Laser · Prime Lase · 9 sessions"
+
+
+def test_package_read_exposes_payment_balance_without_affecting_sessions(monkeypatch) -> None:
+    now = datetime(2026, 9, 10, tzinfo=UTC)
+    package = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        patient_id=uuid4(),
+        service_id=uuid4(),
+        purchase_transaction_id=uuid4(),
+        package_offer_id=uuid4(),
+        external_id=None,
+        name="Underarm Laser · Candela Gentle · 6 sessions",
+        sessions_purchased=6,
+        opening_sessions_remaining=None,
+        sale_price_minor=120000,
+        standalone_session_price_minor_at_purchase=25000,
+        laser_device_key="candela_gentle",
+        laser_device_name="Candela Gentle",
+        currency="EGP",
+        purchased_at=now,
+        expires_at=None,
+        status="active",
+        source="staff",
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(packages_module, "_usage_totals", lambda *args, **kwargs: (1, 2))
+    monkeypatch.setattr(
+        packages_module,
+        "_package_financial_rows",
+        lambda *args, **kwargs: (
+            [SimpleNamespace(amount_minor=30000), SimpleNamespace(amount_minor=20000)],
+            [],
+        ),
+    )
+
+    result = package_read(object(), package)
+
+    assert result.sessions_reserved == 1
+    assert result.sessions_consumed == 2
+    assert result.sessions_remaining == 3
+    assert result.amount_paid_minor == 50000
+    assert result.amount_refunded_minor == 0
+    assert result.balance_due_minor == 70000
