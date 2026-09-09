@@ -78,7 +78,7 @@ export default async function ServicesPage() {
                   <form action={updateServicePricing} className="grid gap-3 rounded-xl bg-slate-50 p-3 md:grid-cols-[minmax(180px,1.5fr)_minmax(150px,1fr)_auto_auto] md:items-end">
                     <input type="hidden" name="service_id" value={service.id} />
                     <label><span className="mb-1.5 block text-xs font-bold text-slate-600">اسم الخدمة</span><Input name="name" required maxLength={200} defaultValue={service.name} /></label>
-                    <label><span className="mb-1.5 block text-xs font-bold text-slate-600">السعر الأساسي بالجنيه</span><Input name="price" type="number" min="0" step="0.01" required defaultValue={major(service.price_minor)} disabled={service.requires_laser_device} /></label>
+                    <label><span className="mb-1.5 block text-xs font-bold text-slate-600">السعر الأساسي بالجنيه</span><Input name="price" type="number" min="0" step="0.01" required defaultValue={major(service.price_minor)} /><span className="mt-1 block text-[10px] text-slate-500">يُستخدم فقط عندما لا تحتاج الخدمة جهاز ليزر.</span></label>
                     <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700"><input type="checkbox" name="requires_laser_device" value="1" defaultChecked={service.requires_laser_device} /> خدمة تحتاج اختيار جهاز ليزر</label>
                     <Button type="submit" size="sm"><Save size={14} /> حفظ</Button>
                   </form>
