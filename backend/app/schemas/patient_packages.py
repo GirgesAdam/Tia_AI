@@ -43,6 +43,7 @@ class PatientPackageRead(BaseModel):
     patient_id: UUID
     service_id: UUID
     purchase_transaction_id: UUID | None
+    package_offer_id: UUID | None = None
     external_id: str | None
     name: str
     sessions_purchased: int
@@ -51,6 +52,8 @@ class PatientPackageRead(BaseModel):
     sessions_remaining: int = 0
     sale_price_minor: int
     standalone_session_price_minor_at_purchase: int | None = None
+    laser_device_key: str | None = None
+    laser_device_name: str | None = None
     currency: str
     purchased_at: datetime
     expires_at: date | None
