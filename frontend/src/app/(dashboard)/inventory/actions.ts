@@ -9,6 +9,20 @@ function numberValue(value: FormDataEntryValue | null) {
   return result;
 }
 
+export async function createClinicProduct(formData: FormData) {
+  const name = String(formData.get("name") || "").trim();
+  if (!name) return;
+  await tiaRequest("/inventory/products", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      description: String(formData.get("description") || "").trim() || null,
+    }),
+  });
+  revalidatePath("/inventory");
+  revalidatePath("/appointments");
+}
+
 export async function createInventoryItem(formData: FormData) {
   await tiaRequest("/inventory/items", {
     method: "POST",
