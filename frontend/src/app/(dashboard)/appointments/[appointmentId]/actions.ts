@@ -10,6 +10,8 @@ function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
   revalidatePath(`/appointments/${appointmentId}`);
   if (patientId) revalidatePath(`/patients/${patientId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/finance");
   revalidatePath("/analytics");
 }
 
@@ -69,6 +71,33 @@ export async function recordAppointmentPayment(formData: FormData) {
       external_reference: externalReference || null,
     }),
   });
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+}
+
+export async function addAppointmentProduct(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const productId = String(formData.get("product_id") || "");
+  const unitPrice = String(formData.get("unit_price") || "");
+  const quantity = Math.max(1, Number(String(formData.get("quantity") || "1")) || 1);
+  if (!appointmentId || !productId || !unitPrice) return;
+  await tiaRequest(`/inventory/appointments/${appointmentId}/products`, {
+    method: "POST",
+    body: JSON.stringify({
+      product_id: productId,
+      quantity,
+      unit_price_minor: moneyToMinor(unitPrice),
+    }),
+  });
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+}
+
+export async function removeAppointmentProduct(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const lineId = String(formData.get("line_id") || "");
+  if (!appointmentId || !lineId) return;
+  await tiaRequest(`/inventory/appointments/${appointmentId}/products/${lineId}`, { method: "DELETE" });
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 
