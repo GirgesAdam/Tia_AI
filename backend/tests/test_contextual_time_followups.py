@@ -1,8 +1,8 @@
 from datetime import datetime
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage, HumanMessage
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.turn_interpreter import (
     _interpreter_system_prompt,
