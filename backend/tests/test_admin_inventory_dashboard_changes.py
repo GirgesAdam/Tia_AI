@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from app.schemas.inventory import ClinicProductCreate, InventoryItemCreate, InventoryUsageCreate
 from app.services.finance_dashboard import _financial_period_buckets, financial_dashboard_trend
-from app.services.inventory import add_appointment_product, delete_appointment_product, is_laser_service
+from app.services.inventory import (
+    add_appointment_product,
+    delete_appointment_product,
+    is_laser_service,
+)
 
 
 def test_laser_device_pricing_uses_explicit_service_flag_not_name() -> None:
