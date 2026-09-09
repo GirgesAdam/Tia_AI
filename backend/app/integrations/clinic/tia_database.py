@@ -55,7 +55,6 @@ from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
     AppointmentOperationNotFound,
-    AppointmentServiceChangeRequiresHuman,
     cancel_appointment_operation,
     confirm_appointment_operation,
     reschedule_appointment_operation,
@@ -208,9 +207,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         assert branch_id is not None
         assert service_id is not None
 
-        # Session.get() reuses SQLAlchemy's identity map when the grounded tool
-        # already loaded these rows, preserving the existing no-redundant-read
-        # latency optimization. It still performs a normal DB read when needed.
         branch = self.db.get(Branch, branch_id)
         if (
             branch is None
@@ -238,6 +234,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             now=request.now,
             preloaded_branch=branch,
             preloaded_service=service,
+            laser_device_key=request.laser_device_key,
         )
 
         slot_doctor_ids = {slot.doctor_id for slot in native_slots}
@@ -272,6 +269,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 duration_minutes=slot.duration_minutes,
                 price_minor=slot.price_minor,
                 currency=slot.currency,
+                laser_device_key=slot.laser_device_key,
+                laser_device_name=slot.laser_device_name,
             )
             for slot in native_slots
         )
@@ -370,6 +369,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 if getattr(appointment, "patient_package_id", None)
                 else None
             ),
+            laser_device_key=getattr(appointment, "laser_device_key", None),
+            laser_device_name=getattr(appointment, "laser_device_name", None),
         )
 
     def _add_status_history(
@@ -412,7 +413,11 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         branch_id = self._native_uuid(request.branch_id, "branch_id")
         service_id = self._native_uuid(request.service_id, "service_id")
         doctor_id = self._native_uuid(request.doctor_id, "doctor_id")
-        patient_package_id = self._native_uuid(request.patient_package_id, "patient_package_id") if request.patient_package_id else None
+        patient_package_id = (
+            self._native_uuid(request.patient_package_id, "patient_package_id")
+            if request.patient_package_id
+            else None
+        )
         assert patient_id is not None
         assert branch_id is not None
         assert service_id is not None
@@ -426,6 +431,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             service_id=service_id,
             doctor_id=doctor_id,
             requested_start_at=requested_start,
+            laser_device_key=request.laser_device_key,
         )
         patient_package = None
         if patient_package_id is not None:
@@ -437,6 +443,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     patient_id=patient_id,
                     service_id=service_id,
                     appointment_start_at=slot.start_at,
+                    laser_device_key=slot.laser_device_key,
                 )
             except PackageOperationError as exc:
                 raise BookingRuleError(str(exc)) from exc
@@ -474,6 +481,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             duration_minutes=slot.duration_minutes,
             price_minor=slot.price_minor,
             currency=slot.currency,
+            laser_device_key=slot.laser_device_key,
+            laser_device_name=slot.laser_device_name,
             customer_note=request.customer_note.strip() or None,
             idempotency_key=(
                 "agent:"
@@ -597,7 +606,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         new_service_id = self._native_uuid(request.service_id, "service_id") if request.service_id else None
         idempotency_key = (
             f"agent:{request.operation_id}:reschedule:{appointment_id}:"
-            f"{new_doctor_id or 'same'}:{new_service_id or 'same'}:{requested_start.isoformat()}"
+            f"{new_doctor_id or 'same'}:{new_service_id or 'same'}:"
+            f"{request.laser_device_key or 'same-device'}:{requested_start.isoformat()}"
         )[:128]
 
         try:
@@ -610,16 +620,12 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 branch_id=new_branch_id,
                 doctor_id=new_doctor_id,
                 service_id=new_service_id,
+                laser_device_key=request.laser_device_key,
                 changed_by_user_id=None,
                 reason=request.reason.strip() or "appointment_rescheduled_by_ai",
                 idempotency_key=idempotency_key,
                 actor_type="ai",
             )
-        except AppointmentServiceChangeRequiresHuman as exc:
-            raise ClinicActionRequiresHuman(
-                str(exc),
-                appointment_id=str(appointment_id),
-            ) from exc
         except AppointmentOperationNotFound as exc:
             raise ValueError("Appointment not found for this customer.") from exc
         except AppointmentOperationError as exc:
@@ -722,12 +728,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
     def get_patient_appointments(
         self, request: AppointmentReadRequest
     ) -> AppointmentReadResult:
-        """Read a patient's appointments without leaking native ORM objects upstream.
-
-        The joined query intentionally replaces the old per-appointment service,
-        branch, and doctor lookups. The adapter returns one canonical snapshot per
-        appointment so callers never need to know Tia's relational schema.
-        """
+        """Read a patient's appointments without leaking native ORM objects upstream."""
         self.require_capability(ClinicCapability.APPOINTMENTS_READ)
 
         patient_id = self._native_uuid(request.patient_id, "patient_id")
@@ -807,6 +808,15 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     payment_status=getattr(appointment, "payment_status", "unknown"),
                     amount_paid_minor=getattr(appointment, "amount_paid_minor", None),
                     payment_method=getattr(appointment, "payment_method", "unknown"),
+                    billing_context=getattr(appointment, "billing_context", "standard"),
+                    package_external_id=getattr(appointment, "package_external_id", None),
+                    patient_package_id=(
+                        str(appointment.patient_package_id)
+                        if getattr(appointment, "patient_package_id", None)
+                        else None
+                    ),
+                    laser_device_key=getattr(appointment, "laser_device_key", None),
+                    laser_device_name=getattr(appointment, "laser_device_name", None),
                 )
             )
 
