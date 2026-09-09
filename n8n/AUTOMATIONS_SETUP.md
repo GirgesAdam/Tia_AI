@@ -16,8 +16,6 @@ Onboarding a new clinic does not require a new n8n workflow or WhatsApp credenti
 The product intentionally exposes a small set of predefined automations instead
 of a workflow builder:
 
-- `booking_confirmation` — fixed booking confirmation. It is part of the product
-  lifecycle and is always enabled; it is not shown as an optional Automation card.
 - `appointment_reminder_6h` — appointment reminder. The historical key is kept
   for database compatibility, but the admin controls the timing.
 - `post_visit_followup` — optional post-visit message that checks in, offers help
@@ -26,18 +24,22 @@ of a workflow builder:
 - `lead_not_booked_followup` — optional follow-up for an interested lead that has
   not completed a booking yet.
 
-Only the appointment reminder is enabled by default among the admin-toggleable
-rules. Booking confirmation is fixed on. Other optional features can be enabled
-or disabled independently by the admin.
+There is no separate automatic booking-confirmation rule. A successful booking is
+confirmed immediately by the customer AI in the booking conversation after the
+deterministic booking operation succeeds. This avoids a duplicate delayed system
+message for the same action.
+
+Only the appointment reminder is enabled by default. Other optional features can
+be enabled or disabled independently by the admin.
 
 The admin can configure reminder/follow-up timing in minutes, hours, or days from
 the Automations page. Tia stores the resulting `offset_minutes` on the rule and
 replans pending jobs deterministically. There is no product-level seven-day timing
 cap; planning query windows expand to cover the configured offset.
 
-Legacy 24-hour, 2-hour, and standalone no-show reminder rules may still exist in
-old data/history, but they are not part of the current product UI or default rule
-set.
+Legacy 24-hour, 2-hour, standalone no-show, and booking-confirmation rules may
+still exist in old audit/history data, but they are not part of the current product
+default rule set.
 
 ## Automation worker authentication
 
@@ -133,7 +135,6 @@ shows every template and its live Meta status, for example `approved`, `pending`
 
 Current standard template names:
 
-- `tia_booking_confirmation_ar` — fixed booking confirmation;
 - `tia_reminder_01` — configurable appointment reminder;
 - `tia_post_visit_01` — post-visit follow-up;
 - `tia_cancellation_recovery_ar` — cancellation/no-show recovery;
@@ -142,8 +143,6 @@ Current standard template names:
 The WhatsApp transport sends the exact number of positional body parameters
 required by the selected template. Current variable contracts are:
 
-- booking confirmation — **5 parameters**: customer name, service, appointment
-  date, appointment time, clinic/branch display name;
 - appointment reminder — **3 parameters**: customer name, service, appointment time;
 - post-visit follow-up — **3 parameters**: customer name, service, session date;
 - cancellation recovery — **4 parameters**: customer name, service,
@@ -247,7 +246,8 @@ Do not create one n8n workflow or WhatsApp credential per clinic.
   second no-show automation;
 - changing a rule timing replans queued jobs;
 - disabling an optional rule cancels pending jobs;
-- booking confirmation is fixed and cannot be disabled;
+- successful booking confirmation belongs to the AI booking response, not the
+  automation scheduler;
 - manual cancellation stays terminal;
 - duplicate scheduler ticks do not create duplicate jobs;
 - proactive WhatsApp routing can use the CRM patient phone when there is exactly
