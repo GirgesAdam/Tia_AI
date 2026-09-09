@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
+
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.database.session import get_db
+from app.schemas.inventory import (
+    AppointmentProductCreate,
+    AppointmentProductLineRead,
+    ClinicProductCreate,
+    ClinicProductRead,
+    InventoryItemAdjust,
+    InventoryItemCreate,
+    InventoryItemRead,
+    InventoryUsageCreate,
+    InventoryUsageRead,
+    LaserDevicePriceRead,
+    LaserDevicePriceUpsert,
+)
+from app.services.inventory import (
+    InventoryNotFound,
+    InventoryOperationError,
+    add_appointment_product,
+    add_inventory_stock,
+    create_inventory_item,
+    create_product,
+    delete_appointment_product,
+    list_appointment_products,
+    list_inventory_items,
+    list_laser_device_prices,
+    list_products,
+    record_inventory_usage,
+    upsert_laser_device_price,
+)
+from app.services.payments import refresh_appointment_payment_snapshots
+
+router = APIRouter()
+
+
+def _raise(exc: Exception) -> None:
+    code = status.HTTP_404_NOT_FOUND if isinstance(exc, InventoryNotFound) else status.HTTP_409_CONFLICT
+    raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+@router.get("/products", response_model=list[ClinicProductRead])
+def products(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ClinicProductRead]:
+    return [ClinicProductRead.model_validate(row) for row in list_products(db, workspace_id=access.workspace.id)]
+
+
+@router.post("/products", response_model=ClinicProductRead, status_code=status.HTTP_201_CREATED)
+def add_product(
+    payload: ClinicProductCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicProductRead:
+    row = create_product(
+        db,
+        workspace_id=access.workspace.id,
+        name=payload.name,
+        description=payload.description,
+    )
+    db.commit()
+    db.refresh(row)
+    return ClinicProductRead.model_validate(row)
+
+
+@router.get("/appointments/{appointment_id}/products", response_model=list[AppointmentProductLineRead])
+def appointment_products(
+    appointment_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AppointmentProductLineRead]:
+    return list_appointment_products(db, workspace_id=access.workspace.id, appointment_id=appointment_id)
+
+
+@router.post(
+    "/appointments/{appointment_id}/products",
+    response_model=list[AppointmentProductLineRead],
+    status_code=status.HTTP_201_CREATED,
+)
+def add_product_to_appointment(
+    appointment_id: UUID,
+    payload: AppointmentProductCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AppointmentProductLineRead]:
+    try:
+        add_appointment_product(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            product_id=payload.product_id,
+            quantity=payload.quantity,
+            unit_price_minor=payload.unit_price_minor,
+            created_by_user_id=access.user.id,
+        )
+        refresh_appointment_payment_snapshots(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_ids={appointment_id},
+        )
+        db.commit()
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+    return list_appointment_products(db, workspace_id=access.workspace.id, appointment_id=appointment_id)
+
+
+@router.delete("/appointments/{appointment_id}/products/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_product_from_appointment(
+    appointment_id: UUID,
+    line_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    try:
+        delete_appointment_product(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            line_id=line_id,
+        )
+        refresh_appointment_payment_snapshots(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_ids={appointment_id},
+        )
+        db.commit()
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/items", response_model=list[InventoryItemRead])
+def inventory_items(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[InventoryItemRead]:
+    return list_inventory_items(db, workspace_id=access.workspace.id)
+
+
+@router.post("/items", response_model=InventoryItemRead, status_code=status.HTTP_201_CREATED)
+def add_inventory_item(
+    payload: InventoryItemCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InventoryItemRead:
+    try:
+        result = create_inventory_item(
+            db,
+            workspace_id=access.workspace.id,
+            name=payload.name,
+            quantity_ml=payload.quantity_ml,
+            concentration_mg_per_ml=payload.concentration_mg_per_ml,
+            low_stock_threshold_ml=payload.low_stock_threshold_ml,
+            notes=payload.notes,
+        )
+        db.commit()
+        return result
+    except InventoryOperationError as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.post("/items/{item_id}/stock", response_model=InventoryItemRead)
+def increase_inventory_stock(
+    item_id: UUID,
+    payload: InventoryItemAdjust,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InventoryItemRead:
+    try:
+        result = add_inventory_stock(
+            db,
+            workspace_id=access.workspace.id,
+            item_id=item_id,
+            quantity_ml=payload.quantity_ml,
+        )
+        db.commit()
+        return result
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.post("/items/{item_id}/usage", response_model=InventoryUsageRead, status_code=status.HTTP_201_CREATED)
+def use_inventory_item(
+    item_id: UUID,
+    payload: InventoryUsageCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InventoryUsageRead:
+    try:
+        usage, _item = record_inventory_usage(
+            db,
+            workspace_id=access.workspace.id,
+            item_id=item_id,
+            used_mg=payload.used_mg,
+            appointment_id=payload.appointment_id,
+            note=payload.note,
+            created_by_user_id=access.user.id,
+        )
+        db.commit()
+        db.refresh(usage)
+        return InventoryUsageRead(
+            id=usage.id,
+            inventory_item_id=usage.inventory_item_id,
+            appointment_id=usage.appointment_id,
+            used_mg=usage.used_mg,
+            used_ml=usage.used_ml,
+            note=usage.note,
+            created_at=usage.created_at,
+        )
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.get("/laser-prices", response_model=list[LaserDevicePriceRead])
+def laser_prices(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[LaserDevicePriceRead]:
+    return list_laser_device_prices(db, workspace_id=access.workspace.id)
+
+
+@router.put("/laser-prices", response_model=list[LaserDevicePriceRead])
+def set_laser_price(
+    payload: LaserDevicePriceUpsert,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[LaserDevicePriceRead]:
+    try:
+        upsert_laser_device_price(
+            db,
+            workspace_id=access.workspace.id,
+            service_id=payload.service_id,
+            device_key=payload.device_key,
+            price_minor=payload.price_minor,
+            currency=payload.currency,
+        )
+        db.commit()
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+    return list_laser_device_prices(db, workspace_id=access.workspace.id)
