@@ -158,7 +158,7 @@ def test_exact_unavailable_time_formats_verified_nearby_slots_immediately() -> N
     assert "25/08/2026" in reply
     assert "17:45" in reply
     assert "20:00" in reply
-    assert "اختار الميعاد" in reply
+    assert "اختار الوقت" in reply
 
 
 def test_flow_decision_defaults_to_no_clear_for_backward_compatibility() -> None:

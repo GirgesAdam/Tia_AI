@@ -21,6 +21,13 @@ from app.models.clinic_integration_sync import (
     ClinicIntegrationSyncRun,
     ClinicIntegrationSyncSchedule,
 )
+from app.models.clinic_inventory import (
+    AppointmentProductLine,
+    ClinicProduct,
+    InventoryItem,
+    InventoryUsage,
+    ServiceDevicePrice,
+)
 from app.models.conversation import Conversation
 from app.models.conversation_flow_event import ConversationFlowEvent
 from app.models.conversation_flow_state import ConversationFlowState
@@ -61,6 +68,7 @@ __all__ = [
     "AnalyticsSavedView",
     "AgentAction",
     "Appointment",
+    "AppointmentProductLine",
     "AppointmentStatusHistory",
     "AutomationJob",
     "AutomationRule",
@@ -80,6 +88,7 @@ __all__ = [
     "ClinicIntegrationSyncFailure",
     "ClinicIntegrationSyncRun",
     "ClinicIntegrationSyncSchedule",
+    "ClinicProduct",
     "Conversation",
     "ConversationFlowEvent",
     "ConversationFlowState",
@@ -100,6 +109,8 @@ __all__ = [
     "ClinicHistoricalImportLink",
     "ClinicHistoricalImportRow",
     "HandoffRequest",
+    "InventoryItem",
+    "InventoryUsage",
     "Lead",
     "Message",
     "MessageDispatch",
@@ -114,6 +125,7 @@ __all__ = [
     "PaymentAllocation",
     "PaymentTransaction",
     "Service",
+    "ServiceDevicePrice",
     "Staff",
     "User",
     "Workspace",

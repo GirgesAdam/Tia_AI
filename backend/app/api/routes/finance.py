@@ -10,13 +10,22 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
-from app.schemas.finance import ExpenseCreate, ExpenseRead, ExpenseUpdate, ProfitabilityRead
+from app.schemas.finance import (
+    ExpenseCreate,
+    ExpenseRead,
+    ExpenseUpdate,
+    OutstandingBalancesRead,
+    PaymentMethodBreakdownRead,
+    ProfitabilityRead,
+)
 from app.services.finance import (
     FinanceNotFound,
     FinanceOperationError,
     create_expense,
     delete_expense,
     list_expenses,
+    outstanding_balances,
+    payment_method_breakdown,
     profitability_summary,
     update_expense,
 )
@@ -141,3 +150,37 @@ def profitability(
         )
     except FinanceOperationError as exc:
         raise _bad_request(str(exc)) from exc
+
+
+@router.get("/payment-method-breakdown", response_model=PaymentMethodBreakdownRead)
+def payment_breakdown(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> PaymentMethodBreakdownRead:
+    resolved_end = end_date or _workspace_today(access.workspace.timezone)
+    resolved_start = start_date or (resolved_end - timedelta(days=29))
+    try:
+        return payment_method_breakdown(
+            db,
+            workspace_id=access.workspace.id,
+            timezone_name=access.workspace.timezone,
+            start_date=resolved_start,
+            end_date=resolved_end,
+        )
+    except FinanceOperationError as exc:
+        raise _bad_request(str(exc)) from exc
+
+
+@router.get("/outstanding-balances", response_model=OutstandingBalancesRead)
+def outstanding_balance_report(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=200, ge=1, le=500),
+) -> OutstandingBalancesRead:
+    return outstanding_balances(
+        db,
+        workspace_id=access.workspace.id,
+        limit=limit,
+    )

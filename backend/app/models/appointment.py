@@ -79,7 +79,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="appointment_payment_status_valid",
         ),
         CheckConstraint(
-            "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'other')",
+            "payment_method IN ('unknown', 'cash', 'visa', 'instapay', 'card', 'bank_transfer', 'wallet', 'other')",
             name="appointment_payment_method_valid",
         ),
         CheckConstraint(
@@ -89,6 +89,10 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "billing_context IN ('standard', 'package_prepaid')",
             name="appointment_billing_context_valid",
+        ),
+        CheckConstraint(
+            "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
+            name="appointment_laser_device_valid",
         ),
         ForeignKeyConstraint(
             ["workspace_id"],
@@ -205,6 +209,8 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, default="EGP", server_default="EGP"
     )
+    laser_device_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    laser_device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     payment_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="unknown", server_default="unknown"
     )

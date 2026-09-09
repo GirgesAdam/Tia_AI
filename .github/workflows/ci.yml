@@ -49,7 +49,7 @@ jobs:
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0060_whatsapp_direct_credentials (head)"
+        run: test "$(python -m alembic heads)" = "0062_laser_device_scheduling (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
@@ -68,7 +68,8 @@ jobs:
           SQL
       - name: Apply migrations on clean PostgreSQL
         run: python -m alembic upgrade head
-      - run: python -m pytest -q
+      - name: Run backend tests
+        run: python -m pytest -q
   frontend:
     runs-on: ubuntu-latest
     defaults:

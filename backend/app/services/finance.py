@@ -7,11 +7,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app.models.appointment import Appointment
 from app.models.expense import Expense
+from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
 from app.schemas.finance import (
     ExpenseCreate,
     ExpenseUpdate,
+    OutstandingBalanceRow,
+    OutstandingBalancesRead,
+    PaymentMethodBreakdownRead,
+    PaymentMethodBreakdownRow,
     ProfitabilityCurrencyRead,
     ProfitabilityRead,
 )
@@ -193,10 +199,7 @@ def profitability_summary(
             func.coalesce(
                 func.sum(
                     case(
-                        (
-                            PaymentTransaction.transaction_type == "payment",
-                            PaymentTransaction.amount_minor,
-                        ),
+                        (PaymentTransaction.transaction_type == "payment", PaymentTransaction.amount_minor),
                         else_=0,
                     )
                 ),
@@ -205,10 +208,7 @@ def profitability_summary(
             func.coalesce(
                 func.sum(
                     case(
-                        (
-                            PaymentTransaction.transaction_type == "refund",
-                            PaymentTransaction.amount_minor,
-                        ),
+                        (PaymentTransaction.transaction_type == "refund", PaymentTransaction.amount_minor),
                         else_=0,
                     )
                 ),
@@ -259,8 +259,118 @@ def profitability_summary(
                 profit_minor=net_revenue - expense_total,
             )
         )
-    return ProfitabilityRead(
+    return ProfitabilityRead(start_date=start_date, end_date=end_date, currencies=rows)
+
+
+def payment_method_breakdown(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    timezone_name: str,
+    start_date: date,
+    end_date: date,
+) -> PaymentMethodBreakdownRead:
+    start_at, end_at = _utc_bounds(
         start_date=start_date,
         end_date=end_date,
-        currencies=rows,
+        timezone_name=timezone_name,
+    )
+    rows = db.execute(
+        select(
+            PaymentTransaction.payment_method,
+            PaymentTransaction.currency,
+            func.coalesce(func.sum(PaymentTransaction.amount_minor), 0),
+            func.count(PaymentTransaction.id),
+        )
+        .where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.transaction_type == "payment",
+            PaymentTransaction.created_at >= start_at,
+            PaymentTransaction.created_at < end_at,
+        )
+        .group_by(PaymentTransaction.payment_method, PaymentTransaction.currency)
+        .order_by(PaymentTransaction.currency, PaymentTransaction.payment_method)
+    ).all()
+    return PaymentMethodBreakdownRead(
+        start_date=start_date,
+        end_date=end_date,
+        rows=[
+            PaymentMethodBreakdownRow(
+                payment_method=str(method),
+                currency=str(currency).upper(),
+                amount_minor=int(amount or 0),
+                transaction_count=int(count or 0),
+            )
+            for method, currency, amount, count in rows
+        ],
+    )
+
+
+def outstanding_balances(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    limit: int = 200,
+) -> OutstandingBalancesRead:
+    """Return current patient balances from appointment financial snapshots.
+
+    Cancelled/no-show/rescheduled rows and prepaid-package appointments are not
+    collectible balances. Products added to an appointment increase its stored
+    price before this report is computed, so one balance includes session + products.
+    """
+    paid_expr = func.coalesce(Appointment.amount_paid_minor, 0)
+    balance_expr = case(
+        (Appointment.price_minor > paid_expr, Appointment.price_minor - paid_expr),
+        else_=0,
+    )
+    rows = db.execute(
+        select(
+            Patient.id,
+            Patient.first_name,
+            Patient.last_name,
+            Patient.phone,
+            Appointment.currency,
+            func.coalesce(func.sum(balance_expr), 0).label("balance_minor"),
+            func.count(Appointment.id).label("appointment_count"),
+        )
+        .join(
+            Patient,
+            (Patient.workspace_id == Appointment.workspace_id)
+            & (Patient.id == Appointment.patient_id),
+        )
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.status.notin_(("cancelled", "no_show", "rescheduled")),
+            Appointment.billing_context != "package_prepaid",
+            Appointment.price_minor > paid_expr,
+        )
+        .group_by(
+            Patient.id,
+            Patient.first_name,
+            Patient.last_name,
+            Patient.phone,
+            Appointment.currency,
+        )
+        .order_by(func.sum(balance_expr).desc())
+        .limit(max(1, min(limit, 500)))
+    ).all()
+    result_rows = [
+        OutstandingBalanceRow(
+            patient_id=patient_id,
+            patient_name=f"{first_name or ''} {last_name or ''}".strip() or "عميل",
+            phone=phone,
+            currency=str(currency).upper(),
+            balance_minor=int(balance or 0),
+            appointment_count=int(count or 0),
+        )
+        for patient_id, first_name, last_name, phone, currency, balance, count in rows
+        if int(balance or 0) > 0
+    ]
+    totals: dict[str, int] = {}
+    for row in result_rows:
+        totals[row.currency] = totals.get(row.currency, 0) + row.balance_minor
+    return OutstandingBalancesRead(
+        rows=result_rows,
+        total_patients=len({row.patient_id for row in result_rows}),
+        totals_by_currency=totals,
     )

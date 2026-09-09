@@ -23,9 +23,9 @@ AdapterFactory = Callable[..., ClinicAdapter]
 def _tia_database_factory(
     *, db: Session, workspace: Workspace, integration: ClinicIntegrationConfig
 ) -> ClinicAdapter:
-    from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
+    from app.integrations.clinic.tia_database_laser import TiaDatabaseLaserClinicAdapter
 
-    return TiaDatabaseClinicAdapter(db=db, workspace=workspace)
+    return TiaDatabaseLaserClinicAdapter(db=db, workspace=workspace)
 
 
 def _prototype_external_factory(
@@ -87,8 +87,6 @@ def registered_clinic_adapter_keys() -> frozenset[str]:
 def build_clinic_adapter(
     *, db: Session, workspace: Workspace, integration: ClinicIntegrationConfig
 ) -> ClinicAdapter:
-    """Instantiate one installed adapter from an explicit non-secret configuration."""
-
     factory = _ADAPTER_FACTORIES.get(integration.adapter_key)
     if factory is None:
         raise ClinicAdapterConfigurationError(
@@ -99,14 +97,6 @@ def build_clinic_adapter(
 
 
 def get_clinic_adapter(*, db: Session, workspace: Workspace) -> ClinicAdapter:
-    """Resolve the configured clinic-system adapter for one workspace.
-
-    Resolution fails closed. If a workspace is configured for an unavailable,
-    paused, or not-yet-implemented external source, Tia must not silently fall
-    back to its local PostgreSQL booking data and risk reading/writing the wrong
-    source of truth.
-    """
-
     integration = get_clinic_integration_config(db=db, workspace_id=workspace.id)
     if not integration.is_active:
         raise ClinicAdapterConfigurationError(

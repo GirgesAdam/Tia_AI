@@ -11,8 +11,10 @@ import {
   History,
   Inbox,
   ListTodo,
+  PackageSearch,
   Settings2,
   Sparkles,
+  Tags,
   UsersRound,
   Workflow,
 } from "lucide-react";
@@ -33,6 +35,8 @@ const primaryItems = [
 ] as const;
 
 const adminItems = [
+  { href: "/services", label: "الخدمات والأسعار", icon: Tags },
+  { href: "/inventory", label: "المخزن", icon: PackageSearch },
   { href: "/setup", label: "إعدادات العيادة", icon: Settings2 },
   { href: "/automations", label: "Automation", icon: Workflow },
   { href: "/team", label: "الفريق", icon: UsersRound },

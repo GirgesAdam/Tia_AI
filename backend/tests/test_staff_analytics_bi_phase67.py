@@ -40,7 +40,7 @@ def _schema(engine) -> None:
             duration_minutes INTEGER DEFAULT 60, buffer_before_minutes INTEGER DEFAULT 0,
             buffer_after_minutes INTEGER DEFAULT 0, price_minor INTEGER DEFAULT 0,
             currency VARCHAR(3) DEFAULT 'EGP', requires_medical_review BOOLEAN DEFAULT 0,
-            is_active BOOLEAN DEFAULT 1, created_at DATETIME, updated_at DATETIME
+            requires_laser_device BOOLEAN DEFAULT 0, is_active BOOLEAN DEFAULT 1, created_at DATETIME, updated_at DATETIME
         )
         """,
         """
@@ -74,7 +74,7 @@ def _schema(engine) -> None:
             created_by_user_id CHAR(32), rescheduled_from_appointment_id CHAR(32),
             status VARCHAR(20), source VARCHAR(20), start_at DATETIME, end_at DATETIME,
             busy_start_at DATETIME, busy_end_at DATETIME, duration_minutes INTEGER,
-            price_minor INTEGER, currency VARCHAR(3), payment_status VARCHAR(16),
+            price_minor INTEGER, currency VARCHAR(3), laser_device_key VARCHAR(40), laser_device_name VARCHAR(120), payment_status VARCHAR(16),
             amount_paid_minor INTEGER, payment_method VARCHAR(20), billing_context VARCHAR(24) DEFAULT 'standard', package_external_id VARCHAR(128), customer_note TEXT,
             cancellation_reason TEXT, idempotency_key VARCHAR(128), confirmed_at DATETIME,
             cancelled_at DATETIME, completed_at DATETIME, no_show_at DATETIME,
@@ -85,7 +85,7 @@ def _schema(engine) -> None:
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
             origin_appointment_id CHAR(32), patient_id CHAR(32), created_by_user_id CHAR(32),
-            reference_transaction_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
+            reference_transaction_id CHAR(32), patient_package_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
             currency VARCHAR(3), payment_method VARCHAR(24), source VARCHAR(24),
             external_reference VARCHAR(128), reason TEXT, idempotency_key VARCHAR(128),
             created_at DATETIME

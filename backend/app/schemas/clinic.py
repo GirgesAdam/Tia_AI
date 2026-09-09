@@ -127,6 +127,7 @@ class ServiceCreate(BaseModel):
     price_minor: int = Field(default=0, ge=0)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
     requires_medical_review: bool = False
+    requires_laser_device: bool = False
 
 
 class ServiceUpdate(BaseModel):
@@ -139,6 +140,7 @@ class ServiceUpdate(BaseModel):
     price_minor: int | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     requires_medical_review: bool | None = None
+    requires_laser_device: bool | None = None
     is_active: bool | None = None
 
 
@@ -155,6 +157,7 @@ class ServiceRead(ORMModel):
     price_minor: int
     currency: str
     requires_medical_review: bool
+    requires_laser_device: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -177,9 +180,6 @@ class DoctorBranchRead(ORMModel):
 
 
 class DoctorServiceAssignment(BaseModel):
-    # Duration is a property of Service. Keep this null-only field in the write
-    # contract so older clients that send null remain compatible while non-null
-    # doctor-specific durations are rejected.
     custom_duration_minutes: None = None
     custom_price_minor: int | None = Field(default=None, ge=0)
     is_active: bool = True

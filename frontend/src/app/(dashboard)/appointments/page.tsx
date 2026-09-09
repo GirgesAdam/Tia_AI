@@ -199,11 +199,11 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                     {manualHistory.length ? (
                       <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                         {manualHistory.slice(0, 6).map((appointment) => (
-                          <div key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs">
+                          <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-teal-300">
                             <div className="font-black text-slate-900">{serviceMap.get(appointment.service_id) || "خدمة"}</div>
-                            <div className="mt-1 text-slate-600">{formatDateTime(appointment.start_at)}</div>
+                            <div className="mt-1 text-teal-700">{formatDateTime(appointment.start_at)}</div>
                             <div className="mt-1 font-bold text-slate-700">{appointmentLabels[appointment.status] || appointment.status}</div>
-                          </div>
+                          </Link>
                         ))}
                       </div>
                     ) : <div className="mt-3 text-xs text-[var(--muted)]">لا توجد حجوزات سابقة لهذا العميل.</div>}
@@ -247,10 +247,10 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                       <div className="min-w-0"><Link href={`/patients/${appointment.patient_id}`} className="truncate text-sm font-black text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link><div className="mt-1 text-sm font-semibold text-slate-700">{serviceMap.get(appointment.service_id) || "خدمة"}</div></div>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700">{bookingMethod(appointment.source)}</span>
                     </div>
-                    <div className="mt-3 rounded-xl bg-slate-50 p-3">
-                      <div className="flex items-center justify-between gap-3"><span className="text-sm font-bold text-slate-900">{formatDateTime(appointment.start_at)}</span><span className="text-sm font-black text-slate-900">{formatMoney(appointment.price_minor, appointment.currency)}</span></div>
+                    <Link href={`/appointments/${appointment.id}`} className="mt-3 block rounded-xl bg-slate-50 p-3 transition hover:bg-teal-50">
+                      <div className="flex items-center justify-between gap-3"><span className="text-sm font-bold text-teal-800 hover:underline">{formatDateTime(appointment.start_at)}</span><span className="text-sm font-black text-slate-900">{formatMoney(appointment.price_minor, appointment.currency)}</span></div>
                       <div className="mt-2 text-xs text-[var(--muted)]"><span className="inline-flex items-center gap-1"><Stethoscope size={13} />{doctorMap.get(appointment.doctor_id) || "دكتور"}</span></div>
-                    </div>
+                    </Link>
                     <div className="mt-3"><StatusControl appointment={appointment} patientId={appointment.patient_id} canOverrideCancellation={canOverrideCancellation} now={now} /></div>
                   </div>
                 ))}
@@ -262,8 +262,8 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
                   <tbody>{appointments.map((appointment) => (
                     <tr key={appointment.id}>
                       <td className="font-bold"><Link href={`/patients/${appointment.patient_id}`} className="text-teal-800 hover:underline">{patientMap.get(appointment.patient_id) || "عميل"}</Link></td>
-                      <td className="whitespace-nowrap font-semibold text-slate-800">{formatDateTime(appointment.start_at)}</td>
-                      <td>{serviceMap.get(appointment.service_id) || "خدمة"}</td>
+                      <td className="whitespace-nowrap font-semibold"><Link href={`/appointments/${appointment.id}`} className="text-teal-800 hover:underline">{formatDateTime(appointment.start_at)}</Link></td>
+                      <td><Link href={`/appointments/${appointment.id}`} className="hover:text-teal-800 hover:underline">{serviceMap.get(appointment.service_id) || "خدمة"}</Link></td>
                       <td>{doctorMap.get(appointment.doctor_id) || "دكتور"}</td>
                       <td className="whitespace-nowrap font-semibold">{formatMoney(appointment.price_minor, appointment.currency)}</td>
                       <td><span className="font-semibold text-slate-700">{bookingMethod(appointment.source)}</span></td>

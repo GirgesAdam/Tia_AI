@@ -66,12 +66,17 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
         down_match = re.search(r'^down_revision:.*?=\s*["\']([^"\']+)', source, re.M)
         revisions[revision] = down_match.group(1) if down_match else None
 
-    assert set(long_revisions) == {"0052_payment_reference_constraint_repair"}
+    assert set(long_revisions) == {
+        "0052_payment_reference_constraint_repair",
+        "0061_clinic_ops_inventory_products",
+    }
     assert "ALTER COLUMN version_num TYPE VARCHAR(255)" in long_revisions[
         "0052_payment_reference_constraint_repair"
     ]
     assert revisions["0033_sync_authority"] == "0032_external_sync_engine"
     assert revisions["0034_drop_customer_email"] == "0033_sync_authority"
+    assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
+    assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
 
 
 

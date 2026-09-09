@@ -51,6 +51,9 @@ class Service(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     requires_medical_review: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    requires_laser_device: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

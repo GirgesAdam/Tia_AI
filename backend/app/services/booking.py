@@ -17,6 +17,7 @@ from app.models.doctor_service import DoctorService
 from app.models.service import Service
 from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
 from app.models.workspace import Workspace
+from app.services.inventory import InventoryOperationError, configured_device_price
 
 
 class BookingRuleError(ValueError):
@@ -46,6 +47,8 @@ class SlotCandidate:
     duration_minutes: int
     price_minor: int
     currency: str
+    laser_device_key: str | None = None
+    laser_device_name: str | None = None
 
 
 def get_effective_booking_settings(db: Session, workspace_id: UUID) -> EffectiveBookingSettings:
@@ -127,12 +130,6 @@ def _window_intersections(
 
 
 def service_duration_minutes(service: Service) -> int:
-    """Return the clinic-wide duration for a service.
-
-    Duration is intentionally service-owned. Doctor-service assignments may
-    control eligibility and price, but every doctor blocks the same amount of
-    time for the same service.
-    """
     return int(service.duration_minutes)
 
 
@@ -158,11 +155,8 @@ def calculate_availability(
     now: datetime | None = None,
     preloaded_branch: Branch | None = None,
     preloaded_service: Service | None = None,
+    laser_device_key: str | None = None,
 ) -> tuple[str, list[SlotCandidate]]:
-    # Composite booking reads already resolve active branch/service rows before
-    # availability calculation. Reuse those exact ORM rows when supplied instead
-    # of re-reading them over a remote DB connection. Callers that do not have
-    # verified rows retain the original lookup/validation path.
     if preloaded_branch is not None:
         if (
             preloaded_branch.id != branch_id
@@ -200,6 +194,24 @@ def calculate_availability(
         )
         if service is None:
             raise BookingRuleError("Service not found or inactive.")
+
+    requires_device = bool(getattr(service, "requires_laser_device", False))
+    if requires_device and not laser_device_key:
+        raise BookingRuleError("Laser device choice is required for this service.")
+    if not requires_device and laser_device_key:
+        raise BookingRuleError("A laser device cannot be selected for this service.")
+
+    device_price = None
+    if requires_device:
+        try:
+            device_price = configured_device_price(
+                db,
+                workspace_id=workspace.id,
+                service_id=service.id,
+                device_key=laser_device_key,
+            )
+        except InventoryOperationError as exc:
+            raise BookingRuleError(str(exc)) from exc
 
     tz = resolve_timezone(workspace, branch)
     settings = get_effective_booking_settings(db, workspace.id)
@@ -277,12 +289,22 @@ def calculate_availability(
     for appointment in existing:
         by_doctor.setdefault(appointment.doctor_id, []).append(appointment)
 
+    device_existing: list[Appointment] = []
+    if requires_device and laser_device_key:
+        device_stmt = select(Appointment).where(
+            Appointment.workspace_id == workspace.id,
+            Appointment.laser_device_key == laser_device_key,
+            Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            Appointment.busy_start_at < day_end_utc,
+            Appointment.busy_end_at > day_start_utc,
+        )
+        if exclude_appointment_id is not None:
+            device_stmt = device_stmt.where(Appointment.id != exclude_appointment_id)
+        device_existing = list(db.scalars(device_stmt))
+
     minimum_start_utc = now_utc + timedelta(minutes=settings.minimum_notice_minutes)
     slots: list[SlotCandidate] = []
 
-    # Load all relevant doctor schedules in one query. This preserves the exact
-    # availability rules while avoiding one DB round trip per doctor when the
-    # customer did not constrain the request to a single doctor.
     doctor_hour_rows = list(
         db.scalars(
             select(DoctorWorkingHour).where(
@@ -320,13 +342,9 @@ def calculate_availability(
         doctor_hours = doctor_hours_by_doctor.get(doctor.id, [])
         dated_windows = windows_by_doctor.get(doctor.id, [])
         if doctor.doctor_type == "visiting":
-            availability_intervals = _window_intersections(
-                branch_hours, dated_windows, booking_date, tz
-            )
+            availability_intervals = _window_intersections(branch_hours, dated_windows, booking_date, tz)
         else:
-            availability_intervals = _interval_intersections(
-                branch_hours, doctor_hours, booking_date, tz
-            )
+            availability_intervals = _interval_intersections(branch_hours, doctor_hours, booking_date, tz)
             if dated_windows:
                 availability_intervals.extend(
                     _window_intersections(branch_hours, dated_windows, booking_date, tz)
@@ -334,25 +352,27 @@ def calculate_availability(
         if not availability_intervals:
             continue
 
-        # Clinic rule: appointment duration belongs to the service, never to the doctor.
-        # DoctorService can still override price/assignment metadata for backwards compatibility,
-        # but it must not change how long the chair/doctor is blocked.
         duration_minutes = service_duration_minutes(service)
-        price_minor = (
-            doctor_service.custom_price_minor
-            if doctor_service.custom_price_minor is not None
-            else service.price_minor
-        )
-        currency = service.currency or settings.default_currency
+        if device_price is not None:
+            price_minor = int(device_price.price_minor or 0)
+            currency = device_price.currency
+            device_key = device_price.device_key
+            device_name = device_price.device_name
+        else:
+            price_minor = (
+                doctor_service.custom_price_minor
+                if doctor_service.custom_price_minor is not None
+                else service.price_minor
+            )
+            currency = service.currency or settings.default_currency
+            device_key = None
+            device_name = None
         before = timedelta(minutes=service.buffer_before_minutes)
         duration = timedelta(minutes=duration_minutes)
         after = timedelta(minutes=service.buffer_after_minutes)
 
         for interval_start, interval_end in availability_intervals:
-            candidate = ceil_to_interval(
-                interval_start + before,
-                settings.slot_interval_minutes,
-            )
+            candidate = ceil_to_interval(interval_start + before, settings.slot_interval_minutes)
             while True:
                 service_start = candidate
                 service_end = service_start + duration
@@ -366,11 +386,17 @@ def calculate_availability(
                 busy_start_utc = busy_start.astimezone(UTC)
                 busy_end_utc = busy_end.astimezone(UTC)
 
-                if start_utc >= minimum_start_utc and not _overlaps_existing(
+                doctor_busy = _overlaps_existing(
                     busy_start_utc,
                     busy_end_utc,
                     by_doctor.get(doctor.id, []),
-                ):
+                )
+                device_busy = bool(device_key) and _overlaps_existing(
+                    busy_start_utc,
+                    busy_end_utc,
+                    device_existing,
+                )
+                if start_utc >= minimum_start_utc and not doctor_busy and not device_busy:
                     slots.append(
                         SlotCandidate(
                             branch_id=branch.id,
@@ -383,6 +409,8 @@ def calculate_availability(
                             duration_minutes=duration_minutes,
                             price_minor=price_minor,
                             currency=currency,
+                            laser_device_key=device_key,
+                            laser_device_name=device_name,
                         )
                     )
 
@@ -400,6 +428,7 @@ def find_exact_slot(
     doctor_id: UUID,
     requested_start_at: datetime,
     exclude_appointment_id: UUID | None = None,
+    laser_device_key: str | None = None,
 ) -> SlotCandidate:
     requested_utc = requested_start_at.astimezone(UTC)
 
@@ -423,6 +452,7 @@ def find_exact_slot(
         booking_date=booking_date,
         doctor_id=doctor_id,
         exclude_appointment_id=exclude_appointment_id,
+        laser_device_key=laser_device_key,
     )
     for slot in slots:
         if slot.start_at == requested_utc:

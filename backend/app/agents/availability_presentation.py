@@ -4,6 +4,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.services.laser_slot_metadata import decode_laser_slot_branch
+
 
 def _parse_dt(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -37,17 +39,20 @@ def _clock_ar(value: datetime) -> str:
     return f"{display_hour}:{minute:02d} {suffix}"
 
 
-def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
-    """Merge verified appointment slots into human-friendly free-time windows.
+def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
+    device_key = str(slot.get("laser_device_key") or "").strip()
+    device_name = str(slot.get("laser_device_name") or "").strip()
+    if device_key or device_name:
+        return device_key, device_name
+    metadata = decode_laser_slot_branch(slot.get("branch_name"))
+    return metadata.device_key or "", metadata.device_name or ""
 
-    Slots remain the execution authority. This function is presentation-only: it
-    unions overlapping/touching intervals per doctor so a dense 15-minute grid is
-    shown as e.g. 3 PM–6 PM, then 7 PM–9 PM around an existing booking.
-    """
+
+def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
 
-    grouped: dict[tuple[str, str], list[tuple[datetime, datetime]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str], list[tuple[datetime, datetime]]] = defaultdict(list)
     for slot in slots:
         if not isinstance(slot, dict):
             continue
@@ -56,14 +61,12 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         if start is None or end is None or end <= start:
             continue
         doctor_id = str(slot.get("doctor_id") or "")
-        doctor_name = (
-            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
-        grouped[(doctor_id, doctor_name)].append((start, end))
+        doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        device_key, device_name = _device_from_slot(slot)
+        grouped[(doctor_id, doctor_name, device_key, device_name)].append((start, end))
 
     windows: list[dict[str, Any]] = []
-    for (doctor_id, doctor_name), intervals in grouped.items():
+    for (doctor_id, doctor_name, device_key, device_name), intervals in grouped.items():
         intervals.sort(key=lambda item: (item[0], item[1]))
         merged: list[list[datetime]] = []
         for start, end in intervals:
@@ -78,6 +81,8 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
                 {
                     "doctor_id": doctor_id or None,
                     "doctor_name": doctor_name,
+                    "laser_device_key": device_key or None,
+                    "laser_device_name": device_name or None,
                     "start_local": start.isoformat(),
                     "end_local": end.isoformat(),
                     "start_time_24h": start.strftime("%H:%M"),
@@ -87,6 +92,7 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
 
     windows.sort(
         key=lambda row: (
+            str(row.get("laser_device_name") or ""),
             str(row.get("doctor_name") or ""),
             str(row.get("start_local") or ""),
         )
@@ -106,24 +112,19 @@ def _requested_time(output: dict[str, Any]) -> str:
     return lower if lower and lower == upper else ""
 
 
-def _closing(*, reschedule: bool, booking_authorized: bool, ranges: bool) -> str:
+def _closing(
+    *,
+    reschedule: bool,
+    booking_authorized: bool,
+    ranges: bool,
+    has_devices: bool = False,
+) -> str:
+    choice = "الجهاز والوقت" if has_devices else "الوقت"
     if reschedule:
-        return (
-            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أغيّر الموعد."
-            if ranges
-            else "اختار الميعاد اللي يناسبك عشان أغيّره."
-        )
+        return f"قولي {choice} اللي يناسبك جوه الفترات دي عشان أغيّر الموعد." if ranges else f"اختار {choice} اللي يناسبك عشان أغيّره."
     if booking_authorized:
-        return (
-            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أحجزه."
-            if ranges
-            else "اختار الميعاد اللي يناسبك عشان أحجزه."
-        )
-    return (
-        "لو حابب تحجز، قولي الوقت اللي يناسبك جوه الفترات دي."
-        if ranges
-        else "لو حابب تحجز، قولي الميعاد اللي يناسبك."
-    )
+        return f"قولي {choice} اللي يناسبك جوه الفترات دي عشان أحجزه." if ranges else f"اختار {choice} اللي يناسبك عشان أحجزه."
+    return f"لو حابب تحجز، قولي {choice} اللي يناسبك جوه الفترات دي." if ranges else f"لو حابب تحجز، قولي {choice} اللي يناسبك."
 
 
 def _legacy_slot_reply(
@@ -133,31 +134,25 @@ def _legacy_slot_reply(
     reschedule: bool,
     booking_authorized: bool,
 ) -> str | None:
-    """Keep old persisted/fake tool payloads useful without exposing branch data.
-
-    Real current availability payloads contain full interval timestamps and are
-    rendered as continuous windows. This path exists only for older/minimal
-    payloads that contain verified start times but not enough data to reconstruct
-    the continuous interval safely.
-    """
-    by_doctor: dict[str, list[str]] = defaultdict(list)
-    for slot in slots:
-        if not isinstance(slot, dict):
+    grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+    has_devices = False
+    for raw_slot in slots:
+        if not isinstance(raw_slot, dict):
             continue
-        start = str(slot.get("start_time_24h") or "").strip()
+        start = str(raw_slot.get("start_time_24h") or "").strip()
         if not start:
             continue
-        doctor = (
-            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
-        if start not in by_doctor[doctor]:
-            by_doctor[doctor].append(start)
+        doctor = str(raw_slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        _device_key, device = _device_from_slot(raw_slot)
+        has_devices = has_devices or bool(device)
+        if start not in grouped[(doctor, device)]:
+            grouped[(doctor, device)].append(start)
 
     lines: list[str] = []
-    for doctor, starts in list(by_doctor.items())[:4]:
+    for (doctor, device), starts in list(grouped.items())[:8]:
         if starts:
-            lines.append(f"{doctor}: " + "، ".join(starts[:4]))
+            prefix = f"{device} مع {doctor}" if device else doctor
+            lines.append(f"{prefix}: " + "، ".join(starts[:4]))
     if not lines:
         return None
 
@@ -168,14 +163,17 @@ def _legacy_slot_reply(
         requested_text = f" {requested}" if requested else ""
         intro = f"ميعاد{requested_text}{when} مش متاح. دي أقرب المواعيد المتاحة:"
     else:
-        intro = (
-            f"دي المواعيد البديلة المتاحة{when}:"
-            if reschedule
-            else f"دي أقرب المواعيد المتاحة{when}:"
-        )
-    return "\n".join(
-        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=False)]
-    )
+        intro = f"دي المواعيد البديلة المتاحة{when}:" if reschedule else f"دي أقرب المواعيد المتاحة{when}:"
+    return "\n".join([
+        intro,
+        *lines,
+        _closing(
+            reschedule=reschedule,
+            booking_authorized=booking_authorized,
+            ranges=False,
+            has_devices=has_devices,
+        ),
+    ])
 
 
 def format_availability_windows_reply(
@@ -209,26 +207,23 @@ def format_availability_windows_reply(
             requested_window.get(key) for key in ("not_before_time", "not_after_time")
         )
         if has_requested_window or output.get("requested_time_unavailable"):
-            return (
-                f"مفيش مواعيد متاحة في الوقت المطلوب{when}. "
-                "ممكن أشوفلك وقت تاني في نفس اليوم لو تحب."
-            )
+            return f"مفيش مواعيد متاحة في الوقت المطلوب{when}. ممكن أشوفلك وقت تاني في نفس اليوم لو تحب."
         return f"مفيش مواعيد متاحة{when}. ممكن أشوفلك يوم تاني لو تحب."
 
-    by_doctor: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    has_devices = False
     for window in windows:
         if not isinstance(window, dict):
             continue
-        doctor = (
-            str(window.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
-        by_doctor[doctor].append(window)
+        doctor = str(window.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        device = str(window.get("laser_device_name") or "").strip()
+        has_devices = has_devices or bool(device)
+        grouped[(doctor, device)].append(window)
 
     lines: list[str] = []
-    for doctor, doctor_windows in list(by_doctor.items())[:4]:
+    for (doctor, device), group_windows in list(grouped.items())[:8]:
         ranges: list[str] = []
-        for window in doctor_windows[:4]:
+        for window in group_windows[:4]:
             start = _parse_dt(window.get("start_local"))
             end = _parse_dt(window.get("end_local"))
             if start is None or end is None:
@@ -236,8 +231,12 @@ def format_availability_windows_reply(
             ranges.append(f"من {_clock_ar(start)} لـ{_clock_ar(end)}")
         if not ranges:
             continue
-        joined = "، و".join(ranges)
-        lines.append(f"المتاح مع {doctor} {joined}.")
+        label = f"{device} مع {doctor}" if device else f"مع {doctor}"
+        lines.append(
+            f"المتاح على {label} {'، و'.join(ranges)}."
+            if device
+            else f"المتاح {label} {'، و'.join(ranges)}."
+        )
 
     if not lines:
         return _legacy_slot_reply(
@@ -255,9 +254,16 @@ def format_availability_windows_reply(
         when = f" يوم {date_text}" if date_text else ""
         intro = f"ميعاد{requested_text}{when} مش متاح. أقرب فترات متاحة:"
 
-    return "\n".join(
-        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=True)]
-    )
+    return "\n".join([
+        intro,
+        *lines,
+        _closing(
+            reschedule=reschedule,
+            booking_authorized=booking_authorized,
+            ranges=True,
+            has_devices=has_devices,
+        ),
+    ])
 
 
 _LOCATION_KEYS = {
@@ -272,15 +278,24 @@ _LOCATION_KEYS = {
     "preferred_branch_id",
     "primary_branch_id",
 }
+_DURATION_KEYS = {
+    "duration",
+    "duration_minutes",
+    "service_duration_minutes",
+}
 
 
 def customer_visible_verified_data(value: Any) -> Any:
-    """Remove storage-level location metadata before customer-language composition."""
+    """Remove internal location and scheduling-duration metadata before customer composition.
+
+    Appointment date/time remains customer-visible. Service/session duration is an
+    internal scheduling fact and must never be exposed in Tia's customer reply.
+    """
     if isinstance(value, dict):
         return {
             key: customer_visible_verified_data(item)
             for key, item in value.items()
-            if key not in _LOCATION_KEYS
+            if key not in _LOCATION_KEYS and key not in _DURATION_KEYS
         }
     if isinstance(value, list):
         return [customer_visible_verified_data(item) for item in value]

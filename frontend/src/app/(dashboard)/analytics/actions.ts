@@ -243,7 +243,10 @@ export async function runAnalyticsCatalogAction(
         marketing_consent: optionalBoolean(formData, "marketing_consent"),
       }),
     });
-    return { result, error: null };
+    // The dashboard has its own concise deterministic "how it is calculated"
+    // guide. Keep verbose backend definitions out of the customer-facing report
+    // card while preserving them on the API for other consumers.
+    return { result: { ...result, definitions: [] }, error: null };
   } catch (error) {
     return {
       result: previousState.result,
