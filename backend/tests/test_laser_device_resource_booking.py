@@ -66,11 +66,16 @@ def _fixture(*, doctor_existing=None, device_existing=None):
         )
     ]
 
+    doctor_existing_rows = list(doctor_existing or [])
+    for appointment in doctor_existing_rows:
+        if not hasattr(appointment, "doctor_id"):
+            appointment.doctor_id = doctor_id
+
     db = _FakeDb(
         assignments=[(doctor_branch, doctor_service, doctor)],
         scalar_batches=[
             branch_hours,
-            list(doctor_existing or []),
+            doctor_existing_rows,
             list(device_existing or []),
             doctor_hours,
             [],
@@ -201,7 +206,7 @@ def test_database_migration_guards_concurrent_same_device_overlap() -> None:
     ).read_text(encoding="utf-8")
 
     assert "CREATE EXTENSION IF NOT EXISTS btree_gist" in migration
-    assert '"excl_appointments_laser_device_busy_time"' in migration
-    assert '("laser_device_key", "=")' in migration
+    assert "excl_appointments_laser_device_busy_time" in migration
+    assert "laser_device_key WITH =" in migration
     assert "tstzrange(busy_start_at, busy_end_at, '[)')" in migration
     assert "('pending', 'confirmed', 'checked_in', 'in_progress')" in migration

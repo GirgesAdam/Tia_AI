@@ -162,4 +162,4 @@ def test_activity_ui_is_admin_only_filterable_and_available_on_mobile_navigation
 
 
 def test_readiness_tracks_activity_audit_migration_head() -> None:
-    assert EXPECTED_MIGRATION_HEAD == "0060_whatsapp_direct_credentials"
+    assert EXPECTED_MIGRATION_HEAD == "0062_laser_device_scheduling"

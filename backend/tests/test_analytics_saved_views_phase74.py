@@ -234,7 +234,7 @@ def test_phase74_routes_frontend_and_migration_use_deterministic_saved_view_cont
     assert "ENABLE ROW LEVEL SECURITY" in migration
     assert "REVOKE ALL" in migration
     assert "created_by_user_id" in migration and "ondelete=\"CASCADE\"" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"' in readiness
     assert 'tiaRequest<AnalyticsSavedView[]>("/analytics/views?limit=20")' in page
     assert "savedViews.length > 0" in catalog
     assert "savedViews.map" in catalog

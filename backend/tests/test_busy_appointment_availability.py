@@ -64,7 +64,7 @@ def test_booking_engine_filters_active_appointments_before_appending_slots() -> 
     ).read_text(encoding="utf-8")
 
     active_query = source.index("Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES)")
-    overlap_filter = source.index("not _overlaps_existing(", active_query)
+    overlap_filter = source.index("doctor_busy = _overlaps_existing(", active_query)
     slot_append = source.index("slots.append(", overlap_filter)
 
     assert active_query < overlap_filter < slot_append

@@ -93,7 +93,7 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:

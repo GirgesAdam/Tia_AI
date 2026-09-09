@@ -92,7 +92,7 @@ def test_reschedule_reallocates_ledger_without_copying_financial_facts() -> None
     assert "reallocate_appointment_payments_on_reschedule" in service
     assert ".values(appointment_id=to_appointment_id)" in payments
     assert "origin_appointment_id" in payments
-    assert "Amount, type, origin_appointment_id and timestamps remain immutable" in payments
+    assert ".values(origin_appointment_id=to_appointment_id)" not in payments
 
 
 def test_migration_backfills_legacy_snapshots_and_advances_readiness_head() -> None:
@@ -114,7 +114,8 @@ def test_historical_import_writes_canonical_payment_ledger_directly() -> None:
     assert "PaymentTransaction(" in source
     assert 'source="integration"' in source
     assert 'transaction_type="refund" if signed_amount < 0 else "payment"' in source
-    assert "If any ledger rows already exist, their derived snapshot wins" in payments
+    assert "if rows:" in payments
+    assert "sync_appointment_payment_snapshot(appointment, list(rows))" in payments
 
 
 def test_analytics_patient_timeline_and_appointment_ui_use_canonical_ledger() -> None:
