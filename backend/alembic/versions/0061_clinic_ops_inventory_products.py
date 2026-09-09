@@ -139,13 +139,13 @@ def upgrade() -> None:
         "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
     )
 
-    op.drop_constraint("ck_appointments_appointment_payment_method_valid", "appointments", type_="check")
+    op.drop_constraint(op.f("ck_appointments_appointment_payment_method_valid"), "appointments", type_="check")
     op.create_check_constraint(
         "appointment_payment_method_valid",
         "appointments",
         "payment_method IN ('unknown', 'cash', 'visa', 'instapay', 'card', 'bank_transfer', 'wallet', 'other')",
     )
-    op.drop_constraint("ck_payment_transactions_payment_transaction_method_valid", "payment_transactions", type_="check")
+    op.drop_constraint(op.f("ck_payment_transactions_payment_transaction_method_valid"), "payment_transactions", type_="check")
     op.create_check_constraint(
         "payment_transaction_method_valid",
         "payment_transactions",
@@ -163,19 +163,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_payment_transactions_payment_transaction_method_valid", "payment_transactions", type_="check")
+    op.drop_constraint(op.f("ck_payment_transactions_payment_transaction_method_valid"), "payment_transactions", type_="check")
     op.create_check_constraint(
         "payment_transaction_method_valid",
         "payment_transactions",
         "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'online', 'other')",
     )
-    op.drop_constraint("ck_appointments_appointment_payment_method_valid", "appointments", type_="check")
+    op.drop_constraint(op.f("ck_appointments_appointment_payment_method_valid"), "appointments", type_="check")
     op.create_check_constraint(
         "appointment_payment_method_valid",
         "appointments",
         "payment_method IN ('unknown', 'cash', 'card', 'bank_transfer', 'wallet', 'other')",
     )
-    op.drop_constraint("ck_appointments_appointment_laser_device_valid", "appointments", type_="check")
+    op.drop_constraint(op.f("ck_appointments_appointment_laser_device_valid"), "appointments", type_="check")
     op.drop_column("appointments", "laser_device_name")
     op.drop_column("appointments", "laser_device_key")
     op.drop_table("inventory_usages")
