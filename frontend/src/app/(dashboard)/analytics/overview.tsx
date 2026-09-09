@@ -1,4 +1,4 @@
-import { CalendarCheck2, CircleDollarSign, ContactRound, ReceiptText, TrendingDown, TrendingUp } from "lucide-react";
+import { CalendarCheck2, CircleDollarSign, ReceiptText, TrendingDown, TrendingUp } from "lucide-react";
 
 import { StatCard } from "@/components/stat-card";
 import { formatMoney } from "@/lib/format";
@@ -16,6 +16,16 @@ type Profitability = {
     net_revenue_minor: number;
     expenses_minor: number;
     profit_minor: number;
+  }>;
+};
+
+type FinanceTrend = {
+  currency: string;
+  points: Array<{
+    label: string;
+    start_date: string;
+    end_date: string;
+    net_revenue_minor: number;
   }>;
 };
 
@@ -61,7 +71,8 @@ export async function AnalyticsOverviewPanel({
   fullYear: boolean;
 }) {
   const granularity = fullYear ? "month" : "day";
-  const [appointments, newPatients, revenue, profitability, paymentBreakdown] = await Promise.all([
+  const trendMode = fullYear ? "year" : "month";
+  const [appointments, newPatients, trend, profitability, paymentBreakdown] = await Promise.all([
     tiaRequest<AnalyticsCatalogRun>("/analytics/catalog/run", {
       method: "POST",
       body: JSON.stringify(requestFor("appointment_overview", startDate, endDate)),
@@ -70,18 +81,14 @@ export async function AnalyticsOverviewPanel({
       method: "POST",
       body: JSON.stringify(requestFor("new_patients_trend", startDate, endDate, granularity)),
     }),
-    tiaRequest<AnalyticsCatalogRun>("/analytics/catalog/run", {
-      method: "POST",
-      body: JSON.stringify(requestFor("revenue_trend", startDate, endDate, granularity)),
-    }),
+    tiaRequest<FinanceTrend>(`/finance/dashboard-trend?start_date=${startDate}&end_date=${endDate}&mode=${trendMode}`),
     tiaRequest<Profitability>(`/finance/profitability?start_date=${startDate}&end_date=${endDate}`),
     tiaRequest<PaymentBreakdown>(`/finance/payment-method-breakdown?start_date=${startDate}&end_date=${endDate}`),
   ]);
 
   const finance = profitability.currencies.find((item) => item.currency === "EGP") || profitability.currencies[0];
-  const currency = finance?.currency || "EGP";
+  const currency = finance?.currency || trend.currency || "EGP";
   const newPatientSeries = newPatients.chart_data.series.find((item) => item.key === "new_patients") || newPatients.chart_data.series[0];
-  const revenueSeries = revenue.chart_data.series.find((item) => item.key === "net_paid_minor") || revenue.chart_data.series[0];
   const newPatientCount = newPatientSeries?.values.reduce<number>((sum, value) => sum + (value ?? 0), 0) ?? 0;
   const paymentMethods = paymentBreakdown.rows.filter((row) => row.currency === currency);
 
@@ -89,12 +96,12 @@ export async function AnalyticsOverviewPanel({
     <section className="mb-7">
       <div className="mb-3">
         <h2 className="text-lg font-black text-slate-950">ملخص {periodLabel}</h2>
-        <p className="mt-1 text-xs text-[var(--muted)]">الفترة كاملة من {startDate} إلى {endDate}. كل الأرقام المالية مبنية على transactions والمصروفات المسجلة فعليًا.</p>
+        <p className="mt-1 text-xs text-[var(--muted)]">الفترة كاملة من {startDate} إلى {endDate}. الأرقام المالية مبنية على المدفوعات والمرتجعات والمصروفات المسجلة فعليًا.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="إجمالي المقبوضات" value={finance ? formatMoney(finance.gross_payments_minor, currency) : "—"} detail="دفعات فعلية مسجلة خلال الفترة" icon={CircleDollarSign} />
-        <StatCard label="المرتجعات" value={finance ? formatMoney(finance.refunds_minor, currency) : "—"} detail="Refund transactions المسجلة خلال الفترة" icon={TrendingDown} />
+        <StatCard label="المرتجعات" value={finance ? formatMoney(finance.refunds_minor, currency) : "—"} detail="مبالغ مرتجعة مسجلة خلال الفترة" icon={TrendingDown} />
         <StatCard label="صافي الدخل" value={finance ? formatMoney(finance.net_revenue_minor, currency) : "—"} detail="المقبوضات بعد خصم المرتجعات" icon={TrendingUp} />
         <StatCard label="المصروفات" value={finance ? formatMoney(finance.expenses_minor, currency) : "—"} detail="المصروفات المسجلة بتاريخ وقوعها" icon={ReceiptText} />
         <StatCard label="الربح المسجل" value={finance ? formatMoney(finance.profit_minor, currency) : "—"} detail="صافي الدخل بعد المصروفات المسجلة" icon={TrendingUp} />
@@ -106,8 +113,7 @@ export async function AnalyticsOverviewPanel({
           fullYear={fullYear}
           startDate={startDate}
           endDate={endDate}
-          revenueLabels={revenue.chart_data.labels}
-          revenueValues={revenueSeries?.values || []}
+          revenuePoints={trend.points.map((point) => ({ label: point.label, value: point.net_revenue_minor }))}
           newPatientLabels={newPatients.chart_data.labels}
           newPatientValues={newPatientSeries?.values || []}
           paymentMethods={paymentMethods.map((row) => ({ payment_method: row.payment_method, amount_minor: row.amount_minor }))}
