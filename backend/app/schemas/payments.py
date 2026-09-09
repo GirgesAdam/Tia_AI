@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-PaymentMethod = Literal["cash", "card", "bank_transfer", "wallet", "online", "other"]
+PaymentMethod = Literal["cash", "visa", "instapay"]
 PaymentTransactionType = Literal["payment", "refund"]
 
 
@@ -66,7 +66,10 @@ class AppointmentPaymentSummaryRead(BaseModel):
     appointment_id: UUID
     patient_id: UUID
     currency: str
+    # price_minor is the complete amount due: session + manually-priced products.
     price_minor: int
+    service_price_minor: int = 0
+    products_total_minor: int = 0
     gross_paid_minor: int
     refunded_minor: int
     net_paid_minor: int
