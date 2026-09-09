@@ -79,6 +79,12 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
     tiaRequest<AnalyticsCatalog>("/analytics/catalog"),
     tiaRequest<AnalyticsSavedView[]>("/analytics/views?limit=20"),
   ]);
+  const visibleCatalog: AnalyticsCatalog = {
+    ...catalog,
+    analyses: catalog.analyses.filter((analysis) => analysis.category !== "doctors"),
+    doctors: [],
+  };
+  const visibleSavedViews = savedViews.filter((view) => visibleCatalog.analyses.some((analysis) => analysis.key === view.analysis_key));
   const years = Array.from({ length: Math.max(1, period.currentYear - 2019) }, (_, index) => period.currentYear - index);
 
   return (
@@ -120,9 +126,9 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       <section>
         <div className="mb-3">
           <h2 className="text-lg font-black text-slate-950">التقارير التفصيلية</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">اختر تقريرًا بصريًا واضحًا. تحت كل تقرير ستجد لماذا يفيدك وكيف يتم حسابه.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">اختر من الأداء أو العملاء. تحت كل تقرير ستجد فائدته وطريقة حسابه باختصار.</p>
         </div>
-        <AnalyticsCatalogPanel catalog={catalog} savedViews={savedViews} />
+        <AnalyticsCatalogPanel catalog={visibleCatalog} savedViews={visibleSavedViews} />
       </section>
 
       <Card className="mb-5">
