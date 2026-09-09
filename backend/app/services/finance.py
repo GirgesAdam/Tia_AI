@@ -285,6 +285,7 @@ def payment_method_breakdown(
         .where(
             PaymentTransaction.workspace_id == workspace_id,
             PaymentTransaction.transaction_type == "payment",
+            PaymentTransaction.payment_method.in_(("cash", "visa", "instapay")),
             PaymentTransaction.created_at >= start_at,
             PaymentTransaction.created_at < end_at,
         )
@@ -312,11 +313,12 @@ def outstanding_balances(
     workspace_id: UUID,
     limit: int = 200,
 ) -> OutstandingBalancesRead:
-    """Return current patient balances from appointment financial snapshots.
+    """Return balances for completed sessions that have not been fully paid.
 
-    Cancelled/no-show/rescheduled rows and prepaid-package appointments are not
-    collectible balances. Products added to an appointment increase its stored
-    price before this report is computed, so one balance includes session + products.
+    A patient appears only after the appointment is completed and the stored amount
+    paid remains below the appointment total. Prepaid-package sessions are excluded
+    because their commercial payment belongs to the package rather than the visit.
+    Products added to an appointment remain part of the amount due.
     """
     paid_expr = func.coalesce(Appointment.amount_paid_minor, 0)
     balance_expr = case(
@@ -340,7 +342,7 @@ def outstanding_balances(
         )
         .where(
             Appointment.workspace_id == workspace_id,
-            Appointment.status.notin_(("cancelled", "no_show", "rescheduled")),
+            Appointment.status == "completed",
             Appointment.billing_context != "package_prepaid",
             Appointment.price_minor > paid_expr,
         )
