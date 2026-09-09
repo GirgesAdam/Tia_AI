@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bookmark, CalendarRange, Megaphone } from "lucide-react";
+import { Bookmark, CalendarRange, HandCoins, Megaphone } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -128,6 +128,15 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
           <h2 className="text-lg font-black text-slate-950">التقارير التفصيلية</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">اختر من الأداء أو العملاء. تحت كل تقرير ستجد فائدته وطريقة حسابه باختصار.</p>
         </div>
+
+        <Link href="/analytics/outstanding-balances" className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 transition hover:border-amber-300 hover:bg-amber-50">
+          <div>
+            <div className="font-black text-slate-950">العملاء اللي عليهم مبالغ</div>
+            <div className="mt-1 text-xs font-semibold text-slate-600">تقرير اختياري للعملاء الذين أكملوا جلسة وما زال جزء من قيمتها غير مدفوع.</div>
+          </div>
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white text-amber-700"><HandCoins size={18} /></span>
+        </Link>
+
         <AnalyticsCatalogPanel catalog={visibleCatalog} savedViews={visibleSavedViews} />
       </section>
 
