@@ -1,6 +1,6 @@
 """Retire the automatic booking confirmation message.
 
-Revision ID: 0063_retire_booking_confirmation_automation
+Revision ID: 0063_retire_booking_confirmation
 Revises: 0062_laser_device_scheduling
 Create Date: 2026-09-09
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0063_retire_booking_confirmation_automation"
+revision: str = "0063_retire_booking_confirmation"
 down_revision: str | Sequence[str] | None = "0062_laser_device_scheduling"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
