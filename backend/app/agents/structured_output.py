@@ -182,6 +182,7 @@ def invoke_typed_structured_output(
     structured = model.with_structured_output(
         schema=provider_schema,
         method="json_schema",
+        strict=True,
     )
 
     result = invoke_model(lambda: structured.invoke(messages))
