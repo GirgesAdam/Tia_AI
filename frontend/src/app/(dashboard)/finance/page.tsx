@@ -1,4 +1,5 @@
-import { Banknote, CalendarRange, Pencil, Plus, Trash2, TrendingDown, TrendingUp, WalletCards } from "lucide-react";
+import Link from "next/link";
+import { Banknote, CalendarRange, CreditCard, Pencil, Plus, Receipt, Trash2, TrendingDown, TrendingUp, UsersRound, WalletCards } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,30 @@ type Profitability = {
   currencies: ProfitabilityCurrency[];
 };
 
+type PaymentBreakdown = {
+  start_date: string;
+  end_date: string;
+  rows: Array<{
+    payment_method: string;
+    currency: string;
+    amount_minor: number;
+    transaction_count: number;
+  }>;
+};
+
+type OutstandingBalances = {
+  rows: Array<{
+    patient_id: string;
+    patient_name: string;
+    phone: string | null;
+    currency: string;
+    balance_minor: number;
+    appointment_count: number;
+  }>;
+  total_patients: number;
+  totals_by_currency: Record<string, number>;
+};
+
 type SearchParams = { start_date?: string; end_date?: string };
 
 const categoryLabels: Record<ExpenseCategory, string> = {
@@ -70,6 +95,17 @@ const expenseTypeLabels: Record<ExpenseType, string> = {
   variable: "مصروف متغير",
 };
 const categories = Object.entries(categoryLabels) as Array<[ExpenseCategory, string]>;
+const paymentMethodLabels: Record<string, string> = {
+  cash: "Cash",
+  visa: "Visa",
+  instapay: "InstaPay",
+  card: "بطاقة - سجل قديم",
+  bank_transfer: "تحويل بنكي - سجل قديم",
+  wallet: "محفظة - سجل قديم",
+  online: "دفع إلكتروني - سجل قديم",
+  other: "طريقة قديمة أخرى",
+  unknown: "غير محدد",
+};
 
 function validDate(value: string | undefined) {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
@@ -164,18 +200,23 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   if (endDate) profitQuery.set("end_date", endDate);
   const profitability = await tiaRequest<Profitability>(`/finance/profitability${profitQuery.size ? `?${profitQuery.toString()}` : ""}`);
 
-  const expenseQuery = new URLSearchParams({
+  const periodQuery = new URLSearchParams({
     start_date: profitability.start_date,
     end_date: profitability.end_date,
-    limit: "500",
   });
-  const expenses = await tiaRequest<Expense[]>(`/finance/expenses?${expenseQuery.toString()}`);
+  const expenseQuery = new URLSearchParams(periodQuery);
+  expenseQuery.set("limit", "500");
+  const [expenses, paymentBreakdown, outstanding] = await Promise.all([
+    tiaRequest<Expense[]>(`/finance/expenses?${expenseQuery.toString()}`),
+    tiaRequest<PaymentBreakdown>(`/finance/payment-method-breakdown?${periodQuery.toString()}`),
+    tiaRequest<OutstandingBalances>("/finance/outstanding-balances?limit=500"),
+  ]);
 
   return (
     <>
       <PageHeader
         title="المالية"
-        description="تابع الدخل والمصروفات وصافي الربح من بيانات Tia الفعلية. العملة مضبوطة تلقائيًا على الجنيه المصري."
+        description="تابع الدخل والمصروفات وصافي الربح، واعرف دخل كل طريقة دفع والعملاء اللي لسه عليهم مبالغ مستحقة."
       />
 
       <Card className="mb-5">
@@ -197,23 +238,76 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
       <div className="mb-5 grid gap-4">
         {profitability.currencies.length ? profitability.currencies.map((item) => <ProfitCard key={item.currency} item={item} />) : (
-          <Card>
-            <CardContent className="py-10 text-center">
-              <WalletCards className="mx-auto text-slate-300" size={34} />
-              <div className="mt-3 font-black text-slate-900">لا توجد حركة مالية في هذه الفترة</div>
-              <p className="mt-1 text-sm text-[var(--muted)]">سيظهر الدخل والمصروفات وصافي الربح هنا بمجرد تسجيل حركة مالية.</p>
-            </CardContent>
-          </Card>
+          <Card><CardContent className="py-10 text-center"><WalletCards className="mx-auto text-slate-300" size={34} /><div className="mt-3 font-black text-slate-900">لا توجد حركة مالية في هذه الفترة</div></CardContent></Card>
         )}
       </div>
+
+      <Card className="mb-5">
+        <CardHeader className="flex-row items-center justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2"><CreditCard size={17} /> الدخل حسب طريقة الدفع</CardTitle>
+            <p className="mt-1 text-xs text-[var(--muted)]">التقسيم لنفس الفترة المختارة، من المدفوعات المسجلة فعليًا.</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {paymentBreakdown.rows.length ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {paymentBreakdown.rows.map((row) => (
+                <div key={`${row.payment_method}-${row.currency}`} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-black text-slate-900">{paymentMethodLabels[row.payment_method] || row.payment_method}</div>
+                    <Receipt size={15} className="text-slate-400" />
+                  </div>
+                  <div className="mt-2 text-xl font-black">{formatMoney(row.amount_minor, row.currency)}</div>
+                  <div className="mt-1 text-xs text-[var(--muted)]">{row.transaction_count.toLocaleString("ar-EG")} دفعة</div>
+                </div>
+              ))}
+            </div>
+          ) : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-[var(--muted)]">لا توجد دفعات في الفترة المختارة.</div>}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-5">
+        <CardHeader className="flex-row items-center justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2"><UsersRound size={17} /> العملاء اللي عليهم مبالغ</CardTitle>
+            <p className="mt-1 text-xs text-[var(--muted)]">يعرض الرصيد المتبقي على المواعيد غير المسددة بالكامل.</p>
+          </div>
+          <div className="text-sm font-black text-slate-900">{outstanding.total_patients.toLocaleString("ar-EG")} عميل</div>
+        </CardHeader>
+        <CardContent>
+          {Object.entries(outstanding.totals_by_currency).length > 0 && (
+            <div className="mb-4 flex flex-wrap gap-2">
+              {Object.entries(outstanding.totals_by_currency).map(([currency, amount]) => (
+                <span key={currency} className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-black text-amber-900">إجمالي المتبقي: {formatMoney(amount, currency)}</span>
+              ))}
+            </div>
+          )}
+          {outstanding.rows.length ? (
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="data-table min-w-[650px]">
+                <thead><tr><th>العميل</th><th>الهاتف</th><th>عدد المواعيد</th><th>المتبقي</th><th></th></tr></thead>
+                <tbody>
+                  {outstanding.rows.map((row) => (
+                    <tr key={`${row.patient_id}-${row.currency}`}>
+                      <td className="font-black">{row.patient_name}</td>
+                      <td dir="ltr">{row.phone || "—"}</td>
+                      <td>{row.appointment_count.toLocaleString("ar-EG")}</td>
+                      <td className="font-black">{formatMoney(row.balance_minor, row.currency)}</td>
+                      <td><Link href={`/appointments?patient_id=${row.patient_id}&scope=all`} className="text-xs font-bold text-teal-700 hover:underline">عرض المواعيد</Link></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-[var(--muted)]">لا يوجد عملاء عليهم أرصدة مستحقة حاليًا.</div>}
+        </CardContent>
+      </Card>
 
       {isAdmin && (
         <Card className="mb-5">
           <CardHeader className="flex-row items-center justify-between gap-3">
-            <div>
-              <CardTitle>إضافة مصروف</CardTitle>
-              <p className="mt-1 text-xs text-[var(--muted)]">اختر هل المصروف ثابت أو متغير وسجله وقت حدوثه.</p>
-            </div>
+            <div><CardTitle>إضافة مصروف</CardTitle><p className="mt-1 text-xs text-[var(--muted)]">اختر هل المصروف ثابت أو متغير وسجله وقت حدوثه.</p></div>
             <span className="grid size-9 place-items-center rounded-xl bg-teal-50 text-teal-700"><Plus size={17} /></span>
           </CardHeader>
           <CardContent>
@@ -227,10 +321,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-3">
-          <div>
-            <CardTitle>المصروفات</CardTitle>
-            <p className="mt-1 text-xs text-[var(--muted)]">المصروفات المسجلة بين {profitability.start_date} و{profitability.end_date}.</p>
-          </div>
+          <div><CardTitle>المصروفات</CardTitle><p className="mt-1 text-xs text-[var(--muted)]">المصروفات المسجلة بين {profitability.start_date} و{profitability.end_date}.</p></div>
           <span className="grid size-9 place-items-center rounded-xl bg-slate-100 text-slate-600"><Banknote size={17} /></span>
         </CardHeader>
         <CardContent>
@@ -239,39 +330,25 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
               {expenses.map((expense) => (
                 <div key={expense.id} className="rounded-2xl border border-[var(--border)] p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="font-black text-slate-950">{expense.title}</div>
-                      <div className="mt-1 text-xs font-semibold text-[var(--muted)]">{expenseTypeLabels[expense.expense_type]} · {categoryLabels[expense.category]} · {expense.incurred_on}</div>
-                      {expense.note && <div className="mt-2 text-sm text-slate-600">{expense.note}</div>}
-                    </div>
+                    <div><div className="font-black text-slate-950">{expense.title}</div><div className="mt-1 text-xs font-semibold text-[var(--muted)]">{expenseTypeLabels[expense.expense_type]} · {categoryLabels[expense.category]} · {expense.incurred_on}</div>{expense.note && <div className="mt-2 text-sm text-slate-600">{expense.note}</div>}</div>
                     <div className="text-left text-lg font-black text-slate-950">{formatMoney(expense.amount_minor, expense.currency)}</div>
                   </div>
-
                   {isAdmin && (
                     <div className="mt-3 border-t border-slate-100 pt-3">
                       <details>
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800"><Pencil size={14} /> تعديل المصروف</summary>
-                        <form action={updateExpense} className="mt-4 rounded-xl bg-slate-50 p-4">
-                          <input type="hidden" name="expense_id" value={expense.id} />
-                          <ExpenseFields expense={expense} defaultDate={profitability.end_date} />
-                          <div className="mt-4 flex flex-wrap justify-end gap-2"><Button type="submit" size="sm"><Pencil size={14} />حفظ التعديل</Button></div>
-                        </form>
+                        <form action={updateExpense} className="mt-4 rounded-xl bg-slate-50 p-4"><input type="hidden" name="expense_id" value={expense.id} /><ExpenseFields expense={expense} defaultDate={profitability.end_date} /><div className="mt-4 flex flex-wrap justify-end gap-2"><Button type="submit" size="sm"><Pencil size={14} />حفظ التعديل</Button></div></form>
                       </details>
                       <details className="mt-2">
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-800"><Trash2 size={14} /> حذف المصروف</summary>
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3">
-                          <span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span>
-                          <form action={deleteExpense}><input type="hidden" name="expense_id" value={expense.id} /><Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button></form>
-                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3"><span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span><form action={deleteExpense}><input type="hidden" name="expense_id" value={expense.id} /><Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button></form></div>
                       </details>
                     </div>
                   )}
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">لا توجد مصروفات مسجلة في هذه الفترة.</div>
-          )}
+          ) : <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">لا توجد مصروفات مسجلة في هذه الفترة.</div>}
         </CardContent>
       </Card>
     </>
