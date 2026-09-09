@@ -73,3 +73,23 @@ export async function updateLaserDevicePrice(formData: FormData) {
   revalidatePath("/services");
   revalidatePath("/appointments");
 }
+
+export async function updatePackageOffer(formData: FormData) {
+  const serviceId = String(formData.get("service_id") || "");
+  const deviceKey = String(formData.get("device_key") || "");
+  const sessionsCount = Number(String(formData.get("sessions_count") || "0"));
+  if (!serviceId || !deviceKey || ![3, 6, 9].includes(sessionsCount)) return;
+  const active = formData.get("is_active") === "1";
+  await tiaRequest("/booking/package-offers", {
+    method: "PUT",
+    body: JSON.stringify({
+      service_id: serviceId,
+      device_key: deviceKey,
+      sessions_count: sessionsCount,
+      price_minor: moneyMinor(formData.get("price")),
+      currency: "EGP",
+      is_active: active,
+    }),
+  });
+  revalidatePath("/services");
+}
