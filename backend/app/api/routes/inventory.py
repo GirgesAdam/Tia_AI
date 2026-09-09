@@ -14,6 +14,7 @@ from app.schemas.inventory import (
     AppointmentProductCreate,
     AppointmentProductLineRead,
     ClinicProductCreate,
+    ClinicProductQuantityUpdate,
     ClinicProductRead,
     InventoryItemAdjust,
     InventoryItemCreate,
@@ -36,6 +37,7 @@ from app.services.inventory import (
     list_laser_device_prices,
     list_products,
     record_inventory_usage,
+    set_product_quantity,
     upsert_laser_device_price,
 )
 from app.services.payments import refresh_appointment_payment_snapshots
@@ -79,10 +81,33 @@ def add_product(
         workspace_id=access.workspace.id,
         name=payload.name,
         description=payload.description,
+        quantity_on_hand=payload.quantity_on_hand,
     )
     db.commit()
     db.refresh(row)
     return ClinicProductRead.model_validate(row)
+
+
+@router.put("/products/{product_id}/quantity", response_model=ClinicProductRead)
+def update_product_quantity(
+    product_id: UUID,
+    payload: ClinicProductQuantityUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicProductRead:
+    try:
+        row = set_product_quantity(
+            db,
+            workspace_id=access.workspace.id,
+            product_id=product_id,
+            quantity_on_hand=payload.quantity_on_hand,
+        )
+        db.commit()
+        db.refresh(row)
+        return ClinicProductRead.model_validate(row)
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
 
 
 @router.get("/appointments/{appointment_id}/products", response_model=list[AppointmentProductLineRead])
@@ -187,7 +212,6 @@ def add_inventory_item(
             workspace_id=access.workspace.id,
             name=payload.name,
             quantity_ml=payload.quantity_ml,
-            concentration_mg_per_ml=payload.concentration_mg_per_ml,
             low_stock_threshold_ml=payload.low_stock_threshold_ml,
             notes=payload.notes,
         )
@@ -231,8 +255,7 @@ def use_inventory_item(
             db,
             workspace_id=access.workspace.id,
             item_id=item_id,
-            used_mg=payload.used_mg,
-            appointment_id=payload.appointment_id,
+            used_ml=payload.used_ml,
             note=payload.note,
             created_by_user_id=access.user.id,
         )
@@ -241,8 +264,6 @@ def use_inventory_item(
         return InventoryUsageRead(
             id=usage.id,
             inventory_item_id=usage.inventory_item_id,
-            appointment_id=usage.appointment_id,
-            used_mg=usage.used_mg,
             used_ml=usage.used_ml,
             note=usage.note,
             created_at=usage.created_at,
