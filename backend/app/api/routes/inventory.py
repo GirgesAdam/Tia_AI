@@ -4,10 +4,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
 from app.database.session import get_db
+from app.models.appointment import Appointment
 from app.schemas.inventory import (
     AppointmentProductCreate,
     AppointmentProductLineRead,
@@ -44,6 +46,18 @@ router = APIRouter()
 def _raise(exc: Exception) -> None:
     code = status.HTTP_404_NOT_FOUND if isinstance(exc, InventoryNotFound) else status.HTTP_409_CONFLICT
     raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+def _locked_appointment(db: Session, *, workspace_id: UUID, appointment_id: UUID) -> Appointment:
+    appointment = db.scalar(
+        select(Appointment).where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.id == appointment_id,
+        ).with_for_update()
+    )
+    if appointment is None:
+        raise InventoryNotFound("Appointment not found.")
+    return appointment
 
 
 @router.get("/products", response_model=list[ClinicProductRead])
@@ -92,7 +106,10 @@ def add_product_to_appointment(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentProductLineRead]:
     try:
-        add_appointment_product(
+        appointment = _locked_appointment(
+            db, workspace_id=access.workspace.id, appointment_id=appointment_id
+        )
+        line = add_appointment_product(
             db,
             workspace_id=access.workspace.id,
             appointment_id=appointment_id,
@@ -101,6 +118,7 @@ def add_product_to_appointment(
             unit_price_minor=payload.unit_price_minor,
             created_by_user_id=access.user.id,
         )
+        appointment.price_minor = int(appointment.price_minor) + int(line.quantity) * int(line.unit_price_minor)
         refresh_appointment_payment_snapshots(
             db,
             workspace_id=access.workspace.id,
@@ -121,12 +139,22 @@ def remove_product_from_appointment(
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     try:
+        existing = list_appointment_products(
+            db, workspace_id=access.workspace.id, appointment_id=appointment_id
+        )
+        line = next((item for item in existing if item.id == line_id), None)
+        if line is None:
+            raise InventoryNotFound("Appointment product line not found.")
+        appointment = _locked_appointment(
+            db, workspace_id=access.workspace.id, appointment_id=appointment_id
+        )
         delete_appointment_product(
             db,
             workspace_id=access.workspace.id,
             appointment_id=appointment_id,
             line_id=line_id,
         )
+        appointment.price_minor = max(int(appointment.price_minor) - int(line.total_minor), 0)
         refresh_appointment_payment_snapshots(
             db,
             workspace_id=access.workspace.id,
