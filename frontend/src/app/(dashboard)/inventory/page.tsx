@@ -1,4 +1,4 @@
-import { PackagePlus, Syringe } from "lucide-react";
+import { PackagePlus, ShoppingBag, Syringe } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
-import { addInventoryStock, createInventoryItem, recordInventoryUsage } from "./actions";
+import { addInventoryStock, createClinicProduct, createInventoryItem, recordInventoryUsage } from "./actions";
 
 type Item = {
   id: string;
@@ -20,10 +20,18 @@ type Item = {
   notes: string | null;
 };
 
+type Product = {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+};
+
 export default async function InventoryPage() {
-  const [{ workspace }, items] = await Promise.all([
+  const [{ workspace }, items, products] = await Promise.all([
     getAppContext(),
     tiaRequest<Item[]>("/inventory/items"),
+    tiaRequest<Product[]>("/inventory/products").catch(() => []),
   ]);
   const isAdmin = workspace.role === "admin";
 
@@ -31,12 +39,36 @@ export default async function InventoryPage() {
     <>
       <PageHeader title="المخزن" description="تابع الحقن بالملي، وسجّل الاستخدام بالمليجرام. Tia يحول mg إلى mL حسب تركيز كل حقنة ويخصمه من المتبقي." />
 
+      <Card className="mb-5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><ShoppingBag size={18} /> منتجات العيادة</CardTitle>
+          <p className="mt-1 text-xs text-[var(--muted)]">المنتج له اسم ثابت في الجدول، لكن سعره يتحدد يدويًا وقت إضافته للموعد.</p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isAdmin && (
+            <form action={createClinicProduct} className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(220px,2fr)_auto] md:items-end">
+              <label><span className="mb-1.5 block text-xs font-bold">اسم المنتج</span><Input name="name" required maxLength={180} placeholder="مثال: Skin Protector" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold">وصف اختياري</span><Input name="description" maxLength={500} placeholder="معلومة قصيرة للاستقبال" /></label>
+              <Button type="submit"><PackagePlus size={15} /> إضافة المنتج</Button>
+            </form>
+          )}
+          {products.length ? (
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="data-table min-w-[520px]">
+                <thead><tr><th>المنتج</th><th>الوصف</th><th>التسعير</th></tr></thead>
+                <tbody>{products.map((product) => <tr key={product.id}><td className="font-black">{product.name}</td><td>{product.description || "—"}</td><td className="text-xs font-semibold text-[var(--muted)]">يدوي عند الموعد</td></tr>)}</tbody>
+              </table>
+            </div>
+          ) : <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-[var(--muted)]">لا توجد منتجات بعد. يمكنك إضافة Skin Protector أو أي منتج تبيعه العيادة.</div>}
+        </CardContent>
+      </Card>
+
       {isAdmin && (
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة حقنة للمخزن</CardTitle></CardHeader>
           <CardContent>
             <form action={createInventoryItem} className="grid gap-3 md:grid-cols-4">
-              <label><span className="mb-1.5 block text-xs font-bold">الاسم</span><Input name="name" required placeholder="مثال: Botox 100U" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold">الاسم</span><Input name="name" required placeholder="مثال: Injectable 50 mg/mL" /></label>
               <label><span className="mb-1.5 block text-xs font-bold">الكمية الحالية mL</span><Input name="quantity_ml" type="number" min="0" step="0.001" required /></label>
               <label><span className="mb-1.5 block text-xs font-bold">التركيز mg/mL</span><Input name="concentration_mg_per_ml" type="number" min="0.001" step="0.001" required /></label>
               <label><span className="mb-1.5 block text-xs font-bold">تنبيه المخزون عند mL</span><Input name="low_stock_threshold_ml" type="number" min="0" step="0.001" /></label>
