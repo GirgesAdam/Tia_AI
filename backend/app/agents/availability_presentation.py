@@ -4,6 +4,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.services.laser_slot_metadata import decode_laser_slot_branch
+
 
 def _parse_dt(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -37,6 +39,15 @@ def _clock_ar(value: datetime) -> str:
     return f"{display_hour}:{minute:02d} {suffix}"
 
 
+def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
+    device_key = str(slot.get("laser_device_key") or "").strip()
+    device_name = str(slot.get("laser_device_name") or "").strip()
+    if device_key or device_name:
+        return device_key, device_name
+    metadata = decode_laser_slot_branch(slot.get("branch_name"))
+    return metadata.device_key or "", metadata.device_name or ""
+
+
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
@@ -51,8 +62,7 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
             continue
         doctor_id = str(slot.get("doctor_id") or "")
         doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
-        device_key = str(slot.get("laser_device_key") or "")
-        device_name = str(slot.get("laser_device_name") or "").strip()
+        device_key, device_name = _device_from_slot(slot)
         grouped[(doctor_id, doctor_name, device_key, device_name)].append((start, end))
 
     windows: list[dict[str, Any]] = []
@@ -102,7 +112,13 @@ def _requested_time(output: dict[str, Any]) -> str:
     return lower if lower and lower == upper else ""
 
 
-def _closing(*, reschedule: bool, booking_authorized: bool, ranges: bool, has_devices: bool = False) -> str:
+def _closing(
+    *,
+    reschedule: bool,
+    booking_authorized: bool,
+    ranges: bool,
+    has_devices: bool = False,
+) -> str:
     choice = "الجهاز والوقت" if has_devices else "الوقت"
     if reschedule:
         return f"قولي {choice} اللي يناسبك جوه الفترات دي عشان أغيّر الموعد." if ranges else f"اختار {choice} اللي يناسبك عشان أغيّره."
@@ -120,14 +136,14 @@ def _legacy_slot_reply(
 ) -> str | None:
     grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
     has_devices = False
-    for slot in slots:
-        if not isinstance(slot, dict):
+    for raw_slot in slots:
+        if not isinstance(raw_slot, dict):
             continue
-        start = str(slot.get("start_time_24h") or "").strip()
+        start = str(raw_slot.get("start_time_24h") or "").strip()
         if not start:
             continue
-        doctor = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
-        device = str(slot.get("laser_device_name") or "").strip()
+        doctor = str(raw_slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        _device_key, device = _device_from_slot(raw_slot)
         has_devices = has_devices or bool(device)
         if start not in grouped[(doctor, device)]:
             grouped[(doctor, device)].append(start)
@@ -177,7 +193,12 @@ def format_availability_windows_reply(
 
     if not windows:
         if slots:
-            return _legacy_slot_reply(output, slots, reschedule=reschedule, booking_authorized=booking_authorized)
+            return _legacy_slot_reply(
+                output,
+                slots,
+                reschedule=reschedule,
+                booking_authorized=booking_authorized,
+            )
 
         date_text = _display_date(output.get("date"))
         when = f" يوم {date_text}" if date_text else ""
@@ -211,10 +232,19 @@ def format_availability_windows_reply(
         if not ranges:
             continue
         label = f"{device} مع {doctor}" if device else f"مع {doctor}"
-        lines.append(f"المتاح على {label} {'، و'.join(ranges)}." if device else f"المتاح {label} {'، و'.join(ranges)}.")
+        lines.append(
+            f"المتاح على {label} {'، و'.join(ranges)}."
+            if device
+            else f"المتاح {label} {'، و'.join(ranges)}."
+        )
 
     if not lines:
-        return _legacy_slot_reply(output, slots, reschedule=reschedule, booking_authorized=booking_authorized)
+        return _legacy_slot_reply(
+            output,
+            slots,
+            reschedule=reschedule,
+            booking_authorized=booking_authorized,
+        )
 
     date_text = _display_date(output.get("date"))
     intro = f"المتاح يوم {date_text}:" if date_text else "المتاح:"
