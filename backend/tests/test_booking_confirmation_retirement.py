@@ -17,7 +17,7 @@ def test_booking_confirmation_is_not_an_automation_or_standard_template() -> Non
 
 def test_successful_booking_is_confirmed_by_the_ai_response() -> None:
     source = (_root() / "backend/app/services/agent_chat.py").read_text(encoding="utf-8")
-    assert "format_booking_success(appointment)" in source
+    assert "format_booking_success(appointment_payload)" in source
     assert 'sender_type="ai"' in source
 
 
