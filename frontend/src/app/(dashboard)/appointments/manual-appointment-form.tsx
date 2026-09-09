@@ -10,6 +10,10 @@ import { createManualAppointment, type ManualAppointmentState } from "./actions"
 
 const initialState: ManualAppointmentState = { ok: false, message: "" };
 type PricedService = Service & { requires_laser_device?: boolean };
+type DevicePackage = PatientPackage & {
+  laser_device_key?: string | null;
+  laser_device_name?: string | null;
+};
 
 export function ManualAppointmentForm({
   mode, phone, defaultStart, patientId, patientName, services, doctors, staff,
@@ -25,15 +29,25 @@ export function ManualAppointmentForm({
   staff: Staff[];
   doctorBranchMap: Record<string, string>;
   defaultBranchId?: string;
-  packages?: PatientPackage[];
+  packages?: DevicePackage[];
 }) {
   const [state, formAction, pending] = useActionState(createManualAppointment, initialState);
   const [doctorId, setDoctorId] = useState("");
   const [serviceId, setServiceId] = useState("");
+  const [laserDeviceKey, setLaserDeviceKey] = useState("");
+  const [packageId, setPackageId] = useState("");
   const staffMap = useMemo(() => new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()])), [staff]);
   const branchId = doctorBranchMap[doctorId] || defaultBranchId || "";
   const selectedService = services.find((item) => item.id === serviceId);
   const requiresLaserDevice = Boolean(selectedService?.requires_laser_device);
+  const compatiblePackages = useMemo(
+    () => packages.filter((item) => {
+      if (item.service_id !== serviceId) return false;
+      if (!item.laser_device_key) return true;
+      return requiresLaserDevice && Boolean(laserDeviceKey) && item.laser_device_key === laserDeviceKey;
+    }),
+    [packages, serviceId, requiresLaserDevice, laserDeviceKey],
+  );
 
   return (
     <form action={formAction} className="space-y-4">
@@ -57,7 +71,16 @@ export function ManualAppointmentForm({
       <div className="grid gap-3 md:grid-cols-3">
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">الخدمة</span>
-          <Select name="service_id" required value={serviceId} onChange={(event) => setServiceId(event.target.value)}>
+          <Select
+            name="service_id"
+            required
+            value={serviceId}
+            onChange={(event) => {
+              setServiceId(event.target.value);
+              setLaserDeviceKey("");
+              setPackageId("");
+            }}
+          >
             <option value="" disabled>اختار الخدمة</option>
             {services.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </Select>
@@ -75,7 +98,15 @@ export function ManualAppointmentForm({
       {requiresLaserDevice && (
         <label className="block max-w-md">
           <span className="mb-1.5 block text-xs font-bold text-slate-600">جهاز الليزر</span>
-          <Select name="laser_device_key" required defaultValue="">
+          <Select
+            name="laser_device_key"
+            required
+            value={laserDeviceKey}
+            onChange={(event) => {
+              setLaserDeviceKey(event.target.value);
+              setPackageId("");
+            }}
+          >
             <option value="" disabled>اختار الجهاز</option>
             <option value="prime_lase">Prime Lase</option>
             <option value="candela_gentle">Candela Gentle</option>
@@ -86,8 +117,19 @@ export function ManualAppointmentForm({
 
       {doctorId && !branchId && <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">الدكتور مرتبط بأكثر من فرع من غير فرع أساسي. حدّد فرعه الأساسي من إعدادات العيادة قبل تسجيل الموعد.</div>}
 
-      {mode === "existing" && packages.length > 0 && (
-        <label className="block max-w-md"><span className="mb-1.5 block text-xs font-bold text-slate-600">الباكدج (اختياري)</span><Select name="patient_package_id" defaultValue=""><option value="">بدون باكدج</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · متبقي {item.sessions_remaining}</option>)}</Select></label>
+      {mode === "existing" && serviceId && compatiblePackages.length > 0 && (
+        <label className="block max-w-md">
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">الباكدج (اختياري)</span>
+          <Select name="patient_package_id" value={packageId} onChange={(event) => setPackageId(event.target.value)}>
+            <option value="">بدون باكدج</option>
+            {compatiblePackages.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} · متبقي {item.sessions_remaining}
+                {item.laser_device_name ? ` · ${item.laser_device_name}` : ""}
+              </option>
+            ))}
+          </Select>
+        </label>
       )}
 
       {state.message && <div className={`rounded-xl px-3 py-2 text-sm font-bold ${state.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{state.message}</div>}

@@ -344,6 +344,7 @@ def create_appointment(
                 patient_id=payload.patient_id,
                 service_id=payload.service_id,
                 appointment_start_at=slot.start_at,
+                laser_device_key=slot.laser_device_key,
             )
         except PackageOperationError as exc:
             raise booking_conflict(str(exc)) from exc
@@ -421,6 +422,7 @@ def get_patient_packages(
         patient_id=patient_id,
         service_id=service_id,
         usable_only=usable_only,
+        include_financials=True,
     )
 
 
@@ -457,7 +459,7 @@ def create_package_sale(
         )
         db.commit()
         db.refresh(package)
-        return package_read(db, package)
+        return package_read(db, package, include_financials=True)
     except PackageOperationError as exc:
         db.rollback()
         raise booking_conflict(str(exc)) from exc
@@ -493,7 +495,7 @@ def create_package_payment(
             raise PackageOperationError("Package not found.")
         db.commit()
         db.refresh(package)
-        return package_read(db, package)
+        return package_read(db, package, include_financials=True)
     except PackageOperationError as exc:
         db.rollback()
         raise booking_conflict(str(exc)) from exc
@@ -534,7 +536,7 @@ def cancel_package_and_refund(
         )
         db.commit()
         db.refresh(package)
-        read = package_read(db, package)
+        read = package_read(db, package, include_financials=True)
         return PatientPackageCancelRefundRead(
             package=read,
             collected_minor=collected_minor,

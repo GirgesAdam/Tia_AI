@@ -26,10 +26,11 @@ PACKAGE_USAGE_STATUSES = ("reserved", "consumed", "released")
 
 
 class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A patient-owned prepaid entitlement for a specific service.
+    """A patient-owned entitlement for a specific service.
 
     The package sale is one commercial fact. Appointment usage is tracked in
-    ``package_usages`` and never creates appointment-level revenue.
+    ``package_usages`` and never creates appointment-level service revenue.
+    Package payment balance is accounting information only and never gates usage.
     """
 
     __tablename__ = "patient_packages"
@@ -48,6 +49,10 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "standalone_session_price_minor_at_purchase IS NULL OR standalone_session_price_minor_at_purchase >= 0",
             name="patient_package_standalone_price_non_negative",
+        ),
+        CheckConstraint(
+            "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
+            name="patient_package_laser_device_valid",
         ),
         CheckConstraint(
             "status IN ('active', 'expired', 'cancelled')",
@@ -81,6 +86,12 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
             name="fk_patient_packages_purchase_transaction",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "package_offer_id"],
+            ["service_package_offers.workspace_id", "service_package_offers.id"],
+            ondelete="RESTRICT",
+            name="fk_patient_packages_package_offer",
+        ),
         Index(
             "uq_patient_packages_workspace_external_id",
             "workspace_id",
@@ -107,6 +118,7 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     patient_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     purchase_transaction_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    package_offer_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
     )
@@ -122,6 +134,8 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     standalone_session_price_minor_at_purchase: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    laser_device_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    laser_device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EGP", server_default="EGP")
     purchased_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
