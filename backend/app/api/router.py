@@ -16,6 +16,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.health import router as health_router
 from app.api.routes.inbox import router as inbox_router
+from app.api.routes.inventory import router as inventory_router
 from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.operations import router as operations_router
 from app.api.routes.payments import router as payments_router
@@ -43,6 +44,7 @@ api_router.include_router(crm_task_executor_router, prefix="/crm", tags=["crm"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 api_router.include_router(inbox_router, prefix="/inbox", tags=["inbox"])
+api_router.include_router(inventory_router, prefix="/inventory", tags=["inventory"])
 api_router.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(operations_router, prefix="/operations", tags=["operations"])
 api_router.include_router(payments_router, prefix="/payments", tags=["payments"])
