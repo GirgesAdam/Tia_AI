@@ -219,6 +219,7 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
             summary[collection_name] = summarized
     return summary
 
+
 def _semantic_catalog_for_single_location(
     clinic_catalog: dict[str, object],
 ) -> dict[str, object]:
@@ -321,7 +322,16 @@ def _interpreter_system_prompt(
         "and the service/doctor/time constraints, set action=modify, and include requested_date in "
         "clear_entity_fields so the backend searches after the rejected date. Do not select or repeat "
         "the presented slot. If the customer accepts or chooses a time from the presented offer, use "
-        "select_option instead. If an earlier exact time was unavailable and the customer now asks to see "
+        "select_option instead. When the assistant has just asked the customer to choose one appointment "
+        "time from verified presented availability, distinguish semantically between selecting an appointment "
+        "start and changing the availability search. If the customer chooses one specific start time from "
+        "the presented availability, including by referring to the start or beginning of a presented period, "
+        "set selection_time=HH:MM and include appointment_creation. Treat that contextual choice as booking "
+        "authorization when the assistant's immediately preceding question was explicitly asking which time "
+        "to book; the customer does not need to repeat the word 'book'. Use not_before_time/not_after_time only "
+        "when the customer actually wants to search, filter, or constrain availability before/after a time, "
+        "not when they are choosing the appointment itself. Never infer a time that cannot resolve against the "
+        "verified presented options. If an earlier exact time was unavailable and the customer now asks to see "
         "general availability for the same day, action=modify and clear requested_start_time so the rejected "
         "exact minute cannot keep filtering later turns. If they ask for later/earlier/before/after instead, "
         "clear the stale exact time and encode only the new broad bound. When the customer chooses one exact "
