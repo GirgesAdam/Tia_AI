@@ -32,6 +32,11 @@ import {
   removeAppointmentProduct,
   updateAppointmentStatus,
 } from "./actions";
+import {
+  AppointmentServiceEditor,
+  type AppointmentDevicePrice,
+  type AppointmentServiceOption,
+} from "./service-editor";
 
 const paymentMethodLabels: Record<string, string> = {
   cash: "Cash",
@@ -74,16 +79,26 @@ function minorInput(value: number) {
 
 export default async function AppointmentOperationsPage({ params }: { params: Promise<{ appointmentId: string }> }) {
   const { appointmentId } = await params;
-  const [detail, payments, products, productLines] = await Promise.all([
+  const [detail, payments, products, productLines, services, devicePrices] = await Promise.all([
     tiaRequest<AppointmentOperationsDetail>(`/booking/appointments/${appointmentId}/operations`),
     tiaRequest<PaymentSummaryWithProducts>(`/payments/appointments/${appointmentId}`),
     tiaRequest<ClinicProduct[]>("/inventory/products").catch(() => []),
     tiaRequest<AppointmentProductLine[]>(`/inventory/appointments/${appointmentId}/products`).catch(() => []),
+    tiaRequest<AppointmentServiceOption[]>("/clinic/services").catch(() => []),
+    tiaRequest<AppointmentDevicePrice[]>("/inventory/laser-prices").catch(() => []),
   ]);
   const { appointment } = detail;
   const allowed = new Set(detail.allowed_actions);
-  const laserAppointment = appointment as typeof appointment & { laser_device_name?: string | null };
+  const laserAppointment = appointment as typeof appointment & {
+    laser_device_key?: string | null;
+    laser_device_name?: string | null;
+  };
   const canAddProducts = !["cancelled", "no_show", "rescheduled"].includes(appointment.status);
+  const canEditService = ["pending", "confirmed", "checked_in", "in_progress"].includes(appointment.status);
+  const packageBacked = Boolean(
+    appointment.patient_package_id || appointment.billing_context === "package_prepaid" || appointment.package_external_id,
+  );
+  const overpaidMinor = Math.max(payments.net_paid_minor - payments.price_minor, 0);
 
   return (
     <>
@@ -158,6 +173,18 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
                 )}
               </div>
 
+              {canEditService && services.length > 0 && (
+                <AppointmentServiceEditor
+                  appointmentId={appointment.id}
+                  patientId={appointment.patient_id}
+                  currentServiceId={appointment.service_id}
+                  currentDeviceKey={laserAppointment.laser_device_key || null}
+                  packageBacked={packageBacked}
+                  services={services}
+                  devicePrices={devicePrices}
+                />
+              )}
+
               {allowed.has("cancel") && (
                 <details className="mt-4 rounded-xl border border-red-100 bg-red-50/40 p-3">
                   <summary className="cursor-pointer text-sm font-bold text-red-700">إلغاء الموعد</summary>
@@ -192,6 +219,12 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المنتجات</div><b className="mt-1 block">{formatMoney(payments.products_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي المستحق</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
               </div>
+
+              {overpaidMinor > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+                  المدفوع المسجل أعلى من الإجمالي الحالي بمقدار {formatMoney(overpaidMinor, payments.currency)}. راجع الاسترداد المناسب بدل حذف أي دفعة قديمة.
+                </div>
+              )}
 
               <details className="rounded-xl border border-slate-200 p-3" open={productLines.length > 0 ? true : undefined}>
                 <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900"><PackagePlus size={16} /> إضافة منتج</summary>
