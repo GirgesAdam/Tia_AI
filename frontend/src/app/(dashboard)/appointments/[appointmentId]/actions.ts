@@ -35,6 +35,22 @@ export async function updateAppointmentStatus(formData: FormData) {
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 
+export async function changeAppointmentService(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const serviceId = String(formData.get("service_id") || "");
+  const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
+  if (!appointmentId || !serviceId) return;
+  await tiaRequest(`/booking/appointments/${appointmentId}/service`, {
+    method: "POST",
+    body: JSON.stringify({
+      service_id: serviceId,
+      laser_device_key: laserDeviceKey || null,
+    }),
+  });
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+}
+
 export async function cancelAppointment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");
