@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
 from app.models.branch import Branch
+from app.models.patient_package import PatientPackage
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.booking import (
@@ -116,8 +117,9 @@ def change_appointment_service(
 
     Payment allocations stay attached to the appointment and its payment snapshot is
     recalculated against the new service price. If the appointment was reserving a
-    package for a different service, that reservation is released and the visit is
-    converted to ordinary billing. No new package is auto-selected on a manual edit.
+    package that no longer matches the selected service/device, that reservation is
+    released and the visit is converted to ordinary billing. No new package is
+    auto-selected on a manual edit.
     """
     appointment = _locked_appointment(
         db,
@@ -150,7 +152,26 @@ def change_appointment_service(
     old_package_id = appointment.patient_package_id
     package_released = False
 
-    if service_changed and (
+    package_incompatible = service_changed
+    if (
+        not package_incompatible
+        and device_changed
+        and appointment.patient_package_id is not None
+    ):
+        package = db.scalar(
+            select(PatientPackage).where(
+                PatientPackage.workspace_id == workspace.id,
+                PatientPackage.id == appointment.patient_package_id,
+            )
+        )
+        if package is None:
+            raise StaffAppointmentEditError("Appointment package is missing.")
+        package_incompatible = bool(
+            package.laser_device_key is not None
+            and package.laser_device_key != slot.laser_device_key
+        )
+
+    if package_incompatible and (
         appointment.patient_package_id is not None
         or appointment.billing_context == "package_prepaid"
         or appointment.package_external_id
@@ -162,7 +183,7 @@ def change_appointment_service(
                     appointment=appointment,
                     actor_type=actor_type,
                     actor_user_id=changed_by_user_id,
-                    reason="staff_service_changed",
+                    reason="staff_service_or_device_changed",
                 )
             except PackageOperationError as exc:
                 raise StaffAppointmentEditError(str(exc)) from exc
