@@ -71,6 +71,7 @@ from app.services.booking import (
     find_exact_slot,
     get_effective_booking_settings,
 )
+from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.patient_packages import (
     PackageOperationError,
     cancel_patient_package_with_refund,
@@ -205,6 +206,8 @@ def slot_to_response(slot: SlotCandidate) -> AvailabilitySlot:
         end_at=slot.end_at,
         price_minor=slot.price_minor,
         currency=slot.currency,
+        laser_device_key=slot.laser_device_key,
+        laser_device_name=slot.laser_device_name,
     )
 
 
@@ -237,6 +240,8 @@ def make_appointment(
         duration_minutes=slot.duration_minutes,
         price_minor=slot.price_minor,
         currency=slot.currency,
+        laser_device_key=slot.laser_device_key,
+        laser_device_name=slot.laser_device_name,
         customer_note=payload.customer_note,
         idempotency_key=idempotency_key,
         confirmed_at=now if initial_status == "confirmed" else None,
@@ -251,6 +256,7 @@ def get_availability(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
     doctor_id: UUID | None = None,
+    laser_device_key: str | None = None,
 ) -> AvailabilityResponse:
     try:
         timezone_name, slots = calculate_availability(
@@ -260,6 +266,7 @@ def get_availability(
             service_id=service_id,
             booking_date=booking_date,
             doctor_id=doctor_id,
+            laser_device_key=laser_device_key,
         )
     except BookingRuleError as exc:
         raise HTTPException(
@@ -309,6 +316,12 @@ def create_appointment(
     )
 
     try:
+        configured_device_price(
+            db,
+            workspace_id=access.workspace.id,
+            service_id=payload.service_id,
+            device_key=payload.laser_device_key,
+        )
         slot = find_exact_slot(
             db=db,
             workspace=access.workspace,
@@ -316,8 +329,9 @@ def create_appointment(
             service_id=payload.service_id,
             doctor_id=payload.doctor_id,
             requested_start_at=payload.start_at,
+            laser_device_key=payload.laser_device_key,
         )
-    except BookingRuleError as exc:
+    except (BookingRuleError, InventoryOperationError) as exc:
         raise booking_conflict(str(exc)) from exc
 
     patient_package = None
@@ -375,7 +389,12 @@ def create_appointment(
             entity_type="appointment",
             entity_id=appointment.id,
             summary="Appointment created",
-            metadata={"status": initial_status, "source": appointment.source, "patient_package_id": appointment.patient_package_id},
+            metadata={
+                "status": initial_status,
+                "source": appointment.source,
+                "patient_package_id": appointment.patient_package_id,
+                "laser_device_key": appointment.laser_device_key,
+            },
         )
         db.commit()
     except IntegrityError as exc:
@@ -870,4 +889,3 @@ def update_operational_status(
         raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
-
