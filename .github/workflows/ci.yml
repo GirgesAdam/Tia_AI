@@ -5,33 +5,11 @@ on:
   push:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  repair-pr23-final-fixture:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/clinic-ops-inventory-laser'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-      - name: Patch final stale SQLite fixture
-        run: python backend/scripts/patch_pr23_final_fixture.py
-      - name: Commit fixture patch when needed
-        run: |
-          if git diff --quiet -- backend/tests/test_external_sync_engine_phase62c.py; then
-            echo "Fixture is already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/tests/test_external_sync_engine_phase62c.py
-          git commit -m "Align external sync fixture with product billing"
-          git push origin HEAD:${GITHUB_HEAD_REF}
-          echo "Pushed fixture patch; next CI run validates the updated branch."
-          exit 1
   backend:
     runs-on: ubuntu-latest
     services:
