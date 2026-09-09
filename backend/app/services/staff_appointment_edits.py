@@ -10,7 +10,12 @@ from app.models.appointment import Appointment
 from app.models.branch import Branch
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
-from app.services.booking import BookingRuleError, SlotCandidate, calculate_availability, resolve_timezone
+from app.services.booking import (
+    BookingRuleError,
+    SlotCandidate,
+    calculate_availability,
+    resolve_timezone,
+)
 from app.services.patient_packages import PackageOperationError, release_package_usage
 from app.services.payments import refresh_appointment_payment_snapshots
 
