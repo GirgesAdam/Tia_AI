@@ -186,7 +186,7 @@ def test_package_read_exposes_payment_balance_without_affecting_sessions(monkeyp
         ),
     )
 
-    result = package_read(object(), package)
+    result = package_read(object(), package, include_financials=True)
 
     assert result.sessions_reserved == 1
     assert result.sessions_consumed == 2
