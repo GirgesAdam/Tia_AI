@@ -6,13 +6,13 @@ import { formatMoney } from "@/lib/format";
 
 type MethodRow = { payment_method: string; amount_minor: number };
 type AppointmentStats = { completed: number; noShow: number; cancelled: number };
+type RevenuePoint = { label: string; value: number };
 
 type Props = {
   fullYear: boolean;
   startDate: string;
   endDate: string;
-  revenueLabels: string[];
-  revenueValues: Array<number | null>;
+  revenuePoints: RevenuePoint[];
   newPatientLabels: string[];
   newPatientValues: Array<number | null>;
   paymentMethods: MethodRow[];
@@ -22,7 +22,7 @@ type Props = {
 
 const methodLabels: Record<string, string> = { cash: "Cash", visa: "Visa", instapay: "InstaPay", card: "بطاقة", bank_transfer: "تحويل بنكي", wallet: "محفظة", online: "Online", other: "أخرى", unknown: "غير محدد" };
 
-function periodBuckets(fullYear: boolean, labels: string[], values: Array<number | null>) {
+function patientPeriodBuckets(fullYear: boolean, labels: string[], values: Array<number | null>) {
   if (fullYear) {
     const year = Number(labels.find((label) => /^\d{4}-\d{2}$/.test(label))?.slice(0, 4) || new Date().getFullYear());
     const totals = Array.from({ length: 12 }, () => 0);
@@ -44,14 +44,16 @@ function periodBuckets(fullYear: boolean, labels: string[], values: Array<number
   return totals.map((value, index) => ({ label: `الأسبوع ${index + 1}`, value }));
 }
 
-function InteractiveLine({ data, currency }: { data: Array<{ label: string; value: number }>; currency: string }) {
+function InteractiveLine({ data, currency }: { data: RevenuePoint[]; currency: string }) {
   const [hovered, setHovered] = useState<number | null>(null);
   const width = 900, height = 280, padX = 45, padY = 32;
+  const min = Math.min(0, ...data.map((item) => item.value));
   const max = Math.max(1, ...data.map((item) => item.value));
+  const span = Math.max(1, max - min);
   const points = data.map((item, index) => ({
     ...item,
     x: data.length === 1 ? width / 2 : padX + index * ((width - padX * 2) / (data.length - 1)),
-    y: height - padY - (item.value / max) * (height - padY * 2),
+    y: height - padY - ((item.value - min) / span) * (height - padY * 2),
   }));
   return <div className="relative overflow-x-auto">
     <svg viewBox={`0 0 ${width} ${height}`} className="h-72 min-w-[650px] w-full" aria-label="تطور الدخل">
@@ -73,8 +75,7 @@ function HorizontalBars({ rows, money = false, currency = "EGP" }: { rows: Array
 }
 
 export function DashboardCharts(props: Props) {
-  const revenue = useMemo(() => periodBuckets(props.fullYear, props.revenueLabels, props.revenueValues), [props.fullYear, props.revenueLabels, props.revenueValues]);
-  const patients = useMemo(() => periodBuckets(props.fullYear, props.newPatientLabels, props.newPatientValues), [props.fullYear, props.newPatientLabels, props.newPatientValues]);
+  const patients = useMemo(() => patientPeriodBuckets(props.fullYear, props.newPatientLabels, props.newPatientValues), [props.fullYear, props.newPatientLabels, props.newPatientValues]);
   const methods = props.paymentMethods.filter((row) => row.amount_minor > 0).map((row) => ({ label: methodLabels[row.payment_method] || row.payment_method, value: row.amount_minor }));
   const outcomes = [
     { label: "جلسات مكتملة", value: props.appointments.completed },
@@ -82,7 +83,7 @@ export function DashboardCharts(props: Props) {
     { label: "إلغاءات", value: props.appointments.cancelled },
   ];
   return <div className="grid gap-5 xl:grid-cols-2">
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 xl:col-span-2"><div className="mb-4"><h3 className="font-black text-slate-950">تطور صافي الدخل</h3><p className="mt-1 text-xs text-slate-500">{props.startDate} → {props.endDate} · {props.fullYear ? "12 نقطة شهرية" : "4 نقاط أسبوعية"}</p></div><InteractiveLine data={revenue} currency={props.currency} /></div>
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 xl:col-span-2"><div className="mb-4"><h3 className="font-black text-slate-950">تطور صافي الدخل</h3><p className="mt-1 text-xs text-slate-500">{props.startDate} → {props.endDate} · {props.fullYear ? "12 نقطة شهرية" : "4 نقاط أسبوعية"}</p></div><InteractiveLine data={props.revenuePoints} currency={props.currency} /></div>
     <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="mb-4 font-black text-slate-950">طرق التحصيل</h3>{methods.length ? <HorizontalBars rows={methods} money currency={props.currency} /> : <p className="text-sm text-slate-500">لا توجد مدفوعات في الفترة.</p>}</div>
     <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="mb-4 font-black text-slate-950">نتائج المواعيد</h3><HorizontalBars rows={outcomes} /></div>
     <div className="rounded-2xl border border-slate-200 bg-white p-4 xl:col-span-2"><h3 className="mb-4 font-black text-slate-950">العملاء الجدد خلال الفترة</h3><HorizontalBars rows={patients} /></div>
