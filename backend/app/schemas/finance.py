@@ -113,3 +113,31 @@ class ProfitabilityRead(BaseModel):
     start_date: date
     end_date: date
     currencies: list[ProfitabilityCurrencyRead]
+
+
+class PaymentMethodBreakdownRow(BaseModel):
+    payment_method: str
+    currency: str
+    amount_minor: int
+    transaction_count: int
+
+
+class PaymentMethodBreakdownRead(BaseModel):
+    start_date: date
+    end_date: date
+    rows: list[PaymentMethodBreakdownRow]
+
+
+class OutstandingBalanceRow(BaseModel):
+    patient_id: UUID
+    patient_name: str
+    phone: str | None
+    currency: str
+    balance_minor: int
+    appointment_count: int
+
+
+class OutstandingBalancesRead(BaseModel):
+    rows: list[OutstandingBalanceRow]
+    total_patients: int
+    totals_by_currency: dict[str, int]
