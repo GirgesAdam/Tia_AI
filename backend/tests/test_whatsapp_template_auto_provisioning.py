@@ -1,7 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.core.automation_rules import DEFAULT_AUTOMATION_RULES
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import (
     STANDARD_TEMPLATE_BY_RULE_KEY,
@@ -13,12 +12,12 @@ from app.services import meta_whatsapp_transport as transport
 
 def test_every_product_whatsapp_template_has_a_canonical_meta_contract() -> None:
     assert {template.rule_key for template in STANDARD_WHATSAPP_TEMPLATES} == {
-        "booking_confirmation",
         "appointment_reminder_6h",
         "post_visit_followup",
         "cancellation_recovery",
         "lead_not_booked_followup",
     }
+    assert "booking_confirmation" not in STANDARD_TEMPLATE_BY_RULE_KEY
     assert len({template.name for template in STANDARD_WHATSAPP_TEMPLATES}) == len(
         STANDARD_WHATSAPP_TEMPLATES
     )
@@ -33,11 +32,6 @@ def test_every_product_whatsapp_template_has_a_canonical_meta_contract() -> None
         assert payload["name"] == template.name
         assert payload["language"] == "ar_EG"
         assert payload["components"]
-
-
-def test_booking_confirmation_is_fixed_on_by_default() -> None:
-    booking = next(rule for rule in DEFAULT_AUTOMATION_RULES if rule.key == "booking_confirmation")
-    assert booking.enabled_by_default is True
 
 
 def test_provisioning_creates_all_missing_templates(monkeypatch) -> None:

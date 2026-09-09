@@ -19,18 +19,6 @@ class StandardWhatsAppTemplate:
 
 STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
     StandardWhatsAppTemplate(
-        rule_key="booking_confirmation",
-        label_ar="تأكيد الحجز (ثابت)",
-        name="tia_booking_confirmation_ar",
-        language="ar_EG",
-        category="UTILITY",
-        body_text=(
-            "تمام يا {{1}}، حجز {{2}} اتسجل يوم {{3}} الساعة {{4}} في {{5}}. "
-            "لو حابة تغيّري أي حاجة ابعتيلي هنا."
-        ),
-        example_body_parameters=("مريم", "ليزر", "12/09/2026", "17:00", "Tia Clinic"),
-    ),
-    StandardWhatsAppTemplate(
         rule_key="appointment_reminder_6h",
         label_ar="تذكير قبل الموعد",
         name="tia_reminder_01",

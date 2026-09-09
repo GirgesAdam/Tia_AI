@@ -60,9 +60,28 @@ class SemanticEntityHints(BaseModel):
         description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",
     )
     requested_date: str | None = Field(default=None, description="Desired appointment date YYYY-MM-DD from the latest customer turn.")
-    requested_start_time: str | None = Field(default=None, description="Exact local appointment start HH:MM intended by the latest customer turn.")
-    not_before_time: str | None = Field(description="Local HH:MM when semantically resolved, otherwise null.")
-    not_after_time: str | None = Field(description="Local HH:MM when semantically resolved, otherwise null.")
+    requested_start_time: str | None = Field(
+        default=None,
+        description=(
+            "Exact local appointment start HH:MM that the customer intends as the appointment itself. "
+            "Do not use this for the beginning of an availability search or for a reply to a question "
+            "asking when the search window should start."
+        ),
+    )
+    not_before_time: str | None = Field(
+        description=(
+            "Lower bound HH:MM for availability discovery. Use this when the customer wants options at or "
+            "after a time, including when answering the assistant's question about when the availability "
+            "search should begin. This is not an exact appointment selection."
+        )
+    )
+    not_after_time: str | None = Field(
+        description=(
+            "Upper bound HH:MM for availability discovery. Use this when the customer wants options at or "
+            "before a time or answers when the availability search should end. This is not an exact "
+            "appointment selection."
+        )
+    )
     appointment_reference: str | None = Field(default=None, description="Customer-facing reference identifying an existing appointment.")
 
     @model_validator(mode="after")

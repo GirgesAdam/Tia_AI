@@ -19,17 +19,6 @@ class DefaultAutomationRule:
 
 DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
     DefaultAutomationRule(
-        key="booking_confirmation",
-        name="Booking confirmation",
-        trigger_kind="appointment_created",
-        offset_minutes=0,
-        channel="whatsapp",
-        template_name="tia_booking_confirmation_ar",
-        template_language="ar_EG",
-        max_lateness_minutes=60,
-        enabled_by_default=True,
-    ),
-    DefaultAutomationRule(
         # Keep the historical key for database compatibility. Timing is admin-configurable.
         key="appointment_reminder_6h",
         name="Appointment reminder",
