@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class ClinicProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=180)
     description: str | None = Field(default=None, max_length=1000)
+    quantity_on_hand: int = Field(default=0, ge=0, le=1_000_000)
 
     @field_validator("name")
     @classmethod
@@ -25,6 +26,7 @@ class ClinicProductRead(BaseModel):
     workspace_id: UUID
     name: str
     description: str | None
+    quantity_on_hand: int
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -51,7 +53,6 @@ class AppointmentProductLineRead(BaseModel):
 class InventoryItemCreate(BaseModel):
     name: str = Field(min_length=1, max_length=180)
     quantity_ml: Decimal = Field(ge=0)
-    concentration_mg_per_ml: Decimal = Field(gt=0)
     low_stock_threshold_ml: Decimal | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=2000)
 
@@ -61,8 +62,7 @@ class InventoryItemAdjust(BaseModel):
 
 
 class InventoryUsageCreate(BaseModel):
-    used_mg: Decimal = Field(gt=0)
-    appointment_id: UUID | None = None
+    used_ml: Decimal = Field(gt=0)
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -72,8 +72,6 @@ class InventoryItemRead(BaseModel):
     name: str
     category: str
     quantity_ml: Decimal
-    concentration_mg_per_ml: Decimal
-    remaining_mg: Decimal
     low_stock_threshold_ml: Decimal | None
     notes: str | None
     is_active: bool
@@ -84,8 +82,6 @@ class InventoryItemRead(BaseModel):
 class InventoryUsageRead(BaseModel):
     id: UUID
     inventory_item_id: UUID
-    appointment_id: UUID | None
-    used_mg: Decimal
     used_ml: Decimal
     note: str | None
     created_at: datetime
