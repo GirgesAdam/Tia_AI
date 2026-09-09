@@ -273,8 +273,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 duration_minutes=slot.duration_minutes,
                 price_minor=slot.price_minor,
                 currency=slot.currency,
-                laser_device_key=slot.laser_device_key,
-                laser_device_name=slot.laser_device_name,
+                laser_device_key=getattr(slot, "laser_device_key", None),
+                laser_device_name=getattr(slot, "laser_device_name", None),
             )
             for slot in native_slots
         )

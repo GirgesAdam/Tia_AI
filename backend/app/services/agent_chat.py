@@ -1455,7 +1455,11 @@ def _prefetch_read_tools(
                     "service_id": service_id,
                     "branch_id": branch_id,
                     "doctor_id": doctor_id,
-                    "laser_device_key": laser_device_key,
+                    **(
+                        {"laser_device_key": laser_device_key}
+                        if laser_device_key
+                        else {}
+                    ),
                 }
             )
         else:

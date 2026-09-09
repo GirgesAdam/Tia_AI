@@ -51,7 +51,13 @@ def _usage_totals(db: Session, *, workspace_id: UUID, package_id: UUID) -> tuple
     return values.get("reserved", 0), values.get("consumed", 0)
 
 
-def package_read(db: Session, package: PatientPackage, *, on_date: date | None = None) -> PatientPackageRead:
+def package_read(
+    db: Session,
+    package: PatientPackage,
+    *,
+    on_date: date | None = None,
+    include_financials: bool = False,
+) -> PatientPackageRead:
     reserved, consumed = _usage_totals(
         db, workspace_id=package.workspace_id, package_id=package.id
     )
@@ -64,16 +70,20 @@ def package_read(db: Session, package: PatientPackage, *, on_date: date | None =
     effective = _effective_status(package, on_date=on_date)
     if effective == "active" and remaining == 0:
         effective = "exhausted"
-    payments, refunds = _package_financial_rows(
-        db, workspace_id=package.workspace_id, package=package, for_update=False
-    )
-    amount_paid_minor = sum(int(row.amount_minor) for row in payments)
-    amount_refunded_minor = sum(int(row.amount_minor) for row in refunds)
-    balance_due_minor = (
-        max(int(package.sale_price_minor) - amount_paid_minor, 0)
-        if effective == "active"
-        else 0
-    )
+    amount_paid_minor = 0
+    amount_refunded_minor = 0
+    balance_due_minor = 0
+    if include_financials:
+        payments, refunds = _package_financial_rows(
+            db, workspace_id=package.workspace_id, package=package, for_update=False
+        )
+        amount_paid_minor = sum(int(row.amount_minor) for row in payments)
+        amount_refunded_minor = sum(int(row.amount_minor) for row in refunds)
+        balance_due_minor = (
+            max(int(package.sale_price_minor) - amount_paid_minor, 0)
+            if effective == "active"
+            else 0
+        )
     return PatientPackageRead(
         id=package.id,
         workspace_id=package.workspace_id,
@@ -115,6 +125,7 @@ def list_patient_packages(
     service_id: UUID | None = None,
     usable_only: bool = False,
     on_date: date | None = None,
+    include_financials: bool = False,
 ) -> list[PatientPackageRead]:
     query = select(PatientPackage).where(
         PatientPackage.workspace_id == workspace_id,
@@ -123,7 +134,15 @@ def list_patient_packages(
     if service_id is not None:
         query = query.where(PatientPackage.service_id == service_id)
     packages = list(db.scalars(query.order_by(PatientPackage.purchased_at.desc())).all())
-    reads = [package_read(db, package, on_date=on_date) for package in packages]
+    reads = [
+        package_read(
+            db,
+            package,
+            on_date=on_date,
+            include_financials=include_financials,
+        )
+        for package in packages
+    ]
     if usable_only:
         reads = [item for item in reads if item.effective_status == "active" and item.sessions_remaining > 0]
     return reads

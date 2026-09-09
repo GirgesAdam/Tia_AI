@@ -183,7 +183,11 @@ def change_appointment_service(
                     appointment=appointment,
                     actor_type=actor_type,
                     actor_user_id=changed_by_user_id,
-                    reason="staff_service_or_device_changed",
+                    reason=(
+                        "staff_service_changed"
+                        if service_changed
+                        else "staff_laser_device_changed"
+                    ),
                 )
             except PackageOperationError as exc:
                 raise StaffAppointmentEditError(str(exc)) from exc

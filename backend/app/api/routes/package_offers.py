@@ -96,7 +96,7 @@ def buy_package_offer(
         )
         db.commit()
         db.refresh(package)
-        return package_read(db, package)
+        return package_read(db, package, include_financials=True)
     except (PackageOfferError, PackageOperationError) as exc:
         db.rollback()
         _raise(exc)
