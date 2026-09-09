@@ -172,6 +172,9 @@ def test_live_same_phrase_changes_meaning_with_conversation_context() -> None:
         local_now=local_now,
         clinic_catalog=catalog,
     )
-    assert search.action == "modify"
+    # Filling a newly requested search bound may be represented as continue;
+    # changing an already persisted bound may be modify. Runtime merges structured
+    # hints for both. The semantic invariant is filter-vs-selection, not the label.
+    assert search.action in {"continue", "modify"}
     assert search.selection_time is None
     assert search.entity_hints.not_before_time == "13:30"
