@@ -13,7 +13,8 @@ SemanticCapability = Literal[
     "service_information", "clinic_information", "pricing", "branch_discovery", "doctor_discovery",
     "availability_discovery", "appointment_creation", "appointment_list", "appointment_confirmation",
     "appointment_cancellation", "appointment_reschedule", "customer_profile", "customer_history",
-    "package_information", "package_refund_quote", "follow_up_request", "marketing_preferences", "human_support",
+    "package_information", "package_purchase", "package_refund_quote", "follow_up_request",
+    "marketing_preferences", "human_support",
 ]
 RiskFlag = Literal["medical", "complaint", "payment", "urgent"]
 HandoffCategory = Literal["medical", "complaint", "payment", "customer_request", "booking_exception", "agent_uncertain", "other"]
@@ -22,6 +23,7 @@ FlowSignal = Literal["none", "start_booking", "start_reschedule", "interrupt"]
 PackageIntent = Literal["none", "inquire", "purchase", "use_existing", "avoid_existing"]
 FlowTurnAction = Literal["continue", "modify", "select_option", "cancel_flow", "interrupt"]
 LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
+PackageSessionsCount = Literal[3, 6, 9]
 ClearableFlowEntity = Literal[
     "service_query", "service_id", "service_candidate_ids", "branch_query", "branch_id",
     "branch_candidate_ids", "doctor_query", "doctor_id", "doctor_candidate_ids", "laser_device_key",
@@ -53,6 +55,13 @@ class SemanticEntityHints(BaseModel):
         description=(
             "For a service whose catalog row requires a laser device, select only one of the supplied "
             "configured device keys when the customer clearly chose it. Never guess a device."
+        ),
+    )
+    package_sessions_count: PackageSessionsCount | None = Field(
+        default=None,
+        description=(
+            "For a package inquiry or purchase, capture the requested configured package size only when "
+            "the customer clearly chose 3, 6, or 9 sessions. Never infer a package size from an appointment count."
         ),
     )
     appointment_id: str | None = Field(
@@ -132,6 +141,7 @@ def empty_entity_hints() -> SemanticEntityHints:
         branch_query=None,
         doctor_query=None,
         laser_device_key=None,
+        package_sessions_count=None,
         requested_date=None,
         requested_start_time=None,
         not_before_time=None,
