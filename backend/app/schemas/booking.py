@@ -28,6 +28,7 @@ AppointmentSource = Literal[
     "email",
     "other",
 ]
+LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
 OperationalAppointmentStatus = Literal["completed", "no_show"]
 AppointmentListScope = Literal["all", "today", "upcoming", "past"]
 AppointmentOperationAction = Literal[
@@ -50,6 +51,8 @@ class AvailabilitySlot(BaseModel):
     end_at: datetime
     price_minor: int
     currency: str
+    laser_device_key: LaserDeviceKey | None = None
+    laser_device_name: str | None = None
 
 
 class AvailabilityResponse(BaseModel):
@@ -69,6 +72,7 @@ class AppointmentCreate(BaseModel):
     start_at: datetime
     source: AppointmentSource = "staff"
     customer_note: str | None = Field(default=None, max_length=5000)
+    laser_device_key: LaserDeviceKey | None = None
 
     @field_validator("start_at")
     @classmethod
@@ -143,6 +147,8 @@ class AppointmentRead(BaseModel):
     duration_minutes: int
     price_minor: int
     currency: str
+    laser_device_key: LaserDeviceKey | None = None
+    laser_device_name: str | None = None
     payment_status: str = "unknown"
     amount_paid_minor: int | None = None
     payment_method: str = "unknown"
