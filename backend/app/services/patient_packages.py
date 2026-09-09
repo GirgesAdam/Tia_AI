@@ -70,6 +70,7 @@ def package_read(db: Session, package: PatientPackage, *, on_date: date | None =
         patient_id=package.patient_id,
         service_id=package.service_id,
         purchase_transaction_id=package.purchase_transaction_id,
+        package_offer_id=package.package_offer_id,
         external_id=package.external_id,
         name=package.name,
         sessions_purchased=package.sessions_purchased,
@@ -80,6 +81,8 @@ def package_read(db: Session, package: PatientPackage, *, on_date: date | None =
         standalone_session_price_minor_at_purchase=(
             package.standalone_session_price_minor_at_purchase
         ),
+        laser_device_key=package.laser_device_key,
+        laser_device_name=package.laser_device_name,
         currency=package.currency,
         purchased_at=package.purchased_at,
         expires_at=package.expires_at,
@@ -131,6 +134,10 @@ def create_patient_package(
     external_id: str | None = None,
     idempotency_key: str | None = None,
     actor_type: ActivityActorType = "staff",
+    package_offer_id: UUID | None = None,
+    laser_device_key: str | None = None,
+    laser_device_name: str | None = None,
+    standalone_session_price_minor_at_purchase: int | None = None,
 ) -> PatientPackage:
     if sessions_purchased <= 0:
         raise PackageOperationError("Package sessions must be positive.")
@@ -143,7 +150,7 @@ def create_patient_package(
         payment_method not in PAYMENT_METHODS or payment_method == "unknown"
     ):
         raise PackageOperationError("A paid package requires a supported payment method.")
-    purchased_at = (purchased_at or datetime.now(UTC))
+    purchased_at = purchased_at or datetime.now(UTC)
     if purchased_at.tzinfo is None or purchased_at.utcoffset() is None:
         raise PackageOperationError("Package purchase time must include a timezone offset.")
     purchased_at = purchased_at.astimezone(UTC)
@@ -180,6 +187,11 @@ def create_patient_package(
     if service is None or not service.is_active:
         raise PackageNotFound("Service not found or inactive.")
 
+    standalone_snapshot = (
+        int(standalone_session_price_minor_at_purchase)
+        if standalone_session_price_minor_at_purchase is not None
+        else int(service.price_minor)
+    )
     transaction = None
     if effective_initial_payment > 0:
         try:
@@ -211,12 +223,15 @@ def create_patient_package(
         patient_id=patient_id,
         service_id=service_id,
         purchase_transaction_id=transaction.id if transaction else None,
+        package_offer_id=package_offer_id,
         created_by_user_id=created_by_user_id,
         external_id=external_id,
         name=name.strip(),
         sessions_purchased=sessions_purchased,
         sale_price_minor=sale_price_minor,
-        standalone_session_price_minor_at_purchase=service.price_minor,
+        standalone_session_price_minor_at_purchase=standalone_snapshot,
+        laser_device_key=laser_device_key,
+        laser_device_name=laser_device_name,
         currency="EGP",
         purchased_at=purchased_at,
         expires_at=expires_at,
@@ -239,10 +254,12 @@ def create_patient_package(
         summary="Prepaid package created",
         metadata={
             "service_id": service_id,
+            "package_offer_id": package_offer_id,
+            "laser_device_key": laser_device_key,
             "sessions_purchased": sessions_purchased,
             "sale_price_minor": sale_price_minor,
             "amount_paid_minor": effective_initial_payment,
-            "standalone_session_price_minor_at_purchase": service.price_minor,
+            "standalone_session_price_minor_at_purchase": standalone_snapshot,
             "has_payment": transaction is not None,
         },
     )
@@ -454,8 +471,6 @@ def cancel_patient_package_with_refund(
 
     created_refunds: list[PaymentTransaction] = []
     remaining_to_refund = refundable_minor
-    # Refund newest collections first so the oldest collected value remains against
-    # already-consumed standalone treatment in a deterministic way.
     for index, payment in enumerate(reversed(payments)):
         if remaining_to_refund <= 0:
             break
@@ -532,10 +547,6 @@ def cancel_patient_package_with_refund(
         usage.used_at = None
         released_appointment_ids.add(usage.appointment_id)
 
-    # Cancelling the commercial package must also remove package coverage from
-    # appointments that are still scheduled. Keep the appointment itself intact
-    # so the clinic can still treat the patient as a normal pay-per-session visit.
-    # The released PackageUsage row stays as immutable history.
     if released_appointment_ids:
         db.execute(
             update(Appointment)
@@ -610,12 +621,15 @@ def validate_package_for_booking(
     service_id: UUID,
     appointment_start_at: datetime,
     sessions: int = 1,
+    laser_device_key: str | None = None,
 ) -> PatientPackage:
     package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
     if package.patient_id != patient_id:
         raise PackageOperationError("Selected package belongs to another patient.")
     if package.service_id != service_id:
         raise PackageOperationError("Selected package is for a different service.")
+    if package.laser_device_key is not None and package.laser_device_key != laser_device_key:
+        raise PackageOperationError("Selected package is for a different laser device.")
     if _effective_status(package, on_date=appointment_start_at.date()) != "active":
         raise PackageOperationError("Selected package is not active on the appointment date.")
     if appointment_start_at.astimezone(UTC) < package.purchased_at.astimezone(UTC):
@@ -638,6 +652,8 @@ def reserve_package_usage(
     actor_type: ActivityActorType = "staff",
     actor_user_id: UUID | None = None,
 ) -> PackageUsage:
+    if package.laser_device_key is not None and package.laser_device_key != appointment.laser_device_key:
+        raise PackageOperationError("Package laser device does not match the appointment device.")
     existing = db.scalar(
         select(PackageUsage).where(
             PackageUsage.workspace_id == appointment.workspace_id,
@@ -648,7 +664,6 @@ def reserve_package_usage(
         if existing.patient_package_id != package.id:
             raise PackageOperationError("Appointment is already linked to another package.")
         if existing.status == "released":
-            # Re-reservation is allowed only after the caller has revalidated capacity.
             existing.status = "reserved"
             existing.used_at = None
         return existing
@@ -774,6 +789,15 @@ def transfer_package_usage(
         return None
     if usage.status != "reserved":
         raise PackageOperationError("Only a reserved package session can be rescheduled.")
+    package = _locked_package(
+        db,
+        workspace_id=from_appointment.workspace_id,
+        package_id=usage.patient_package_id,
+    )
+    if package.service_id != to_appointment.service_id:
+        raise PackageOperationError("Package service does not match the rescheduled appointment.")
+    if package.laser_device_key is not None and package.laser_device_key != to_appointment.laser_device_key:
+        raise PackageOperationError("Package laser device does not match the rescheduled appointment.")
     usage.appointment_id = to_appointment.id
     to_appointment.patient_package_id = from_appointment.patient_package_id
     to_appointment.billing_context = from_appointment.billing_context
