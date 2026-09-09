@@ -1,27 +1,68 @@
 from pathlib import Path
 
+from app.services.appointment_operations import service_change_requires_human
 
-def _source(relative_path: str) -> str:
-    backend = Path(__file__).resolve().parent.parent
-    return (backend / relative_path).read_text(encoding="utf-8")
+
+def test_unpaid_standard_booking_can_change_service() -> None:
+    assert service_change_requires_human(
+        payment_status="unknown",
+        amount_paid_minor=None,
+        billing_context="standard",
+        patient_package_id=None,
+        package_external_id=None,
+        has_payment_allocation=False,
+    ) is False
+    assert service_change_requires_human(
+        payment_status="unpaid",
+        amount_paid_minor=0,
+        billing_context="standard",
+        patient_package_id=None,
+        package_external_id=None,
+        has_payment_allocation=False,
+    ) is False
+
+
+def test_paid_or_package_booking_service_change_requires_human() -> None:
+    base = dict(
+        payment_status="unknown",
+        amount_paid_minor=None,
+        billing_context="standard",
+        patient_package_id=None,
+        package_external_id=None,
+        has_payment_allocation=False,
+    )
+    cases = [
+        {"payment_status": "paid"},
+        {"payment_status": "partial"},
+        {"amount_paid_minor": 100},
+        {"billing_context": "package_prepaid"},
+        {"package_external_id": "PKG-1"},
+        {"has_payment_allocation": True},
+    ]
+    for override in cases:
+        payload = {**base, **override}
+        assert service_change_requires_human(**payload) is True
 
 
 def test_reschedule_service_id_flows_from_verified_slot_to_native_operation() -> None:
-    semantic = _source("app/agents/semantic_actions.py")
-    tools = _source("app/agents/tools/clinic_tools.py")
-    adapter = _source("app/integrations/clinic/tia_database.py")
-    operations = _source("app/services/appointment_operations.py")
+    backend = Path(__file__).resolve().parent.parent
+    semantic = (backend / "app/agents/semantic_actions.py").read_text(encoding="utf-8")
+    tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
+    adapter = (backend / "app/integrations/clinic/tia_database.py").read_text(encoding="utf-8")
+    operations = (backend / "app/services/appointment_operations.py").read_text(encoding="utf-8")
 
     assert '"service_id": str(slot.get("service_id") or "")' in semantic
     assert 'service_id: str = ""' in tools
     assert 'service_id=service_id or None' in tools
-    assert "service_id=new_service_id" in adapter
-    assert "service_id=new_service_id" in operations
+    assert 'service_id=new_service_id' in adapter
+    assert 'service_id=new_service_id' in operations
+    assert 'AppointmentServiceChangeRequiresHuman' in operations
 
 
 def test_reschedule_discovery_keeps_current_appointment_separate_from_target_service() -> None:
-    tools = _source("app/agents/tools/clinic_tools.py")
-    chat = _source("app/services/agent_chat.py")
+    backend = Path(__file__).resolve().parent.parent
+    tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
+    chat = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")
 
     assert "if service_id and not appointment_id:" in tools
     assert "target_service_id = service_id or current.service_id" in tools
@@ -29,37 +70,11 @@ def test_reschedule_discovery_keeps_current_appointment_separate_from_target_ser
     assert 'snapshot_current = flow.option_snapshot.get("current_appointment")' in chat
 
 
-def test_agent_service_change_does_not_handoff_only_because_money_or_package_exists() -> None:
-    operations = _source("app/services/appointment_operations.py")
-    adapter = _source("app/integrations/clinic/tia_database.py")
+def test_financially_sensitive_service_change_escalates_instead_of_faking_failure() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
+    chat = (backend / "app/services/agent_chat.py").read_text(encoding="utf-8")
 
-    assert "AppointmentServiceChangeRequiresHuman" not in operations
-    assert "service_change_requires_human" not in operations
-    assert "AppointmentServiceChangeRequiresHuman" not in adapter
-    assert "reallocate_appointment_payments_on_reschedule" in operations
-    assert "refresh_appointment_payment_snapshots" in operations
-
-
-def test_reschedule_preserves_only_compatible_package_entitlement() -> None:
-    operations = _source("app/services/appointment_operations.py")
-    packages = _source("app/services/patient_packages.py")
-
-    assert "_package_matches_replacement" in operations
-    assert "package.service_id == replacement.service_id" in operations
-    assert "package.laser_device_key == replacement.laser_device_key" in operations
-    assert 'reason="appointment_service_or_device_changed"' in operations
-    assert "replacement.patient_package_id = None" in operations
-    assert "transfer_package_usage(" in operations
-    assert "package.laser_device_key != to_appointment.laser_device_key" in packages
-
-
-def test_laser_device_is_part_of_agent_reschedule_adapter_contract() -> None:
-    contract = _source("app/integrations/clinic/base.py")
-    laser_adapter = _source("app/integrations/clinic/tia_database_laser.py")
-    operations = _source("app/services/appointment_operations.py")
-
-    reschedule_request = contract[contract.index("class RescheduleAppointmentRequest"):]
-    assert "laser_device_key: str | None = None" in reschedule_request
-    assert "request.laser_device_key" in laser_adapter
-    assert "laser_device_key=laser_device_key" in operations
-    assert "laser_device_key=slot.laser_device_key" in operations
+    assert '"requires_human": True' in tools
+    assert 'tool_name="escalate_to_human"' in chat
+    assert "reschedule_service_change_requires_human" in chat

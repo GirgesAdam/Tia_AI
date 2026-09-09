@@ -274,11 +274,7 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
 
         device_price = None
         if bool(getattr(service, "requires_laser_device", False)):
-            device_key = (
-                request.laser_device_key
-                or current_laser_device_key()
-                or current.laser_device_key
-            )
+            device_key = current_laser_device_key() or current.laser_device_key
             device_price = self._device_price(service_id=target_service_id, device_key=device_key)
             assert device_price is not None
             find_exact_slot(
@@ -292,12 +288,7 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
                 laser_device_key=device_price.device_key,
             )
 
-        result = super().reschedule_appointment(
-            replace(
-                request,
-                laser_device_key=(device_price.device_key if device_price is not None else None),
-            )
-        )
+        result = super().reschedule_appointment(request)
         replacement_id = UUID(result.appointment.appointment_id)
         replacement = self.db.get(Appointment, replacement_id)
         if replacement is None:
