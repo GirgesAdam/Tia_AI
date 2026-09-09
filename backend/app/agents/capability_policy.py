@@ -30,7 +30,10 @@ CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "customer_profile": frozenset({"get_customer_profile"}),
     "customer_history": frozenset({"get_customer_history"}),
     "package_information": frozenset(),
-    "package_purchase": frozenset({"purchase_package_offer"}),
+    # Package purchase is executed by the grounded orchestration path after a
+    # verified configured offer has been selected. It is intentionally not a
+    # free-form model tool.
+    "package_purchase": frozenset(),
     "package_refund_quote": frozenset(),
     "follow_up_request": frozenset({"create_follow_up_task"}),
     "marketing_preferences": frozenset({"update_marketing_consent"}),
@@ -41,13 +44,13 @@ WRITE_TOOL_CAPABILITY: dict[str, str] = {
     "confirm_appointment": "appointment_confirmation",
     "cancel_appointment": "appointment_cancellation",
     "reschedule_appointment": "appointment_reschedule",
-    "purchase_package_offer": "package_purchase",
     "create_follow_up_task": "follow_up_request",
     "update_marketing_consent": "marketing_preferences",
     "escalate_to_human": "human_support",
 }
 
-WRITE_CAPABILITIES = frozenset(WRITE_TOOL_CAPABILITY.values())
+WRITE_CAPABILITIES = frozenset((*WRITE_TOOL_CAPABILITY.values(), "package_purchase"))
+
 
 @dataclass(frozen=True)
 class CapabilityPolicyDecision:
@@ -62,6 +65,7 @@ class CapabilityPolicyDecision:
 
 class ToolAuthorizationError(PermissionError):
     pass
+
 
 def _risk_handoff(
     risks: set[str],
@@ -90,6 +94,7 @@ def _risk_handoff(
             decision.recommended_handoff_priority,
         )
     return False, "other", "normal"
+
 
 def resolve_capability_policy(
     decision: SemanticCapabilityDecision,
@@ -127,6 +132,7 @@ def resolve_capability_policy(
         handoff_priority=priority,
         risk_flags=frozenset(risks),
     )
+
 
 def authorize_tool_execution(
     policy: CapabilityPolicyDecision,
