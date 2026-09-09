@@ -21,6 +21,10 @@ class ClinicProductCreate(BaseModel):
         return value
 
 
+class ClinicProductQuantityUpdate(BaseModel):
+    quantity_on_hand: int = Field(ge=0, le=1_000_000)
+
+
 class ClinicProductRead(BaseModel):
     id: UUID
     workspace_id: UUID
