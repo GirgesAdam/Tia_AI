@@ -8,6 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
+from app.models.clinic_inventory import AppointmentProductLine
 from app.models.expense import Expense
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
@@ -313,16 +314,40 @@ def outstanding_balances(
     workspace_id: UUID,
     limit: int = 200,
 ) -> OutstandingBalancesRead:
-    """Return balances for completed sessions that have not been fully paid.
+    """Return money still due after a session has actually been completed.
 
-    A patient appears only after the appointment is completed and the stored amount
-    paid remains below the appointment total. Prepaid-package sessions are excluded
-    because their commercial payment belongs to the package rather than the visit.
-    Products added to an appointment remain part of the amount due.
+    Standard visits owe the service plus any products sold on the appointment.
+    For package-prepaid visits the service is already covered by the package, but
+    separately sold products can still leave an appointment-level balance.
+    Future/confirmed visits never appear because only ``completed`` is eligible.
     """
+    product_totals = (
+        select(
+            AppointmentProductLine.workspace_id.label("workspace_id"),
+            AppointmentProductLine.appointment_id.label("appointment_id"),
+            func.coalesce(
+                func.sum(
+                    AppointmentProductLine.quantity * AppointmentProductLine.unit_price_minor
+                ),
+                0,
+            ).label("products_total_minor"),
+        )
+        .where(AppointmentProductLine.workspace_id == workspace_id)
+        .group_by(
+            AppointmentProductLine.workspace_id,
+            AppointmentProductLine.appointment_id,
+        )
+        .subquery()
+    )
+    products_due = func.coalesce(product_totals.c.products_total_minor, 0)
+    service_due = case(
+        (Appointment.billing_context == "package_prepaid", 0),
+        else_=Appointment.price_minor,
+    )
+    total_due = service_due + products_due
     paid_expr = func.coalesce(Appointment.amount_paid_minor, 0)
     balance_expr = case(
-        (Appointment.price_minor > paid_expr, Appointment.price_minor - paid_expr),
+        (total_due > paid_expr, total_due - paid_expr),
         else_=0,
     )
     rows = db.execute(
@@ -340,11 +365,15 @@ def outstanding_balances(
             (Patient.workspace_id == Appointment.workspace_id)
             & (Patient.id == Appointment.patient_id),
         )
+        .outerjoin(
+            product_totals,
+            (product_totals.c.workspace_id == Appointment.workspace_id)
+            & (product_totals.c.appointment_id == Appointment.id),
+        )
         .where(
             Appointment.workspace_id == workspace_id,
             Appointment.status == "completed",
-            Appointment.billing_context != "package_prepaid",
-            Appointment.price_minor > paid_expr,
+            total_due > paid_expr,
         )
         .group_by(
             Patient.id,
