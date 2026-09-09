@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { Banknote, CalendarRange, CreditCard, Pencil, Plus, Receipt, Trash2, TrendingDown, TrendingUp, UsersRound, WalletCards } from "lucide-react";
+import { Banknote, CalendarRange, CreditCard, Pencil, Plus, Receipt, Trash2, TrendingDown, TrendingUp, WalletCards } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -64,19 +63,6 @@ type PaymentBreakdown = {
   }>;
 };
 
-type OutstandingBalances = {
-  rows: Array<{
-    patient_id: string;
-    patient_name: string;
-    phone: string | null;
-    currency: string;
-    balance_minor: number;
-    appointment_count: number;
-  }>;
-  total_patients: number;
-  totals_by_currency: Record<string, number>;
-};
-
 type SearchParams = { start_date?: string; end_date?: string };
 
 const categoryLabels: Record<ExpenseCategory, string> = {
@@ -99,12 +85,6 @@ const paymentMethodLabels: Record<string, string> = {
   cash: "Cash",
   visa: "Visa",
   instapay: "InstaPay",
-  card: "بطاقة - سجل قديم",
-  bank_transfer: "تحويل بنكي - سجل قديم",
-  wallet: "محفظة - سجل قديم",
-  online: "دفع إلكتروني - سجل قديم",
-  other: "طريقة قديمة أخرى",
-  unknown: "غير محدد",
 };
 
 function validDate(value: string | undefined) {
@@ -206,17 +186,16 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   });
   const expenseQuery = new URLSearchParams(periodQuery);
   expenseQuery.set("limit", "500");
-  const [expenses, paymentBreakdown, outstanding] = await Promise.all([
+  const [expenses, paymentBreakdown] = await Promise.all([
     tiaRequest<Expense[]>(`/finance/expenses?${expenseQuery.toString()}`),
     tiaRequest<PaymentBreakdown>(`/finance/payment-method-breakdown?${periodQuery.toString()}`),
-    tiaRequest<OutstandingBalances>("/finance/outstanding-balances?limit=500"),
   ]);
 
   return (
     <>
       <PageHeader
         title="المالية"
-        description="تابع الدخل والمصروفات وصافي الربح، واعرف دخل كل طريقة دفع والعملاء اللي لسه عليهم مبالغ مستحقة."
+        description="تابع الدخل والمصروفات وصافي الربح ودخل طرق الدفع المستخدمة حاليًا."
       />
 
       <Card className="mb-5">
@@ -246,7 +225,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <CardHeader className="flex-row items-center justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2"><CreditCard size={17} /> الدخل حسب طريقة الدفع</CardTitle>
-            <p className="mt-1 text-xs text-[var(--muted)]">التقسيم لنفس الفترة المختارة، من المدفوعات المسجلة فعليًا.</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">يعرض Cash وVisa وInstaPay فقط. السجلات القديمة تظل محفوظة محاسبيًا ولا تظهر هنا.</p>
           </div>
         </CardHeader>
         <CardContent>
@@ -263,44 +242,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                 </div>
               ))}
             </div>
-          ) : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-[var(--muted)]">لا توجد دفعات في الفترة المختارة.</div>}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-5">
-        <CardHeader className="flex-row items-center justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2"><UsersRound size={17} /> العملاء اللي عليهم مبالغ</CardTitle>
-            <p className="mt-1 text-xs text-[var(--muted)]">يعرض الرصيد المتبقي على المواعيد غير المسددة بالكامل.</p>
-          </div>
-          <div className="text-sm font-black text-slate-900">{outstanding.total_patients.toLocaleString("ar-EG")} عميل</div>
-        </CardHeader>
-        <CardContent>
-          {Object.entries(outstanding.totals_by_currency).length > 0 && (
-            <div className="mb-4 flex flex-wrap gap-2">
-              {Object.entries(outstanding.totals_by_currency).map(([currency, amount]) => (
-                <span key={currency} className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-black text-amber-900">إجمالي المتبقي: {formatMoney(amount, currency)}</span>
-              ))}
-            </div>
-          )}
-          {outstanding.rows.length ? (
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="data-table min-w-[650px]">
-                <thead><tr><th>العميل</th><th>الهاتف</th><th>عدد المواعيد</th><th>المتبقي</th><th></th></tr></thead>
-                <tbody>
-                  {outstanding.rows.map((row) => (
-                    <tr key={`${row.patient_id}-${row.currency}`}>
-                      <td className="font-black">{row.patient_name}</td>
-                      <td dir="ltr">{row.phone || "—"}</td>
-                      <td>{row.appointment_count.toLocaleString("ar-EG")}</td>
-                      <td className="font-black">{formatMoney(row.balance_minor, row.currency)}</td>
-                      <td><Link href={`/appointments?patient_id=${row.patient_id}&scope=all`} className="text-xs font-bold text-teal-700 hover:underline">عرض المواعيد</Link></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-[var(--muted)]">لا يوجد عملاء عليهم أرصدة مستحقة حاليًا.</div>}
+          ) : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-[var(--muted)]">لا توجد دفعات بالطرق الحالية في الفترة المختارة.</div>}
         </CardContent>
       </Card>
 
