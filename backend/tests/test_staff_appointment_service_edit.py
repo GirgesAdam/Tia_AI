@@ -9,11 +9,17 @@ from app.services.booking import SlotCandidate
 
 
 class _Db:
-    def __init__(self) -> None:
+    def __init__(self, *, package_device_key: str | None = None) -> None:
         self.flush_count = 0
+        self.package_device_key = package_device_key
 
     def flush(self) -> None:
         self.flush_count += 1
+
+    def scalar(self, _stmt):
+        if self.package_device_key is None:
+            raise AssertionError("unexpected scalar lookup")
+        return SimpleNamespace(laser_device_key=self.package_device_key)
 
 
 def _appointment(*, service_id, package_backed: bool = True):
@@ -105,8 +111,7 @@ def test_staff_device_change_releases_incompatible_device_package(monkeypatch) -
     service_id = uuid4()
     appointment = _appointment(service_id=service_id, package_backed=True)
     workspace = SimpleNamespace(id=appointment.workspace_id)
-    db = _Db()
-    db.scalar = lambda _stmt: SimpleNamespace(laser_device_key="candela_gentle")
+    db = _Db(package_device_key="candela_gentle")
     new_slot = SlotCandidate(
         branch_id=appointment.branch_id,
         doctor_id=appointment.doctor_id,
