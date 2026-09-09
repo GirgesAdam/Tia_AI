@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
-from app.models.payment_transaction import PaymentAllocation
+from app.models.patient_package import PatientPackage
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
@@ -21,7 +21,10 @@ from app.services.patient_packages import (
     release_package_usage,
     transfer_package_usage,
 )
-from app.services.payments import reallocate_appointment_payments_on_reschedule
+from app.services.payments import (
+    reallocate_appointment_payments_on_reschedule,
+    refresh_appointment_payment_snapshots,
+)
 
 AppointmentOperationAction = Literal[
     "confirm",
@@ -46,30 +49,6 @@ class AppointmentCancellationOverrideRequired(AppointmentOperationError):
 
 class AppointmentOperationForbidden(AppointmentOperationError):
     pass
-
-
-class AppointmentServiceChangeRequiresHuman(AppointmentOperationError):
-    pass
-
-
-def service_change_requires_human(
-    *,
-    payment_status: str,
-    amount_paid_minor: int | None,
-    billing_context: str,
-    patient_package_id: UUID | None,
-    package_external_id: str | None,
-    has_payment_allocation: bool,
-) -> bool:
-    """Fail closed when changing service could alter money or package entitlement."""
-    return bool(
-        patient_package_id is not None
-        or billing_context == "package_prepaid"
-        or package_external_id
-        or payment_status not in {"unknown", "unpaid"}
-        or int(amount_paid_minor or 0) > 0
-        or has_payment_allocation
-    )
 
 
 def appointment_allowed_actions(
@@ -332,6 +311,30 @@ def cancel_appointment_operation(
     return appointment
 
 
+def _package_matches_replacement(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+    replacement: Appointment,
+) -> bool:
+    package = db.scalar(
+        select(PatientPackage).where(
+            PatientPackage.workspace_id == workspace_id,
+            PatientPackage.id == package_id,
+        )
+    )
+    if package is None:
+        raise AppointmentOperationError("Appointment package is missing.")
+    return bool(
+        package.service_id == replacement.service_id
+        and (
+            package.laser_device_key is None
+            or package.laser_device_key == replacement.laser_device_key
+        )
+    )
+
+
 def reschedule_appointment_operation(
     db: Session,
     *,
@@ -342,6 +345,7 @@ def reschedule_appointment_operation(
     branch_id: UUID | None = None,
     doctor_id: UUID | None = None,
     service_id: UUID | None = None,
+    laser_device_key: str | None = None,
     patient_id: UUID | None = None,
     reason: str = "appointment_rescheduled",
     idempotency_key: str | None = None,
@@ -383,31 +387,6 @@ def reschedule_appointment_operation(
     new_branch_id = branch_id or current.branch_id
     new_doctor_id = doctor_id or current.doctor_id
     new_service_id = service_id or current.service_id
-    service_changed = new_service_id != current.service_id
-    if service_changed:
-        has_payment_allocation = (
-            db.scalar(
-                select(PaymentAllocation.id)
-                .where(
-                    PaymentAllocation.workspace_id == workspace.id,
-                    PaymentAllocation.appointment_id == current.id,
-                )
-                .limit(1)
-            )
-            is not None
-        )
-        if service_change_requires_human(
-            payment_status=current.payment_status,
-            amount_paid_minor=current.amount_paid_minor,
-            billing_context=current.billing_context,
-            patient_package_id=current.patient_package_id,
-            package_external_id=current.package_external_id,
-            has_payment_allocation=has_payment_allocation,
-        ):
-            raise AppointmentServiceChangeRequiresHuman(
-                "Changing the service on this appointment needs staff review because "
-                "payment or package state is attached to the booking."
-            )
 
     try:
         slot = find_exact_slot(
@@ -418,6 +397,7 @@ def reschedule_appointment_operation(
             doctor_id=new_doctor_id,
             requested_start_at=requested_start_at,
             exclude_appointment_id=current.id,
+            laser_device_key=laser_device_key,
         )
     except BookingRuleError as exc:
         raise AppointmentOperationError(str(exc)) from exc
@@ -425,6 +405,8 @@ def reschedule_appointment_operation(
     old_status = current.status
     old_start = current.start_at
     old_end = current.end_at
+    service_changed = new_service_id != current.service_id
+    device_changed = (slot.laser_device_key or None) != (current.laser_device_key or None)
 
     replacement = Appointment(
         workspace_id=workspace.id,
@@ -445,6 +427,8 @@ def reschedule_appointment_operation(
         duration_minutes=slot.duration_minutes,
         price_minor=slot.price_minor,
         currency=slot.currency,
+        laser_device_key=slot.laser_device_key,
+        laser_device_name=slot.laser_device_name,
         payment_status=current.payment_status,
         amount_paid_minor=current.amount_paid_minor,
         payment_method=current.payment_method,
@@ -465,14 +449,54 @@ def reschedule_appointment_operation(
         from_appointment_id=current.id,
         to_appointment_id=replacement.id,
     )
+
+    package_released = False
     try:
-        transfer_package_usage(
-            db,
-            from_appointment=current,
-            to_appointment=replacement,
-        )
+        if current.patient_package_id is not None:
+            if _package_matches_replacement(
+                db,
+                workspace_id=workspace.id,
+                package_id=current.patient_package_id,
+                replacement=replacement,
+            ):
+                transfer_package_usage(
+                    db,
+                    from_appointment=current,
+                    to_appointment=replacement,
+                )
+            else:
+                release_package_usage(
+                    db,
+                    appointment=current,
+                    actor_type=actor_type,
+                    actor_user_id=changed_by_user_id,
+                    reason="appointment_service_or_device_changed",
+                )
+                replacement.patient_package_id = None
+                replacement.billing_context = "standard"
+                replacement.package_external_id = None
+                package_released = True
+        elif (
+            (service_changed or device_changed)
+            and (
+                current.billing_context == "package_prepaid"
+                or current.package_external_id
+            )
+        ):
+            # Imported/legacy package context without a native entitlement cannot
+            # be safely carried to a different service/device automatically.
+            replacement.patient_package_id = None
+            replacement.billing_context = "standard"
+            replacement.package_external_id = None
+            package_released = True
     except PackageOperationError as exc:
         raise AppointmentOperationError(str(exc)) from exc
+
+    refresh_appointment_payment_snapshots(
+        db,
+        workspace_id=workspace.id,
+        appointment_ids={replacement.id},
+    )
     transfer_campaign_booking_conversion(
         db,
         workspace_id=workspace.id,
@@ -495,7 +519,11 @@ def reschedule_appointment_operation(
             "new_end_at": replacement.end_at.isoformat(),
             "old_service_id": str(current.service_id),
             "new_service_id": str(replacement.service_id),
+            "old_laser_device_key": current.laser_device_key,
+            "new_laser_device_key": replacement.laser_device_key,
             "service_changed": service_changed,
+            "device_changed": device_changed,
+            "package_released": package_released,
         },
     )
     add_appointment_history(
@@ -529,7 +557,11 @@ def reschedule_appointment_operation(
             "new_start_at": replacement.start_at,
             "old_service_id": current.service_id,
             "new_service_id": replacement.service_id,
+            "old_laser_device_key": current.laser_device_key,
+            "new_laser_device_key": replacement.laser_device_key,
             "service_changed": service_changed,
+            "device_changed": device_changed,
+            "package_released": package_released,
         },
     )
     db.flush()
