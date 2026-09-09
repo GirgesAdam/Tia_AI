@@ -5,6 +5,7 @@ from typing import Any
 
 from app.agents.availability_presentation import format_availability_windows_reply
 from app.services.laser_booking_context import set_laser_device_key
+from app.services.laser_slot_metadata import decode_laser_slot_branch
 
 
 def select_slot_from_structured_selection(
@@ -43,8 +44,18 @@ def select_slot_from_structured_selection(
     return None
 
 
+def _slot_device(slot: dict[str, Any]) -> tuple[str | None, str | None]:
+    key = str(slot.get("laser_device_key") or "").strip() or None
+    name = str(slot.get("laser_device_name") or "").strip() or None
+    if key:
+        return key, name
+    metadata = decode_laser_slot_branch(slot.get("branch_name"))
+    return metadata.device_key, metadata.device_name
+
+
 def booking_tool_args(slot: dict[str, Any]) -> dict[str, str]:
-    set_laser_device_key(str(slot.get("laser_device_key") or "") or None)
+    device_key, _device_name = _slot_device(slot)
+    set_laser_device_key(device_key)
     return {
         "branch_id": str(slot["branch_id"]),
         "service_id": str(slot["service_id"]),
@@ -52,6 +63,13 @@ def booking_tool_args(slot: dict[str, Any]) -> dict[str, str]:
         "start_at": str(slot["start_local"]),
         "customer_note": "",
     }
+
+
+def _appointment_device_name(appointment: dict[str, Any]) -> str | None:
+    explicit = str(appointment.get("laser_device_name") or "").strip()
+    if explicit:
+        return explicit
+    return decode_laser_slot_branch(appointment.get("branch")).device_name
 
 
 def format_booking_success(appointment: dict[str, Any]) -> str:
@@ -74,7 +92,7 @@ def format_booking_success(appointment: dict[str, Any]) -> str:
 
     details = [
         appointment.get("service"),
-        appointment.get("laser_device_name"),
+        _appointment_device_name(appointment),
         appointment.get("doctor"),
         " ".join(part for part in (date_text, time_text) if part) or None,
         appointment.get("price"),
@@ -100,7 +118,7 @@ def format_reschedule_success(appointment: dict[str, Any]) -> str:
 
     doctor = str(appointment.get("doctor") or appointment.get("doctor_name") or "").strip()
     service = str(appointment.get("service") or appointment.get("service_name") or "").strip()
-    device = str(appointment.get("laser_device_name") or "").strip()
+    device = _appointment_device_name(appointment) or ""
     details: list[str] = []
     if service:
         details.append(f"لـ{service}")
@@ -126,7 +144,8 @@ def format_handoff_reply(category: str) -> str:
 
 
 def reschedule_tool_args(*, current_appointment_id: str, slot: dict[str, Any]) -> dict[str, str]:
-    set_laser_device_key(str(slot.get("laser_device_key") or "") or None)
+    device_key, _device_name = _slot_device(slot)
+    set_laser_device_key(device_key)
     return {
         "appointment_id": current_appointment_id,
         "start_at": str(slot["start_local"]),
