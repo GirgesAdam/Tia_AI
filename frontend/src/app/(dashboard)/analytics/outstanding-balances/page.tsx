@@ -26,7 +26,7 @@ export default async function OutstandingBalancesReportPage() {
     <>
       <PageHeader
         title="العملاء اللي عليهم مبالغ"
-        description="يعرض فقط العملاء الذين أكملوا جلسة فعلًا وما زال جزء من قيمتها غير مدفوع."
+        description="يعرض فقط العملاء الذين أكملوا جلسة فعلًا وما زال مبلغ مستحق مرتبط بهذه الزيارة."
         action={<Link href="/analytics" className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-bold"><ArrowRight size={16} />الرجوع للتقارير</Link>}
       />
 
@@ -55,7 +55,7 @@ export default async function OutstandingBalancesReportPage() {
       <Card>
         <CardHeader>
           <CardTitle>الجلسات المكتملة غير المسددة بالكامل</CardTitle>
-          <p className="mt-1 text-xs text-[var(--muted)]">الحجوزات المستقبلية والمواعيد المؤكدة قبل إتمام الجلسة لا تدخل في هذا التقرير. جلسات الباكيدج المدفوعة مقدمًا لا تعتبر مديونية على الجلسة.</p>
+          <p className="mt-1 text-xs text-[var(--muted)]">الحجوزات المستقبلية والمواعيد المؤكدة قبل إتمام الجلسة لا تدخل. في جلسة الباكيدج لا يُحسب سعر الخدمة مرة ثانية، لكن أي منتجات أُضيفت للزيارة ولم تُدفع تظل مبلغًا مستحقًا.</p>
         </CardHeader>
         <CardContent>
           {outstanding.rows.length ? (
@@ -76,7 +76,7 @@ export default async function OutstandingBalancesReportPage() {
               </table>
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">لا يوجد حاليًا عميل أكمل جلسة وما زال عليه جزء من قيمتها.</div>
+            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-[var(--muted)]">لا يوجد حاليًا عميل أكمل جلسة وما زال عليه مبلغ مرتبط بها.</div>
           )}
         </CardContent>
       </Card>
