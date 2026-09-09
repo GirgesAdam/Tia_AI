@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -14,6 +14,7 @@ from app.schemas.finance import (
     ExpenseCreate,
     ExpenseRead,
     ExpenseUpdate,
+    FinanceTrendRead,
     OutstandingBalancesRead,
     PaymentMethodBreakdownRead,
     ProfitabilityRead,
@@ -29,6 +30,7 @@ from app.services.finance import (
     profitability_summary,
     update_expense,
 )
+from app.services.finance_dashboard import financial_dashboard_trend
 
 router = APIRouter()
 
@@ -147,6 +149,28 @@ def profitability(
             timezone_name=access.workspace.timezone,
             start_date=resolved_start,
             end_date=resolved_end,
+        )
+    except FinanceOperationError as exc:
+        raise _bad_request(str(exc)) from exc
+
+
+@router.get("/dashboard-trend", response_model=FinanceTrendRead)
+def dashboard_trend(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+    mode: Literal["month", "year"],
+) -> FinanceTrendRead:
+    try:
+        return financial_dashboard_trend(
+            db,
+            workspace_id=access.workspace.id,
+            timezone_name=access.workspace.timezone,
+            start_date=start_date,
+            end_date=end_date,
+            mode=mode,
+            currency="EGP",
         )
     except FinanceOperationError as exc:
         raise _bad_request(str(exc)) from exc
