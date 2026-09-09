@@ -64,8 +64,16 @@ def test_staff_service_change_releases_old_package_and_reprices(monkeypatch) -> 
     refreshed: list[set] = []
 
     monkeypatch.setattr(edits, "_locked_appointment", lambda *args, **kwargs: appointment)
-    monkeypatch.setattr(edits, "_validated_slot_for_existing_appointment", lambda *args, **kwargs: new_slot)
-    monkeypatch.setattr(edits, "release_package_usage", lambda *args, **kwargs: released.append(kwargs["reason"]))
+    monkeypatch.setattr(
+        edits,
+        "_validated_slot_for_existing_appointment",
+        lambda *args, **kwargs: new_slot,
+    )
+    monkeypatch.setattr(
+        edits,
+        "release_package_usage",
+        lambda *args, **kwargs: released.append(kwargs["reason"]),
+    )
     monkeypatch.setattr(
         edits,
         "refresh_appointment_payment_snapshots",
@@ -93,12 +101,12 @@ def test_staff_service_change_releases_old_package_and_reprices(monkeypatch) -> 
     assert refreshed == [{appointment.id}]
 
 
-def test_staff_device_change_keeps_same_service_package(monkeypatch) -> None:
+def test_staff_device_change_releases_incompatible_device_package(monkeypatch) -> None:
     service_id = uuid4()
     appointment = _appointment(service_id=service_id, package_backed=True)
-    original_package_id = appointment.patient_package_id
     workspace = SimpleNamespace(id=appointment.workspace_id)
     db = _Db()
+    db.scalar = lambda _stmt: SimpleNamespace(laser_device_key="candela_gentle")
     new_slot = SlotCandidate(
         branch_id=appointment.branch_id,
         doctor_id=appointment.doctor_id,
@@ -113,11 +121,24 @@ def test_staff_device_change_keeps_same_service_package(monkeypatch) -> None:
         laser_device_key="prime_lase",
         laser_device_name="Prime Lase",
     )
+    released: list[str] = []
 
     monkeypatch.setattr(edits, "_locked_appointment", lambda *args, **kwargs: appointment)
-    monkeypatch.setattr(edits, "_validated_slot_for_existing_appointment", lambda *args, **kwargs: new_slot)
-    monkeypatch.setattr(edits, "release_package_usage", lambda *args, **kwargs: pytest.fail("package should not be released"))
-    monkeypatch.setattr(edits, "refresh_appointment_payment_snapshots", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        edits,
+        "_validated_slot_for_existing_appointment",
+        lambda *args, **kwargs: new_slot,
+    )
+    monkeypatch.setattr(
+        edits,
+        "release_package_usage",
+        lambda *args, **kwargs: released.append(kwargs["reason"]),
+    )
+    monkeypatch.setattr(
+        edits,
+        "refresh_appointment_payment_snapshots",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(edits, "record_activity_event", lambda *args, **kwargs: None)
 
     edits.change_appointment_service(
@@ -129,9 +150,11 @@ def test_staff_device_change_keeps_same_service_package(monkeypatch) -> None:
         changed_by_user_id=uuid4(),
     )
 
-    assert appointment.patient_package_id == original_package_id
-    assert appointment.billing_context == "package_prepaid"
+    assert appointment.patient_package_id is None
+    assert appointment.billing_context == "standard"
+    assert appointment.package_external_id is None
     assert appointment.laser_device_key == "prime_lase"
+    assert released == ["staff_laser_device_changed"]
 
 
 def test_completed_appointment_service_cannot_be_rewritten(monkeypatch) -> None:
