@@ -8,15 +8,15 @@ def _rules_by_key():
     return {rule.key: rule for rule in DEFAULT_AUTOMATION_RULES}
 
 
-def test_current_product_has_fixed_booking_confirmation_and_optional_followups() -> None:
+def test_current_product_keeps_only_followup_automations() -> None:
     rules = _rules_by_key()
     assert set(rules) == {
-        "booking_confirmation",
         "appointment_reminder_6h",
         "post_visit_followup",
         "cancellation_recovery",
         "lead_not_booked_followup",
     }
+    assert "booking_confirmation" not in rules
 
     reminder = rules["appointment_reminder_6h"]
     assert reminder.name == "Appointment reminder"
@@ -25,7 +25,6 @@ def test_current_product_has_fixed_booking_confirmation_and_optional_followups()
     assert reminder.template_name == "tia_reminder_01"
     assert reminder.enabled_by_default is True
 
-    assert rules["booking_confirmation"].enabled_by_default is True
     assert rules["post_visit_followup"].enabled_by_default is False
     assert rules["cancellation_recovery"].enabled_by_default is False
     assert rules["lead_not_booked_followup"].enabled_by_default is False
