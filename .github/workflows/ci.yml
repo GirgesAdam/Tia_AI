@@ -5,33 +5,11 @@ on:
   push:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  repair-pr23-test-contracts:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/clinic-ops-inventory-laser'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-      - name: Refresh stale PR23 test contracts
-        run: python backend/scripts/refresh_pr23_test_contracts.py
-      - name: Commit refreshed contracts when needed
-        run: |
-          if git diff --quiet -- backend/tests; then
-            echo "Test contracts are already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/tests
-          git commit -m "Refresh test contracts for laser scheduling"
-          git push origin HEAD:${GITHUB_HEAD_REF}
-          echo "Pushed refreshed test contracts; the synchronize event will run CI again."
-          exit 1
   backend:
     runs-on: ubuntu-latest
     services:
