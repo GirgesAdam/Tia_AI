@@ -18,6 +18,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # UUID equality in a GiST exclusion constraint is provided by btree_gist.
+    # The extension is trusted on PostgreSQL and is also available on Supabase.
+    op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
     op.add_column(
         "services",
         sa.Column(
