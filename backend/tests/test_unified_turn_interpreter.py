@@ -1,11 +1,15 @@
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.semantic_router import SemanticEntityHints
 from app.agents.turn_interpreter import (
     UnifiedTurnDecision,
+    _interpreter_system_prompt,
     _latest_customer_turn,
+    _normalize_active_booking_decision,
     _recent_conversation_excerpt,
 )
 from app.core.config import Settings
@@ -99,6 +103,138 @@ def test_recent_context_is_bounded_and_latest_turn_is_authoritative() -> None:
     assert "لا أنا عايز أشتري باكدج للوش" not in excerpt
     assert excerpt.count("customer:") + excerpt.count("assistant:") == 4
     assert _latest_customer_turn(history) == "لا أنا عايز أشتري باكدج للوش"
+
+
+def test_slot_selection_contract_distinguishes_booking_choice_from_search_filter() -> None:
+    prompt = _interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 9, 9, 12, 0),
+        active_flow=True,
+    )
+
+    assert "distinguish semantically between selecting an appointment start and changing the availability search" in prompt
+    assert "including by referring to the start or beginning of a presented period" in prompt
+    assert "Use not_before_time/not_after_time only when the customer actually wants to search" in prompt
+    assert "the customer does not need to repeat the word 'book'" in prompt
+
+
+def test_presented_window_start_choice_normalizes_to_exact_slot() -> None:
+    doctor_id = "11111111-1111-1111-1111-111111111111"
+    flow = SimpleNamespace(
+        is_active=True,
+        flow_type="booking",
+        entity_state={"service_id": "22222222-2222-2222-2222-222222222222"},
+        option_snapshot={
+            "date": "2026-09-12",
+            "availability_windows": [
+                {
+                    "doctor_id": doctor_id,
+                    "doctor_name": "د. سارة نبيل",
+                    "start_time_24h": "13:30",
+                    "end_time_24h": "15:00",
+                },
+                {
+                    "doctor_id": doctor_id,
+                    "doctor_name": "د. سارة نبيل",
+                    "start_time_24h": "17:00",
+                    "end_time_24h": "18:30",
+                },
+            ],
+            "slots": [
+                {
+                    "doctor_id": doctor_id,
+                    "doctor_name": "د. سارة نبيل",
+                    "start_time_24h": "13:30",
+                    "end_time_24h": "14:00",
+                },
+                {
+                    "doctor_id": doctor_id,
+                    "doctor_name": "د. سارة نبيل",
+                    "start_time_24h": "14:00",
+                    "end_time_24h": "14:30",
+                },
+            ],
+        },
+    )
+    hints = SemanticEntityHints(
+        service_query="HydraFacial",
+        service_id="22222222-2222-2222-2222-222222222222",
+        branch_query=None,
+        doctor_query="د. سارة نبيل",
+        doctor_id=doctor_id,
+        requested_date="2026-09-12",
+        requested_start_time=None,
+        not_before_time=None,
+        not_after_time=None,
+        appointment_reference=None,
+    )
+    decision = _decision(
+        action="select_option",
+        flow_signal="none",
+        entity_hints=hints,
+        selection_time="13:30",
+        reason="Customer chose the beginning of the presented period as the appointment start.",
+    )
+
+    normalized = _normalize_active_booking_decision(decision, flow)
+
+    assert normalized.action == "select_option"
+    assert normalized.selection_time == "13:30"
+    assert normalized.entity_hints.not_before_time is None
+    assert "appointment_creation" in normalized.capabilities
+
+
+def test_search_from_time_remains_a_filter_not_a_slot_choice() -> None:
+    flow = SimpleNamespace(
+        is_active=True,
+        flow_type="booking",
+        entity_state={"service_id": "33333333-3333-3333-3333-333333333333"},
+        option_snapshot={
+            "date": "2026-09-15",
+            "availability_windows": [
+                {
+                    "doctor_id": "44444444-4444-4444-4444-444444444444",
+                    "doctor_name": "د. يوسف فؤاد",
+                    "start_time_24h": "11:00",
+                    "end_time_24h": "12:30",
+                },
+                {
+                    "doctor_id": "44444444-4444-4444-4444-444444444444",
+                    "doctor_name": "د. يوسف فؤاد",
+                    "start_time_24h": "16:00",
+                    "end_time_24h": "18:00",
+                },
+            ],
+            "slots": [],
+        },
+    )
+    hints = SemanticEntityHints(
+        service_query="تنظيف بشرة عميق",
+        service_id="33333333-3333-3333-3333-333333333333",
+        branch_query=None,
+        doctor_query="د. يوسف فؤاد",
+        doctor_id="44444444-4444-4444-4444-444444444444",
+        requested_date="2026-09-15",
+        requested_start_time=None,
+        not_before_time="11:00",
+        not_after_time=None,
+        appointment_reference=None,
+    )
+    decision = _decision(
+        action="modify",
+        flow_signal="none",
+        capabilities=["availability_discovery"],
+        entity_hints=hints,
+        selection_time=None,
+        reason="Customer wants availability from 11:00 onward rather than selecting 11:00.",
+    )
+
+    normalized = _normalize_active_booking_decision(decision, flow)
+
+    assert normalized.action == "modify"
+    assert normalized.selection_time is None
+    assert normalized.entity_hints.not_before_time == "11:00"
+    assert "appointment_creation" not in normalized.capabilities
 
 
 def test_agent_chat_has_one_unified_semantic_stage() -> None:
