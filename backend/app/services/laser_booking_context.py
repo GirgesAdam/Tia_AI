@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from contextvars import ContextVar
-from contextlib import contextmanager
 from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 _selected_laser_device: ContextVar[str | None] = ContextVar(
     "tia_selected_laser_device", default=None
