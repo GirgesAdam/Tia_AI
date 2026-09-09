@@ -38,12 +38,6 @@ def _clock_ar(value: datetime) -> str:
 
 
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
-    """Merge verified appointment slots into human-friendly free-time windows.
-
-    Slots remain the execution authority. This function is presentation-only: it
-    unions overlapping/touching intervals per doctor so a dense 15-minute grid is
-    shown as e.g. 3 PM–6 PM, then 7 PM–9 PM around an existing booking.
-    """
     if not isinstance(slots, list):
         return []
 
@@ -56,10 +50,7 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         if start is None or end is None or end <= start:
             continue
         doctor_id = str(slot.get("doctor_id") or "")
-        doctor_name = (
-            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
+        doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         grouped[(doctor_id, doctor_name)].append((start, end))
 
     windows: list[dict[str, Any]] = []
@@ -85,12 +76,7 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
                 }
             )
 
-    windows.sort(
-        key=lambda row: (
-            str(row.get("doctor_name") or ""),
-            str(row.get("start_local") or ""),
-        )
-    )
+    windows.sort(key=lambda row: (str(row.get("doctor_name") or ""), str(row.get("start_local") or "")))
     return windows
 
 
@@ -108,22 +94,10 @@ def _requested_time(output: dict[str, Any]) -> str:
 
 def _closing(*, reschedule: bool, booking_authorized: bool, ranges: bool) -> str:
     if reschedule:
-        return (
-            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أغيّر الموعد."
-            if ranges
-            else "اختار الميعاد اللي يناسبك عشان أغيّره."
-        )
+        return "قولي الوقت اللي يناسبك جوه الفترات دي عشان أغيّر الموعد." if ranges else "اختار الميعاد اللي يناسبك عشان أغيّره."
     if booking_authorized:
-        return (
-            "قولي الوقت اللي يناسبك جوه الفترات دي عشان أحجزه."
-            if ranges
-            else "اختار الميعاد اللي يناسبك عشان أحجزه."
-        )
-    return (
-        "لو حابب تحجز، قولي الوقت اللي يناسبك جوه الفترات دي."
-        if ranges
-        else "لو حابب تحجز، قولي الميعاد اللي يناسبك."
-    )
+        return "قولي الوقت اللي يناسبك جوه الفترات دي عشان أحجزه." if ranges else "اختار الميعاد اللي يناسبك عشان أحجزه."
+    return "لو حابب تحجز، قولي الوقت اللي يناسبك جوه الفترات دي." if ranges else "لو حابب تحجز، قولي الميعاد اللي يناسبك."
 
 
 def _legacy_slot_reply(
@@ -133,13 +107,6 @@ def _legacy_slot_reply(
     reschedule: bool,
     booking_authorized: bool,
 ) -> str | None:
-    """Keep old persisted/fake tool payloads useful without exposing branch data.
-
-    Real current availability payloads contain full interval timestamps and are
-    rendered as continuous windows. This path exists only for older/minimal
-    payloads that contain verified start times but not enough data to reconstruct
-    the continuous interval safely.
-    """
     by_doctor: dict[str, list[str]] = defaultdict(list)
     for slot in slots:
         if not isinstance(slot, dict):
@@ -147,10 +114,7 @@ def _legacy_slot_reply(
         start = str(slot.get("start_time_24h") or "").strip()
         if not start:
             continue
-        doctor = (
-            str(slot.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
+        doctor = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         if start not in by_doctor[doctor]:
             by_doctor[doctor].append(start)
 
@@ -168,14 +132,8 @@ def _legacy_slot_reply(
         requested_text = f" {requested}" if requested else ""
         intro = f"ميعاد{requested_text}{when} مش متاح. دي أقرب المواعيد المتاحة:"
     else:
-        intro = (
-            f"دي المواعيد البديلة المتاحة{when}:"
-            if reschedule
-            else f"دي أقرب المواعيد المتاحة{when}:"
-        )
-    return "\n".join(
-        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=False)]
-    )
+        intro = f"دي المواعيد البديلة المتاحة{when}:" if reschedule else f"دي أقرب المواعيد المتاحة{when}:"
+    return "\n".join([intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=False)])
 
 
 def format_availability_windows_reply(
@@ -195,12 +153,7 @@ def format_availability_windows_reply(
 
     if not windows:
         if slots:
-            return _legacy_slot_reply(
-                output,
-                slots,
-                reschedule=reschedule,
-                booking_authorized=booking_authorized,
-            )
+            return _legacy_slot_reply(output, slots, reschedule=reschedule, booking_authorized=booking_authorized)
 
         date_text = _display_date(output.get("date"))
         when = f" يوم {date_text}" if date_text else ""
@@ -209,20 +162,14 @@ def format_availability_windows_reply(
             requested_window.get(key) for key in ("not_before_time", "not_after_time")
         )
         if has_requested_window or output.get("requested_time_unavailable"):
-            return (
-                f"مفيش مواعيد متاحة في الوقت المطلوب{when}. "
-                "ممكن أشوفلك وقت تاني في نفس اليوم لو تحب."
-            )
+            return f"مفيش مواعيد متاحة في الوقت المطلوب{when}. ممكن أشوفلك وقت تاني في نفس اليوم لو تحب."
         return f"مفيش مواعيد متاحة{when}. ممكن أشوفلك يوم تاني لو تحب."
 
     by_doctor: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for window in windows:
         if not isinstance(window, dict):
             continue
-        doctor = (
-            str(window.get("doctor_name") or "الدكتور المتاح").strip()
-            or "الدكتور المتاح"
-        )
+        doctor = str(window.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         by_doctor[doctor].append(window)
 
     lines: list[str] = []
@@ -236,16 +183,10 @@ def format_availability_windows_reply(
             ranges.append(f"من {_clock_ar(start)} لـ{_clock_ar(end)}")
         if not ranges:
             continue
-        joined = "، و".join(ranges)
-        lines.append(f"المتاح مع {doctor} {joined}.")
+        lines.append(f"المتاح مع {doctor} {'، و'.join(ranges)}.")
 
     if not lines:
-        return _legacy_slot_reply(
-            output,
-            slots,
-            reschedule=reschedule,
-            booking_authorized=booking_authorized,
-        )
+        return _legacy_slot_reply(output, slots, reschedule=reschedule, booking_authorized=booking_authorized)
 
     date_text = _display_date(output.get("date"))
     intro = f"المتاح يوم {date_text}:" if date_text else "المتاح:"
@@ -255,9 +196,7 @@ def format_availability_windows_reply(
         when = f" يوم {date_text}" if date_text else ""
         intro = f"ميعاد{requested_text}{when} مش متاح. أقرب فترات متاحة:"
 
-    return "\n".join(
-        [intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=True)]
-    )
+    return "\n".join([intro, *lines, _closing(reschedule=reschedule, booking_authorized=booking_authorized, ranges=True)])
 
 
 _LOCATION_KEYS = {
@@ -272,15 +211,24 @@ _LOCATION_KEYS = {
     "preferred_branch_id",
     "primary_branch_id",
 }
+_DURATION_KEYS = {
+    "duration",
+    "duration_minutes",
+    "service_duration_minutes",
+}
 
 
 def customer_visible_verified_data(value: Any) -> Any:
-    """Remove storage-level location metadata before customer-language composition."""
+    """Remove internal location and scheduling-duration metadata before customer composition.
+
+    Appointment date/time remains customer-visible. Service/session duration is an
+    internal scheduling fact and must never be exposed in Tia's customer reply.
+    """
     if isinstance(value, dict):
         return {
             key: customer_visible_verified_data(item)
             for key, item in value.items()
-            if key not in _LOCATION_KEYS
+            if key not in _LOCATION_KEYS and key not in _DURATION_KEYS
         }
     if isinstance(value, list):
         return [customer_visible_verified_data(item) for item in value]
