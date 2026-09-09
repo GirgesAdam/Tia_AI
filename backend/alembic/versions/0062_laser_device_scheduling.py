@@ -35,25 +35,34 @@ def upgrade() -> None:
         "appointments",
         ["workspace_id", "laser_device_key", "start_at"],
     )
-    op.create_exclude_constraint(
-        "excl_appointments_laser_device_busy_time",
-        "appointments",
-        ("workspace_id", "="),
-        ("laser_device_key", "="),
-        (sa.text("tstzrange(busy_start_at, busy_end_at, '[)')"), "&&"),
-        where=sa.text(
-            "laser_device_key IS NOT NULL AND status IN "
-            "('pending', 'confirmed', 'checked_in', 'in_progress')"
-        ),
-        using="gist",
+    # Alembic's create_exclude_constraint helper treats expression entries as
+    # unnamed columns. Use PostgreSQL DDL directly so the tstzrange expression
+    # remains exact and the database is the final concurrency guard.
+    op.execute(
+        sa.text(
+            """
+            ALTER TABLE public.appointments
+            ADD CONSTRAINT excl_appointments_laser_device_busy_time
+            EXCLUDE USING gist (
+                workspace_id WITH =,
+                laser_device_key WITH =,
+                tstzrange(busy_start_at, busy_end_at, '[)') WITH &&
+            )
+            WHERE (
+                laser_device_key IS NOT NULL
+                AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')
+            )
+            """
+        )
     )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "excl_appointments_laser_device_busy_time",
-        "appointments",
-        type_="exclude",
+    op.execute(
+        sa.text(
+            "ALTER TABLE public.appointments "
+            "DROP CONSTRAINT IF EXISTS excl_appointments_laser_device_busy_time"
+        )
     )
     op.drop_index(
         "ix_appointments_workspace_laser_device_start",
