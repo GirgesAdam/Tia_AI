@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from app.agents.availability_presentation import format_availability_windows_reply
+from app.services.laser_booking_context import set_laser_device_key
 
 
 def select_slot_from_structured_selection(
@@ -43,12 +44,12 @@ def select_slot_from_structured_selection(
 
 
 def booking_tool_args(slot: dict[str, Any]) -> dict[str, str]:
+    set_laser_device_key(str(slot.get("laser_device_key") or "") or None)
     return {
         "branch_id": str(slot["branch_id"]),
         "service_id": str(slot["service_id"]),
         "doctor_id": str(slot["doctor_id"]),
         "start_at": str(slot["start_local"]),
-        "laser_device_key": str(slot.get("laser_device_key") or ""),
         "customer_note": "",
     }
 
@@ -125,13 +126,13 @@ def format_handoff_reply(category: str) -> str:
 
 
 def reschedule_tool_args(*, current_appointment_id: str, slot: dict[str, Any]) -> dict[str, str]:
+    set_laser_device_key(str(slot.get("laser_device_key") or "") or None)
     return {
         "appointment_id": current_appointment_id,
         "start_at": str(slot["start_local"]),
         "branch_id": str(slot.get("branch_id") or ""),
         "doctor_id": str(slot.get("doctor_id") or ""),
         "service_id": str(slot.get("service_id") or ""),
-        "laser_device_key": str(slot.get("laser_device_key") or ""),
         "reason": "Customer selected a replacement slot in the active workflow.",
     }
 
