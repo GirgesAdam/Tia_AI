@@ -18,6 +18,7 @@ ExpenseCategory = Literal[
     "other",
 ]
 ExpenseType = Literal["fixed", "variable"]
+FinanceTrendMode = Literal["month", "year"]
 
 
 class ExpenseCreate(BaseModel):
@@ -113,6 +114,25 @@ class ProfitabilityRead(BaseModel):
     start_date: date
     end_date: date
     currencies: list[ProfitabilityCurrencyRead]
+
+
+class FinanceTrendPoint(BaseModel):
+    label: str
+    start_date: date
+    end_date: date
+    gross_payments_minor: int
+    refunds_minor: int
+    net_revenue_minor: int
+    expenses_minor: int
+    profit_minor: int
+
+
+class FinanceTrendRead(BaseModel):
+    start_date: date
+    end_date: date
+    currency: str
+    mode: FinanceTrendMode
+    points: list[FinanceTrendPoint]
 
 
 class PaymentMethodBreakdownRow(BaseModel):

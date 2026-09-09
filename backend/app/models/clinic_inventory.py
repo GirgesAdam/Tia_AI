@@ -66,11 +66,13 @@ class ClinicProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("workspace_id", "id", name="uq_clinic_products_workspace_id_id"),
         UniqueConstraint("workspace_id", "name", name="uq_clinic_products_workspace_name"),
+        CheckConstraint("quantity_on_hand >= 0", name="clinic_product_quantity_non_negative"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(180), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity_on_hand: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
 
 

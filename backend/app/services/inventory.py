@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -33,8 +33,8 @@ class InventoryNotFound(InventoryOperationError):
 
 
 def is_laser_service(service: Service) -> bool:
-    text = f"{service.name or ''} {service.category or ''}".casefold()
-    return "laser" in text or "ليزر" in text
+    """Use the explicit service capability flag, never the display name, as truth."""
+    return bool(getattr(service, "requires_laser_device", False))
 
 
 def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDevicePriceRead]:
@@ -43,24 +43,24 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
             select(Service).where(
                 Service.workspace_id == workspace_id,
                 Service.is_active.is_(True),
+                Service.requires_laser_device.is_(True),
             ).order_by(Service.name)
         )
     )
-    laser_services = [service for service in services if is_laser_service(service)]
-    if not laser_services:
+    if not services:
         return []
     rows = list(
         db.scalars(
             select(ServiceDevicePrice).where(
                 ServiceDevicePrice.workspace_id == workspace_id,
-                ServiceDevicePrice.service_id.in_([service.id for service in laser_services]),
+                ServiceDevicePrice.service_id.in_([service.id for service in services]),
                 ServiceDevicePrice.is_active.is_(True),
             )
         )
     )
     by_key = {(row.service_id, row.device_key): row for row in rows}
     result: list[LaserDevicePriceRead] = []
-    for service in laser_services:
+    for service in services:
         for device_key in LASER_DEVICE_KEYS:
             row = by_key.get((service.id, device_key))
             result.append(
@@ -98,7 +98,7 @@ def upsert_laser_device_price(
     if service is None:
         raise InventoryNotFound("Service not found.")
     if not is_laser_service(service):
-        raise InventoryOperationError("Device pricing is only available for laser services.")
+        raise InventoryOperationError("Device pricing is only available for services that require a laser device.")
     row = db.scalar(
         select(ServiceDevicePrice).where(
             ServiceDevicePrice.workspace_id == workspace_id,
@@ -176,6 +176,7 @@ def create_product(
     workspace_id: UUID,
     name: str,
     description: str | None,
+    quantity_on_hand: int,
 ) -> ClinicProduct:
     existing = db.scalar(
         select(ClinicProduct).where(
@@ -185,6 +186,7 @@ def create_product(
     )
     if existing is not None:
         existing.is_active = True
+        existing.quantity_on_hand = quantity_on_hand
         if description is not None:
             existing.description = description
         db.flush()
@@ -193,9 +195,31 @@ def create_product(
         workspace_id=workspace_id,
         name=name,
         description=description,
+        quantity_on_hand=quantity_on_hand,
         is_active=True,
     )
     db.add(row)
+    db.flush()
+    return row
+
+
+def set_product_quantity(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    quantity_on_hand: int,
+) -> ClinicProduct:
+    row = db.scalar(
+        select(ClinicProduct).where(
+            ClinicProduct.workspace_id == workspace_id,
+            ClinicProduct.id == product_id,
+            ClinicProduct.is_active.is_(True),
+        ).with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Product not found.")
+    row.quantity_on_hand = quantity_on_hand
     db.flush()
     return row
 
@@ -271,10 +295,13 @@ def add_appointment_product(
             ClinicProduct.workspace_id == workspace_id,
             ClinicProduct.id == product_id,
             ClinicProduct.is_active.is_(True),
-        )
+        ).with_for_update()
     )
     if product is None:
         raise InventoryNotFound("Product not found.")
+    if int(product.quantity_on_hand) < quantity:
+        raise InventoryOperationError("Product quantity exceeds the available stock.")
+    product.quantity_on_hand = int(product.quantity_on_hand) - quantity
     row = AppointmentProductLine(
         workspace_id=workspace_id,
         appointment_id=appointment_id,
@@ -306,22 +333,25 @@ def delete_appointment_product(
     )
     if row is None:
         raise InventoryNotFound("Appointment product line not found.")
+    product = db.scalar(
+        select(ClinicProduct).where(
+            ClinicProduct.workspace_id == workspace_id,
+            ClinicProduct.id == row.product_id,
+        ).with_for_update()
+    )
+    if product is not None:
+        product.quantity_on_hand = int(product.quantity_on_hand) + int(row.quantity)
     db.delete(row)
     db.flush()
 
 
 def _inventory_read(row: InventoryItem) -> InventoryItemRead:
-    remaining_mg = (Decimal(row.quantity_ml) * Decimal(row.concentration_mg_per_ml)).quantize(
-        Decimal("0.001"), rounding=ROUND_HALF_UP
-    )
     return InventoryItemRead(
         id=row.id,
         workspace_id=row.workspace_id,
         name=row.name,
         category=row.category,
         quantity_ml=Decimal(row.quantity_ml),
-        concentration_mg_per_ml=Decimal(row.concentration_mg_per_ml),
-        remaining_mg=remaining_mg,
         low_stock_threshold_ml=(Decimal(row.low_stock_threshold_ml) if row.low_stock_threshold_ml is not None else None),
         notes=row.notes,
         is_active=row.is_active,
@@ -348,7 +378,6 @@ def create_inventory_item(
     workspace_id: UUID,
     name: str,
     quantity_ml: Decimal,
-    concentration_mg_per_ml: Decimal,
     low_stock_threshold_ml: Decimal | None,
     notes: str | None,
 ) -> InventoryItemRead:
@@ -357,7 +386,8 @@ def create_inventory_item(
         name=" ".join(name.split()),
         category="injectable",
         quantity_ml=quantity_ml,
-        concentration_mg_per_ml=concentration_mg_per_ml,
+        # Legacy storage keeps this non-null column; new inventory semantics are mL-only.
+        concentration_mg_per_ml=Decimal("1"),
         low_stock_threshold_ml=low_stock_threshold_ml,
         notes=notes,
         is_active=True,
@@ -393,8 +423,7 @@ def record_inventory_usage(
     *,
     workspace_id: UUID,
     item_id: UUID,
-    used_mg: Decimal,
-    appointment_id: UUID | None,
+    used_ml: Decimal,
     note: str | None,
     created_by_user_id: UUID | None,
 ) -> tuple[InventoryUsage, InventoryItemRead]:
@@ -407,27 +436,15 @@ def record_inventory_usage(
     )
     if row is None:
         raise InventoryNotFound("Inventory item not found.")
-    concentration = Decimal(row.concentration_mg_per_ml)
-    used_ml = (used_mg / concentration).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-    if used_ml <= 0:
-        raise InventoryOperationError("Usage is too small to record at 0.001 mL precision.")
     if used_ml > Decimal(row.quantity_ml):
         raise InventoryOperationError("Used amount exceeds the remaining stock.")
-    if appointment_id is not None:
-        appointment = db.scalar(
-            select(Appointment.id).where(
-                Appointment.workspace_id == workspace_id,
-                Appointment.id == appointment_id,
-            )
-        )
-        if appointment is None:
-            raise InventoryNotFound("Appointment not found.")
     row.quantity_ml = Decimal(row.quantity_ml) - used_ml
     usage = InventoryUsage(
         workspace_id=workspace_id,
         inventory_item_id=row.id,
-        appointment_id=appointment_id,
-        used_mg=used_mg,
+        appointment_id=None,
+        # Keep legacy mg column populated without exposing concentration semantics.
+        used_mg=used_ml,
         used_ml=used_ml,
         note=note,
         created_by_user_id=created_by_user_id,
