@@ -119,6 +119,16 @@ def _create_sqlite_schema(engine) -> None:
         )
         """,
         """
+        CREATE TABLE appointment_product_lines (
+            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32) NOT NULL,
+            appointment_id CHAR(32) NOT NULL, product_id CHAR(32) NOT NULL,
+            product_name VARCHAR(180) NOT NULL, quantity INTEGER NOT NULL DEFAULT 1,
+            unit_price_minor INTEGER NOT NULL, currency VARCHAR(3) NOT NULL DEFAULT 'EGP',
+            created_by_user_id CHAR(32), created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
             origin_appointment_id CHAR(32), patient_id CHAR(32), created_by_user_id CHAR(32),
