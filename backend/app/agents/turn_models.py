@@ -66,7 +66,7 @@ class SemanticEntityHints(BaseModel):
     appointment_reference: str | None = Field(default=None, description="Customer-facing reference identifying an existing appointment.")
 
     @model_validator(mode="after")
-    def bind_selected_laser_device(self) -> "SemanticEntityHints":
+    def bind_selected_laser_device(self) -> SemanticEntityHints:
         # ContextVar is request/task-local. This gives the deterministic clinic
         # adapter access to the structured semantic choice without parsing text
         # and without adding keyword routing to the booking orchestrator.
