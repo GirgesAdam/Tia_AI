@@ -142,6 +142,7 @@ def test_semantic_contract_uses_conversation_context_not_a_time_phrase_rule() ->
     assert "the customer does not need to repeat the word 'book'" in prompt
     assert "Use not_before_time/not_after_time only when the customer actually wants to search" in prompt
     assert "Never infer a time that cannot resolve against the verified presented options" in prompt
+    assert "AND explicitly asks to book it" not in prompt
 
 
 @pytest.mark.skipif(
