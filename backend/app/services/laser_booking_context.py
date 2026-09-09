@@ -13,6 +13,11 @@ def current_laser_device_key() -> str | None:
     return _selected_laser_device.get()
 
 
+def set_laser_device_key(device_key: str | None) -> None:
+    """Set the device inside the current request/task context only."""
+    _selected_laser_device.set(device_key or None)
+
+
 @contextmanager
 def laser_device_context(device_key: str | None) -> Iterator[None]:
     token = _selected_laser_device.set(device_key or None)
