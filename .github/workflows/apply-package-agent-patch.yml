@@ -1,0 +1,105 @@
+name: Apply package agent patch
+
+on:
+  push:
+    branches:
+      - feat/laser-package-offers
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[package-agent-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/laser-package-offers
+          fetch-depth: 0
+      - name: Apply focused agent patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/app/services/agent_chat.py')
+          source = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global source
+              if old not in source:
+                  raise SystemExit(f'Patch marker not found: {old[:120]!r}')
+              if source.count(old) != 1:
+                  raise SystemExit(f'Patch marker is not unique: {old[:120]!r}')
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              'from app.services.handoffs import get_active_handoff\nfrom app.services.patient_packages import (\n',
+              'from app.services.handoffs import get_active_handoff\nfrom app.services.package_offers import PackageOfferError, list_package_offers, purchase_package_offer\nfrom app.services.patient_packages import (\n',
+          )
+          replace_once(
+              '    _package_financial_rows,\n    list_patient_packages,\n',
+              '    PackageOperationError,\n    _package_financial_rows,\n    list_patient_packages,\n',
+          )
+
+          replace_once(
+              '''    if "package_information" not in capabilities:\n        capabilities.append("package_information")\n    return decision.model_copy(update={"capabilities": capabilities, "flow_signal": "none"})\n''',
+              '''    if "package_information" not in capabilities:\n        capabilities.append("package_information")\n    if intent == "purchase" and "package_purchase" not in capabilities:\n        capabilities.append("package_purchase")\n    return decision.model_copy(update={"capabilities": capabilities, "flow_signal": "none"})\n''',
+          )
+
+          marker = '''\n\ndef _preferred_usable_package(packages: list[object]) -> object | None:\n'''
+          helper = r'''\n\ndef _active_package_offer_payload(\n    *,\n    db: Session,\n    workspace_id: UUID,\n    service_id: str = "",\n) -> dict[str, object]:\n    service_uuid = _uuid_from_metadata(service_id) if service_id else None\n    offers = list_package_offers(\n        db,\n        workspace_id=workspace_id,\n        service_id=service_uuid,\n        active_only=True,\n    )\n    return {\n        "ok": True,\n        "offers": [item.model_dump(mode="json") for item in offers],\n    }\n\n\ndef _money_minor_label(value: object, currency: object = "EGP") -> str:\n    try:\n        minor = max(0, int(value or 0))\n    except (TypeError, ValueError):\n        minor = 0\n    whole, cents = divmod(minor, 100)\n    amount = f"{whole:,}" if cents == 0 else f"{whole:,}.{cents:02d}"\n    code = str(currency or "EGP").upper()\n    return f"{amount} جنيه" if code == "EGP" else f"{amount} {code}"\n\n\ndef _package_offer_candidates(\n    payload: dict[str, object],\n    *,\n    decision: SemanticCapabilityDecision,\n) -> list[dict[str, object]]:\n    raw = payload.get("offers")\n    offers = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []\n    service_id = str(decision.entity_hints.service_id or "").strip()\n    device_key = str(decision.entity_hints.laser_device_key or "").strip()\n    sessions = decision.entity_hints.package_sessions_count\n    if service_id:\n        offers = [item for item in offers if str(item.get("service_id") or "") == service_id]\n    if device_key:\n        offers = [item for item in offers if str(item.get("device_key") or "") == device_key]\n    if sessions is not None:\n        offers = [item for item in offers if int(item.get("sessions_count") or 0) == int(sessions)]\n    return offers\n\n\ndef _package_offer_options_text(offers: list[dict[str, object]]) -> str:\n    rows: list[str] = []\n    for item in offers[:12]:\n        service_name = str(item.get("service_name") or "الخدمة").strip()\n        device_name = str(item.get("device_name") or "الجهاز").strip()\n        sessions = int(item.get("sessions_count") or 0)\n        price = _money_minor_label(item.get("price_minor"), item.get("currency"))\n        rows.append(f"{service_name} · {device_name} · {sessions} جلسات = {price}")\n    return " | ".join(rows)\n\n\ndef _verified_package_offer_action(\n    *,\n    db: Session,\n    workspace: Workspace,\n    patient: Patient,\n    conversation: Conversation,\n    run_id: UUID,\n    decision: SemanticCapabilityDecision,\n    offer_payload: dict[str, object],\n    package_payload: dict[str, object] | None,\n    allow_purchase: bool,\n) -> tuple[str, str] | None:\n    intent = str(decision.package_intent)\n    if intent not in {"purchase", "inquire"}:\n        return None\n\n    candidates = _package_offer_candidates(offer_payload, decision=decision)\n    all_offers_raw = offer_payload.get("offers")\n    all_offers = (\n        [item for item in all_offers_raw if isinstance(item, dict)]\n        if isinstance(all_offers_raw, list)\n        else []\n    )\n    service_id = str(decision.entity_hints.service_id or "").strip()\n    device_key = str(decision.entity_hints.laser_device_key or "").strip()\n    sessions = decision.entity_hints.package_sessions_count\n\n    if intent == "inquire":\n        visible = candidates if (service_id or device_key or sessions is not None) else all_offers\n        if not visible:\n            return (\n                "مفيش باكيدج ليزر مسجلة بالمواصفات دي حالياً. أقدر أقولك العروض المتاحة لو تحب.",\n                "deterministic:verified-package-offers",\n            )\n        prefix = "الباكيدجات المسجلة حالياً: "\n        if isinstance(package_payload, dict):\n            usable = package_payload.get("usable_packages")\n            if isinstance(usable, list) and usable:\n                current = usable[0] if isinstance(usable[0], dict) else None\n                if current is not None:\n                    prefix = (\n                        f"عندك بالفعل {current.get('name') or 'باكيدج'} وفاضلك "\n                        f"{int(current.get('sessions_remaining') or 0)} جلسات. "\n                        "والعروض المتاحة حالياً: "\n                    )\n        return (\n            prefix + _package_offer_options_text(visible),\n            "deterministic:verified-package-offers",\n        )\n\n    if not allow_purchase:\n        return None\n    if not all_offers:\n        return (\n            "مفيش باكيدجات ليزر مفعلة للبيع حالياً، فمش هاسجل باكيدج غير موجودة في إعدادات العيادة.",\n            "deterministic:verified-package-purchase",\n        )\n    if not service_id:\n        return (\n            "محتاج تحدد خدمة الليزر اللي عايز الباكيدج ليها. العروض الحالية: "\n            + _package_offer_options_text(all_offers),\n            "deterministic:verified-package-purchase",\n        )\n    if sessions is None:\n        visible = _package_offer_candidates(offer_payload, decision=decision)\n        return (\n            "محتاج تحدد عدد جلسات الباكيدج: 3 أو 6 أو 9، حسب العروض المسجلة. المتاح للخدمة دي: "\n            + (_package_offer_options_text(visible) if visible else "لا توجد عروض مطابقة حالياً."),\n            "deterministic:verified-package-purchase",\n        )\n    if not device_key:\n        visible = _package_offer_candidates(offer_payload, decision=decision)\n        return (\n            "محتاج تحدد جهاز الليزر للباكيدج لأن السعر والاستحقاق مرتبطين بالجهاز. المتاح: "\n            + (_package_offer_options_text(visible) if visible else "لا توجد عروض مطابقة حالياً."),\n            "deterministic:verified-package-purchase",\n        )\n    if len(candidates) != 1:\n        return (\n            "العرض بالمواصفات دي مش موجود أو مش مفعّل حالياً، فمش هاسجل باكيدج بسعر أو جهاز غير موثوق.",\n            "deterministic:verified-package-purchase",\n        )\n\n    selected = candidates[0]\n    offer_id = _uuid_from_metadata(selected.get("id"))\n    if offer_id is None:\n        return (\n            "تعذر التحقق من عرض الباكيدج المسجل. فريق العيادة يقدر يكمل التسجيل يدويًا.",\n            "deterministic:verified-package-purchase",\n        )\n    try:\n        package = purchase_package_offer(\n            db,\n            workspace_id=workspace.id,\n            patient_id=patient.id,\n            offer_id=offer_id,\n            amount_paid_minor=0,\n            payment_method="unknown",\n            created_by_user_id=None,\n            idempotency_key=f"agent-package:{run_id}:{offer_id}"[:128],\n            actor_type="ai",\n        )\n        action_payload = {\n            "ok": True,\n            "package_id": str(package.id),\n            "offer_id": str(offer_id),\n            "service_id": str(package.service_id),\n            "laser_device_key": package.laser_device_key,\n            "sessions_purchased": int(package.sessions_purchased),\n            "sale_price_minor": int(package.sale_price_minor),\n            "amount_paid_minor": 0,\n        }\n        db.add(\n            AgentAction(\n                workspace_id=workspace.id,\n                conversation_id=conversation.id,\n                patient_id=patient.id,\n                appointment_id=None,\n                run_id=run_id,\n                tool_name="purchase_package_offer",\n                action_type="package_purchase",\n                status="success",\n                input_json={"offer_id": str(offer_id)},\n                output_json=action_payload,\n            )\n        )\n        db.commit()\n    except (PackageOfferError, PackageOperationError) as exc:\n        db.rollback()\n        return (\n            f"ماقدرتش أسجل الباكيدج لأن بيانات العرض الحالية مش صالحة للتنفيذ: {exc}",\n            "deterministic:verified-package-purchase",\n        )\n\n    service_name = str(selected.get("service_name") or "الخدمة").strip()\n    device_name = str(selected.get("device_name") or "الجهاز").strip()\n    price = _money_minor_label(selected.get("price_minor"), selected.get("currency"))\n    return (\n        f"تمام، اتسجلت باكيدج {service_name} على {device_name}: "\n        f"{int(selected.get('sessions_count') or 0)} جلسات بسعر {price}. "\n        "أي دفعة بتتسجل فقط لما تكون مؤكدة عند العيادة، ومش افترضت إن مبلغ اتدفع.",\n        "deterministic:verified-package-purchase",\n    )\n'''
+          if marker not in source:
+              raise SystemExit('Package helper insertion marker not found')
+          source = source.replace(marker, helper + marker, 1)
+
+          replace_once(
+              '''def _booking_package_requirement_reply(\n    *, db: Session, workspace_id: UUID, patient_id: UUID, service_id: UUID | None,\n    start_at: datetime | None, package_intent: str,\n) -> str | None:\n''',
+              '''def _booking_package_requirement_reply(\n    *, db: Session, workspace_id: UUID, patient_id: UUID, service_id: UUID | None,\n    start_at: datetime | None, package_intent: str, laser_device_key: str | None = None,\n) -> str | None:\n''',
+          )
+          replace_once(
+              '''    selected = _preferred_usable_package(list(usable))\n''',
+              '''    usable = [\n        item\n        for item in usable\n        if item.laser_device_key is None or item.laser_device_key == laser_device_key\n    ]\n    selected = _preferred_usable_package(list(usable))\n''',
+          )
+          replace_once(
+              '''                service_id=service_id, appointment_start_at=start_at, sessions=1,\n''',
+              '''                service_id=service_id, appointment_start_at=start_at, sessions=1,\n                laser_device_key=laser_device_key,\n''',
+          )
+          replace_once(
+              '''        + f" الجلسة اتحسبت من {package_name}، وفاضلك {remaining} جلسات فيها، ومفيش مبلغ جديد مطلوب للجلسة دي."\n''',
+              '''        + f" الجلسة اتحسبت من {package_name}، وفاضلك {remaining} جلسات فيها، "\n        + "وما اتضافش سعر جلسة منفصل على الحجز ده."\n''',
+          )
+          replace_once(
+              '''        service_id=appointment.service_id,\n        appointment_start_at=appointment.start_at,\n        sessions=1,\n''',
+              '''        service_id=appointment.service_id,\n        appointment_start_at=appointment.start_at,\n        sessions=1,\n        laser_device_key=appointment.laser_device_key,\n''',
+          )
+
+          replace_once(
+              '''    if capabilities.intersection({"package_information", "package_refund_quote"}):\n''',
+              '''    if capabilities.intersection({"package_information", "package_purchase", "package_refund_quote"}):\n''',
+          )
+          replace_once(
+              '''        results["customer_packages"] = package_payload\n        prefetched.add("customer_packages")\n        if "package_refund_quote" in capabilities:\n''',
+              '''        results["customer_packages"] = package_payload\n        prefetched.add("customer_packages")\n        if capabilities.intersection({"package_information", "package_purchase"}):\n            results["package_offers"] = _active_package_offer_payload(\n                db=tool_context.db,\n                workspace_id=tool_context.workspace.id,\n                service_id=service_id,\n            )\n            prefetched.add("package_offers")\n        if "package_refund_quote" in capabilities:\n''',
+          )
+
+          replace_once(
+              '''        if (\n            prefetch_direct is None\n            and "package_refund_quote" not in policy.capabilities\n            and str(semantic_decision.package_intent) == "purchase"\n        ):\n''',
+              '''        if (\n            prefetch_direct is None\n            and str(semantic_decision.package_intent) in {"purchase", "inquire"}\n        ):\n            offer_payload = prefetched_results.get("package_offers")\n            if isinstance(offer_payload, dict):\n                package_offer_action = _verified_package_offer_action(\n                    db=db,\n                    workspace=workspace,\n                    patient=patient,\n                    conversation=conversation,\n                    run_id=run_id,\n                    decision=semantic_decision,\n                    offer_payload=offer_payload,\n                    package_payload=(\n                        prefetched_results.get("customer_packages")\n                        if isinstance(prefetched_results.get("customer_packages"), dict)\n                        else None\n                    ),\n                    allow_purchase="package_purchase" in policy.capabilities,\n                )\n                if package_offer_action is not None:\n                    prefetch_direct = package_offer_action\n\n        if (\n            prefetch_direct is None\n            and "package_refund_quote" not in policy.capabilities\n            and str(semantic_decision.package_intent) == "purchase"\n        ):\n''',
+          )
+
+          replace_once(
+              '''        package_requirement_reply = _booking_package_requirement_reply(\n            db=db, workspace_id=tool_context.workspace.id, patient_id=tool_context.patient.id,\n            service_id=service_id, start_at=start_at, package_intent=booking_package_intent,\n        )\n''',
+              '''        package_requirement_reply = _booking_package_requirement_reply(\n            db=db, workspace_id=tool_context.workspace.id, patient_id=tool_context.patient.id,\n            service_id=service_id, start_at=start_at, package_intent=booking_package_intent,\n            laser_device_key=str((flow.entity_state or {}).get("laser_device_key") or "") or None,\n        )\n''',
+          )
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py
+          git diff --cached --check
+          git commit -m "feat(agent): complete verified package offer purchases [package-agent-patched]"
+          git push origin HEAD:feat/laser-package-offers
