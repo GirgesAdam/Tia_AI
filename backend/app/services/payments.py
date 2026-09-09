@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.integrations.clinic.authority import (
@@ -12,9 +12,12 @@ from app.integrations.clinic.authority import (
     require_tia_workspace_domain_write,
 )
 from app.models.appointment import Appointment
+from app.models.clinic_inventory import AppointmentProductLine
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
 from app.schemas.payments import AppointmentPaymentSummaryRead, PaymentTransactionRead
 from app.services.activity import record_activity_event
+
+STAFF_PAYMENT_METHODS = frozenset({"cash", "visa", "instapay"})
 
 
 class PaymentOperationError(ValueError):
@@ -77,13 +80,6 @@ def _ledger_rows(
     appointment_id: UUID,
     for_update: bool = False,
 ) -> list[AppointmentLedgerEntry]:
-    """Return only the financial amounts explicitly allocated to one appointment.
-
-    Patient-level/unallocated transactions are intentionally absent. A payment
-    split across appointments contributes only its allocation amount to each
-    appointment's balance and analytics.
-    """
-
     stmt = (
         select(PaymentTransaction, PaymentAllocation.amount_minor)
         .join(
@@ -105,32 +101,64 @@ def _ledger_rows(
     ]
 
 
-def _payment_totals(*, appointment: Appointment, rows: list[object]) -> PaymentTotals:
-    # A prepaid-package session is financially settled by a package purchase that
-    # happened elsewhere. With no appointment-level ledger rows it must show zero
-    # balance without manufacturing payment revenue for this visit.
-    if not rows and getattr(appointment, "billing_context", "standard") == "package_prepaid":
-        return PaymentTotals(
-            gross_paid_minor=0,
-            refunded_minor=0,
-            net_paid_minor=0,
-            balance_minor=0,
-            payment_status="paid",
-            payment_method="unknown",
-        )
+def _appointment_charge_breakdown(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment: Appointment,
+) -> tuple[int, int, int]:
+    """Return service charge, product charge and total amount due.
 
+    A package-prepaid appointment contributes no appointment-level service charge;
+    products sold during that visit remain ordinary appointment revenue and must
+    still be collected. Standard appointments owe both service and products.
+    """
+    products_total = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        AppointmentProductLine.quantity * AppointmentProductLine.unit_price_minor
+                    ),
+                    0,
+                )
+            ).where(
+                AppointmentProductLine.workspace_id == workspace_id,
+                AppointmentProductLine.appointment_id == appointment.id,
+            )
+        )
+        or 0
+    )
+    service_price = int(appointment.price_minor)
+    service_due = (
+        0
+        if getattr(appointment, "billing_context", "standard") == "package_prepaid"
+        else service_price
+    )
+    return service_price, products_total, service_due + products_total
+
+
+def _payment_totals(
+    *,
+    appointment: Appointment,
+    rows: list[object],
+    due_minor: int | None = None,
+) -> PaymentTotals:
+    due = int(appointment.price_minor) if due_minor is None else max(int(due_minor), 0)
     payments = [row for row in rows if _row_transaction(row).transaction_type == "payment"]
     refunds = [row for row in rows if _row_transaction(row).transaction_type == "refund"]
     gross = sum(_row_amount_minor(row) for row in payments)
     refunded = sum(_row_amount_minor(row) for row in refunds)
     net = max(gross - refunded, 0)
-    balance = max(int(appointment.price_minor) - net, 0)
+    balance = max(due - net, 0)
 
-    if gross > 0 and net == 0 and refunded > 0:
+    if due == 0 and net == 0:
+        status = "paid"
+    elif gross > 0 and net == 0 and refunded > 0:
         status = "refunded"
     elif net <= 0:
         status = "unpaid"
-    elif appointment.price_minor > 0 and net >= appointment.price_minor:
+    elif net >= due:
         status = "paid"
     else:
         status = "partial"
@@ -148,7 +176,6 @@ def _payment_totals(*, appointment: Appointment, rows: list[object]) -> PaymentT
         method = "unknown"
     else:
         method = "other"
-    # Appointment's compatibility field predates the explicit online method.
     if method == "online":
         method = "other"
 
@@ -173,14 +200,18 @@ def _refunds_by_payment(rows: list[object]) -> dict[UUID, int]:
     return result
 
 
-def _transaction_reads(rows: list[PaymentTransaction | AppointmentLedgerEntry]) -> list[PaymentTransactionRead]:
+def _transaction_reads(
+    rows: list[PaymentTransaction | AppointmentLedgerEntry],
+) -> list[PaymentTransactionRead]:
     refunds = _refunds_by_payment(list(rows))
     result: list[PaymentTransactionRead] = []
     for row in rows:
         transaction = _row_transaction(row)
         allocated_amount_minor = _row_amount_minor(row)
         refunded_minor = (
-            refunds.get(transaction.id, 0) if transaction.transaction_type == "payment" else 0
+            refunds.get(transaction.id, 0)
+            if transaction.transaction_type == "payment"
+            else 0
         )
         refundable_minor = (
             max(allocated_amount_minor - refunded_minor, 0)
@@ -196,6 +227,7 @@ def _transaction_reads(rows: list[PaymentTransaction | AppointmentLedgerEntry]) 
                 patient_id=transaction.patient_id,
                 created_by_user_id=transaction.created_by_user_id,
                 reference_transaction_id=transaction.reference_transaction_id,
+                patient_package_id=transaction.patient_package_id,
                 transaction_type=transaction.transaction_type,
                 amount_minor=transaction.amount_minor,
                 allocated_amount_minor=allocated_amount_minor,
@@ -237,7 +269,9 @@ def _add_single_appointment_allocation(
     amount_minor: int,
 ) -> PaymentAllocation:
     if amount_minor <= 0 or amount_minor > int(transaction.amount_minor):
-        raise PaymentOperationError("Payment allocation must be positive and cannot exceed the transaction amount.")
+        raise PaymentOperationError(
+            "Payment allocation must be positive and cannot exceed the transaction amount."
+        )
     allocation = PaymentAllocation(
         workspace_id=transaction.workspace_id,
         transaction_id=transaction.id,
@@ -250,31 +284,32 @@ def _add_single_appointment_allocation(
     return allocation
 
 
-def validate_allocation_total(*, transaction_amount_minor: int, allocation_amounts: list[int]) -> None:
-    """Fail closed when explicit allocations overstate the financial fact.
-
-    Less than the transaction amount is valid and leaves the remainder at the
-    patient level. Zero allocations is the canonical unallocated-payment case.
-    """
-
+def validate_allocation_total(
+    *, transaction_amount_minor: int, allocation_amounts: list[int]
+) -> None:
     if transaction_amount_minor <= 0:
         raise PaymentOperationError("Payment amount must be positive.")
     if any(int(amount) <= 0 for amount in allocation_amounts):
         raise PaymentOperationError("Payment allocations must be positive.")
     if sum(int(amount) for amount in allocation_amounts) > int(transaction_amount_minor):
-        raise PaymentOperationError("Payment allocations cannot exceed the transaction amount.")
+        raise PaymentOperationError(
+            "Payment allocations cannot exceed the transaction amount."
+        )
 
 
 def sync_appointment_payment_snapshot(
     appointment: Appointment,
     rows: list[object],
+    *,
+    due_minor: int | None = None,
 ) -> PaymentTotals:
-    totals = _payment_totals(appointment=appointment, rows=rows)
+    totals = _payment_totals(appointment=appointment, rows=rows, due_minor=due_minor)
     appointment.payment_status = totals.payment_status
     if (
         getattr(appointment, "billing_context", "standard") == "package_prepaid"
         and totals.gross_paid_minor == 0
         and totals.refunded_minor == 0
+        and (due_minor is None or due_minor == 0)
     ):
         appointment.amount_paid_minor = None
     else:
@@ -289,14 +324,6 @@ def refresh_appointment_payment_snapshots(
     workspace_id: UUID,
     appointment_ids: set[UUID],
 ) -> None:
-    """Recompute appointment compatibility snapshots from explicit allocations.
-
-    External sync can create patient-level or multi-appointment transactions,
-    so callers must refresh only appointments that received explicit allocations.
-    Row locks keep the financial snapshot deterministic against concurrent staff
-    payment operations.
-    """
-
     for appointment_id in sorted(appointment_ids, key=str):
         appointment = _locked_appointment(
             db, workspace_id=workspace_id, appointment_id=appointment_id
@@ -307,7 +334,12 @@ def refresh_appointment_payment_snapshots(
             appointment_id=appointment_id,
             for_update=True,
         )
-        sync_appointment_payment_snapshot(appointment, list(rows))
+        _service_price, _products_total, due = _appointment_charge_breakdown(
+            db,
+            workspace_id=workspace_id,
+            appointment=appointment,
+        )
+        sync_appointment_payment_snapshot(appointment, list(rows), due_minor=due)
 
 
 def get_appointment_payment_summary(
@@ -326,12 +358,19 @@ def get_appointment_payment_summary(
     if appointment is None:
         raise PaymentOperationNotFound("Appointment not found.")
     rows = _ledger_rows(db, workspace_id=workspace_id, appointment_id=appointment.id)
-    totals = _payment_totals(appointment=appointment, rows=list(rows))
+    service_price, products_total, due = _appointment_charge_breakdown(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+    )
+    totals = _payment_totals(appointment=appointment, rows=list(rows), due_minor=due)
     return AppointmentPaymentSummaryRead(
         appointment_id=appointment.id,
         patient_id=appointment.patient_id,
         currency=appointment.currency,
-        price_minor=appointment.price_minor,
+        price_minor=due,
+        service_price_minor=service_price,
+        products_total_minor=products_total,
         gross_paid_minor=totals.gross_paid_minor,
         refunded_minor=totals.refunded_minor,
         net_paid_minor=totals.net_paid_minor,
@@ -358,10 +397,14 @@ def record_payment(
 ) -> PaymentTransaction:
     if amount_minor <= 0:
         raise PaymentOperationError("Payment amount must be positive.")
-    if payment_method not in PAYMENT_METHODS or payment_method == "unknown":
-        raise PaymentOperationError("Unsupported payment method.")
     if source not in {"staff", "integration", "system"}:
         raise PaymentOperationError("Unsupported payment source.")
+    if source == "integration":
+        if payment_method not in PAYMENT_METHODS:
+            raise PaymentOperationError("Unsupported payment method.")
+    elif payment_method not in STAFF_PAYMENT_METHODS:
+        raise PaymentOperationError("Payment method must be cash, visa, or instapay.")
+
     if source != "integration":
         try:
             require_tia_workspace_domain_write(
@@ -387,7 +430,9 @@ def record_payment(
                     appointment_id=appointment_id,
                 )
             ):
-                raise PaymentOperationError("Idempotency key is already used by another payment operation.")
+                raise PaymentOperationError(
+                    "Idempotency key is already used by another payment operation."
+                )
             return existing
 
     appointment = _locked_appointment(
@@ -405,12 +450,18 @@ def record_payment(
         appointment_id=appointment.id,
         for_update=True,
     )
-    totals = _payment_totals(appointment=appointment, rows=list(rows))
+    _service_price, _products_total, due = _appointment_charge_breakdown(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+    )
+    totals = _payment_totals(appointment=appointment, rows=list(rows), due_minor=due)
     if totals.balance_minor <= 0:
         raise PaymentOperationError("This appointment has no outstanding balance.")
     if amount_minor > totals.balance_minor:
         raise PaymentOperationError(
-            f"Payment exceeds outstanding balance of {totals.balance_minor} {appointment.currency} minor units."
+            f"Payment exceeds outstanding balance of {totals.balance_minor} "
+            f"{appointment.currency} minor units."
         )
 
     transaction = PaymentTransaction(
@@ -438,8 +489,13 @@ def record_payment(
         appointment_id=appointment.id,
         amount_minor=amount_minor,
     )
-    rows.append(AppointmentLedgerEntry(transaction=transaction, allocated_amount_minor=amount_minor))
-    sync_appointment_payment_snapshot(appointment, list(rows))
+    rows.append(
+        AppointmentLedgerEntry(
+            transaction=transaction,
+            allocated_amount_minor=amount_minor,
+        )
+    )
+    sync_appointment_payment_snapshot(appointment, list(rows), due_minor=due)
     record_activity_event(
         db,
         workspace_id=workspace_id,
@@ -501,7 +557,9 @@ def record_refund(
                     appointment_id=appointment_id,
                 )
             ):
-                raise PaymentOperationError("Idempotency key is already used by another payment operation.")
+                raise PaymentOperationError(
+                    "Idempotency key is already used by another payment operation."
+                )
             return existing
 
     appointment = _locked_appointment(
@@ -510,7 +568,9 @@ def record_refund(
         appointment_id=appointment_id,
     )
     if appointment.status == "rescheduled":
-        raise PaymentOperationError("Refunds must be recorded on the replacement appointment.")
+        raise PaymentOperationError(
+            "Refunds must be recorded on the replacement appointment."
+        )
     rows = _ledger_rows(
         db,
         workspace_id=workspace_id,
@@ -527,13 +587,16 @@ def record_refund(
         None,
     )
     if payment_entry is None:
-        raise PaymentOperationNotFound("Payment transaction not found for this appointment.")
+        raise PaymentOperationNotFound(
+            "Payment transaction not found for this appointment."
+        )
     payment = payment_entry.transaction
     already_refunded = _refunds_by_payment(list(rows)).get(payment.id, 0)
     refundable = max(int(payment_entry.allocated_amount_minor) - already_refunded, 0)
     if amount_minor > refundable:
         raise PaymentOperationError(
-            f"Refund exceeds refundable amount of {refundable} {appointment.currency} minor units."
+            f"Refund exceeds refundable amount of {refundable} "
+            f"{appointment.currency} minor units."
         )
 
     transaction = PaymentTransaction(
@@ -561,8 +624,18 @@ def record_refund(
         appointment_id=appointment.id,
         amount_minor=amount_minor,
     )
-    rows.append(AppointmentLedgerEntry(transaction=transaction, allocated_amount_minor=amount_minor))
-    sync_appointment_payment_snapshot(appointment, list(rows))
+    rows.append(
+        AppointmentLedgerEntry(
+            transaction=transaction,
+            allocated_amount_minor=amount_minor,
+        )
+    )
+    _service_price, _products_total, due = _appointment_charge_breakdown(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+    )
+    sync_appointment_payment_snapshot(appointment, list(rows), due_minor=due)
     record_activity_event(
         db,
         workspace_id=workspace_id,
@@ -591,12 +664,6 @@ def reallocate_appointment_payments_on_reschedule(
     from_appointment_id: UUID,
     to_appointment_id: UUID,
 ) -> None:
-    """Move appointment allocations without changing immutable financial facts.
-
-    Amount, type, origin_appointment_id and timestamps remain immutable. The
-    allocation row is authoritative; the nullable transaction appointment_id is
-    updated only as a compatibility hint for legacy single-appointment readers.
-    """
     db.execute(
         update(PaymentAllocation)
         .where(
@@ -625,16 +692,6 @@ def seed_payment_ledger_from_appointment_snapshot(
     refund_reason: str | None = None,
     refunded_at: datetime | None = None,
 ) -> None:
-    """Seed imported appointment-embedded financial facts once.
-
-    A direct payment becomes an immutable payment + allocation. An optional
-    embedded refund becomes a refund transaction referencing that payment.
-    Package-prepaid sessions intentionally produce no ledger rows: the package
-    purchase is a separate financial event and must not be counted once per use.
-
-    Re-running a tabular import must not overwrite staff-recorded financial
-    transactions. If any ledger rows already exist, their derived snapshot wins.
-    """
     rows = _ledger_rows(
         db,
         workspace_id=appointment.workspace_id,
@@ -646,7 +703,7 @@ def seed_payment_ledger_from_appointment_snapshot(
         return
 
     if getattr(appointment, "billing_context", "standard") == "package_prepaid":
-        sync_appointment_payment_snapshot(appointment, [])
+        sync_appointment_payment_snapshot(appointment, [], due_minor=0)
         return
 
     amount = int(appointment.amount_paid_minor or 0)
@@ -657,11 +714,19 @@ def seed_payment_ledger_from_appointment_snapshot(
     explicit_refund = int(refund_amount_minor or 0)
     if explicit_refund < 0:
         raise PaymentOperationError("Imported refund amount cannot be negative.")
-    refund_amount = amount if status == "refunded" and explicit_refund == 0 else explicit_refund
+    refund_amount = (
+        amount if status == "refunded" and explicit_refund == 0 else explicit_refund
+    )
     if refund_amount > amount:
-        raise PaymentOperationError("Imported refund amount cannot exceed the direct payment amount.")
+        raise PaymentOperationError(
+            "Imported refund amount cannot exceed the direct payment amount."
+        )
 
-    method = appointment.payment_method if appointment.payment_method in PAYMENT_METHODS else "unknown"
+    method = (
+        appointment.payment_method
+        if appointment.payment_method in PAYMENT_METHODS
+        else "unknown"
+    )
     now = datetime.now(UTC)
     payment = PaymentTransaction(
         workspace_id=appointment.workspace_id,
@@ -688,7 +753,12 @@ def seed_payment_ledger_from_appointment_snapshot(
         appointment_id=appointment.id,
         amount_minor=amount,
     )
-    rows.append(AppointmentLedgerEntry(transaction=payment, allocated_amount_minor=amount))
+    rows.append(
+        AppointmentLedgerEntry(
+            transaction=payment,
+            allocated_amount_minor=amount,
+        )
+    )
 
     if refund_amount > 0:
         refund = PaymentTransaction(
@@ -716,6 +786,10 @@ def seed_payment_ledger_from_appointment_snapshot(
             appointment_id=appointment.id,
             amount_minor=refund_amount,
         )
-        rows.append(AppointmentLedgerEntry(transaction=refund, allocated_amount_minor=refund_amount))
+        rows.append(
+            AppointmentLedgerEntry(
+                transaction=refund,
+                allocated_amount_minor=refund_amount,
+            )
+        )
     sync_appointment_payment_snapshot(appointment, list(rows))
-
