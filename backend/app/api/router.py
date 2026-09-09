@@ -20,6 +20,7 @@ from app.api.routes.inbox import router as inbox_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.operations import router as operations_router
+from app.api.routes.package_offers import router as package_offers_router
 from app.api.routes.payments import router as payments_router
 from app.api.routes.whatsapp_setup import router as whatsapp_setup_router
 
@@ -33,6 +34,7 @@ api_router.include_router(campaign_analytics_router, prefix="/analytics", tags=[
 api_router.include_router(automations_router, prefix="/automations", tags=["automations"])
 api_router.include_router(booking_router, prefix="/booking", tags=["booking"])
 api_router.include_router(appointment_edits_router, prefix="/booking", tags=["booking"])
+api_router.include_router(package_offers_router, prefix="/booking", tags=["booking"])
 api_router.include_router(channels_router, prefix="/channels", tags=["channels"])
 api_router.include_router(
     whatsapp_setup_router,
