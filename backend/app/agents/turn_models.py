@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.laser_booking_context import set_laser_device_key
 
 SemanticDomain = Literal[
     "services", "clinic", "booking", "appointments", "patient", "support", "communications", "general"
@@ -62,6 +64,15 @@ class SemanticEntityHints(BaseModel):
     not_before_time: str | None = Field(description="Local HH:MM when semantically resolved, otherwise null.")
     not_after_time: str | None = Field(description="Local HH:MM when semantically resolved, otherwise null.")
     appointment_reference: str | None = Field(default=None, description="Customer-facing reference identifying an existing appointment.")
+
+    @model_validator(mode="after")
+    def bind_selected_laser_device(self) -> "SemanticEntityHints":
+        # ContextVar is request/task-local. This gives the deterministic clinic
+        # adapter access to the structured semantic choice without parsing text
+        # and without adding keyword routing to the booking orchestrator.
+        if self.laser_device_key is not None:
+            set_laser_device_key(self.laser_device_key)
+        return self
 
 
 class SemanticCapabilityDecision(BaseModel):
