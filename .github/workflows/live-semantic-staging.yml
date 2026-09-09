@@ -10,6 +10,7 @@ on:
       - backend/tests/test_contextual_time_followups.py
       - backend/tests/test_contextual_followup_regressions.py
       - backend/app/agents/turn_interpreter.py
+      - backend/app/agents/structured_output.py
 
 permissions:
   contents: read
