@@ -48,6 +48,7 @@ def booking_tool_args(slot: dict[str, Any]) -> dict[str, str]:
         "service_id": str(slot["service_id"]),
         "doctor_id": str(slot["doctor_id"]),
         "start_at": str(slot["start_local"]),
+        "laser_device_key": str(slot.get("laser_device_key") or ""),
         "customer_note": "",
     }
 
@@ -57,9 +58,8 @@ def format_booking_success(appointment: dict[str, Any]) -> str:
     time_text = ""
     try:
         start = datetime.fromisoformat(str(appointment.get("start_local")))
-        end = datetime.fromisoformat(str(appointment.get("end_local")))
         date_text = start.strftime("%d/%m/%Y")
-        time_text = f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')}"
+        time_text = start.strftime("%H:%M")
     except Exception:
         pass
 
@@ -73,6 +73,7 @@ def format_booking_success(appointment: dict[str, Any]) -> str:
 
     details = [
         appointment.get("service"),
+        appointment.get("laser_device_name"),
         appointment.get("doctor"),
         " ".join(part for part in (date_text, time_text) if part) or None,
         appointment.get("price"),
@@ -90,22 +91,20 @@ def _clock_ar(value: datetime) -> str:
 
 
 def format_reschedule_success(appointment: dict[str, Any]) -> str:
-    """Confirm a completed reschedule using only adapter-verified appointment facts."""
     start: datetime | None = None
     try:
         start = datetime.fromisoformat(str(appointment.get("start_local")))
     except (TypeError, ValueError):
         pass
 
-    doctor = str(
-        appointment.get("doctor") or appointment.get("doctor_name") or ""
-    ).strip()
-    service = str(
-        appointment.get("service") or appointment.get("service_name") or ""
-    ).strip()
+    doctor = str(appointment.get("doctor") or appointment.get("doctor_name") or "").strip()
+    service = str(appointment.get("service") or appointment.get("service_name") or "").strip()
+    device = str(appointment.get("laser_device_name") or "").strip()
     details: list[str] = []
     if service:
         details.append(f"لـ{service}")
+    if device:
+        details.append(f"على {device}")
     if start is not None:
         details.append(f"ليوم {start.strftime('%d/%m/%Y')} الساعة {_clock_ar(start)}")
     if doctor:
@@ -125,17 +124,14 @@ def format_handoff_reply(category: str) -> str:
     return "حوّلت المحادثة لفريق العيادة عشان يكملوا معاك مباشرة."
 
 
-def reschedule_tool_args(
-    *,
-    current_appointment_id: str,
-    slot: dict[str, Any],
-) -> dict[str, str]:
+def reschedule_tool_args(*, current_appointment_id: str, slot: dict[str, Any]) -> dict[str, str]:
     return {
         "appointment_id": current_appointment_id,
         "start_at": str(slot["start_local"]),
         "branch_id": str(slot.get("branch_id") or ""),
         "doctor_id": str(slot.get("doctor_id") or ""),
         "service_id": str(slot.get("service_id") or ""),
+        "laser_device_key": str(slot.get("laser_device_key") or ""),
         "reason": "Customer selected a replacement slot in the active workflow.",
     }
 
@@ -174,20 +170,11 @@ def _format_slot_choices(output: dict[str, Any], *, reschedule: bool) -> str | N
 
 
 def format_verified_tool_fallback(tool_name: str, output: dict[str, Any]) -> str | None:
-    """Build a customer-safe reply only from verified composite tool output.
-
-    This is a provider-failure/empty-finalizer safety path, not semantic routing.
-    It never inspects customer wording and never authorizes a write.
-    """
     if tool_name == "create_follow_up_task":
         if output.get("ok") is not True:
             return "معلش، مقدرتش أسجل المتابعة بالوقت ده. قولي وقت واضح تاني في المستقبل."
         due_text = _display_date(output.get("due_at"))
-        return (
-            f"تمام، سجلت متابعة للفريق يوم {due_text}."
-            if due_text
-            else "تمام، سجلت متابعة للفريق."
-        )
+        return f"تمام، سجلت متابعة للفريق يوم {due_text}." if due_text else "تمام، سجلت متابعة للفريق."
 
     if tool_name not in {"get_booking_options", "get_reschedule_options"}:
         return None
@@ -207,6 +194,11 @@ def format_verified_tool_fallback(tool_name: str, output: dict[str, Any]) -> str
         choices = _numbered_names(output.get("services"), "service_name", "name")
         if choices:
             return "لقيت أكتر من خدمة مطابقة:\n" + "\n".join(choices) + "\nاختار الخدمة اللي تقصدها."
+
+    if output.get("needs_laser_device_choice"):
+        choices = _numbered_names(output.get("laser_devices"), "device_name", "name")
+        if choices:
+            return "اختار جهاز الليزر اللي تفضله:\n" + "\n".join(choices)
 
     if output.get("needs_branch_choice"):
         return "معلش، مقدرتش أكمل الحجز دلوقتي. جرّب تاني بعد لحظة."
@@ -231,7 +223,4 @@ def format_verified_tool_fallback(tool_name: str, output: dict[str, Any]) -> str
             if lines:
                 return "لقيت أكتر من حجز قادم:\n" + "\n".join(lines) + "\nاختار الحجز اللي عايز تغيّره."
 
-    return _format_slot_choices(
-        output,
-        reschedule=tool_name == "get_reschedule_options",
-    )
+    return _format_slot_choices(output, reschedule=tool_name == "get_reschedule_options")
