@@ -9,13 +9,7 @@ from typing import Any
 
 
 class ClinicCapability(StrEnum):
-    """Canonical abilities a clinic source can expose to Tia.
-
-    These capabilities describe what the connected clinic system can support,
-    independently of how that system stores its data. A spreadsheet import may
-    support catalog reads but not live availability; Tia's native database can
-    support the complete booking lifecycle.
-    """
+    """Canonical abilities a clinic source can expose to Tia."""
 
     CATALOG_READ = "catalog.read"
     AVAILABILITY_READ = "availability.read"
@@ -59,19 +53,13 @@ class ClinicCapabilities:
 
 @dataclass(frozen=True)
 class AvailabilityRequest:
-    """Canonical availability query passed across the clinic integration boundary.
-
-    IDs are strings on purpose. Tia's native adapter converts UUID strings to its
-    database keys, while future systems can use values such as ``DR-17`` or an
-    imported spreadsheet key without changing the agent contract.
-    """
-
     branch_id: str
     service_id: str
     booking_date: date
     doctor_id: str | None = None
     exclude_appointment_id: str | None = None
     now: datetime | None = None
+    laser_device_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +75,8 @@ class AvailabilitySlot:
     duration_minutes: int
     price_minor: int
     currency: str
+    laser_device_key: str | None = None
+    laser_device_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,8 +94,6 @@ class AvailabilityResult:
 
 @dataclass(frozen=True)
 class PatientReadRequest:
-    """Canonical request for one clinic patient by Tia canonical id."""
-
     patient_id: str
 
 
@@ -126,8 +114,6 @@ class PatientRecord:
 
 @dataclass(frozen=True)
 class PaymentReadRequest:
-    """Canonical payment-ledger query scoped to a patient and optional appointment."""
-
     patient_id: str
     appointment_id: str | None = None
     limit: int = 100
@@ -162,13 +148,6 @@ class PaymentReadResult:
 
 @dataclass(frozen=True)
 class AppointmentReadRequest:
-    """Canonical query for one patient's appointments.
-
-    ``patient_id`` is source-agnostic for the same reason as the availability
-    identifiers: native Tia uses UUID strings while an external clinic can use
-    its own stable patient key.
-    """
-
     patient_id: str
     include_past: bool = False
     limit: int = 30
@@ -197,6 +176,8 @@ class AppointmentRecord:
     billing_context: str = "standard"
     package_external_id: str | None = None
     patient_package_id: str | None = None
+    laser_device_key: str | None = None
+    laser_device_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +195,7 @@ class CreateAppointmentRequest:
     operation_id: str
     customer_note: str = ""
     patient_package_id: str | None = None
+    laser_device_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -251,86 +233,65 @@ class AppointmentMutationResult:
 
 
 class ClinicAdapter(ABC):
-    """Canonical boundary between Tia's agent and a clinic's source system.
-
-    The agent should depend on this interface rather than SQLAlchemy models or a
-    vendor-specific API. Phase 2 migrates one business capability at a time so
-    existing booking behavior can stay stable while the storage boundary moves.
-    """
+    """Canonical boundary between Tia's agent and a clinic's source system."""
 
     @property
     def cache_namespace(self) -> str:
-        """Stable adapter identity used by callers for observability/caching."""
         return self.__class__.__name__
 
     @property
     @abstractmethod
     def capabilities(self) -> ClinicCapabilities:
-        """Return the operations the connected clinic system can safely support."""
         raise NotImplementedError
 
     def require_capability(self, capability: ClinicCapability) -> None:
         self.capabilities.require(capability)
 
     def catalog_revision(self) -> Hashable | None:
-        """Return a freshness token for the current catalog, if available.
-
-        ``None`` means the source system cannot provide a cheap revision token;
-        callers should rebuild rather than reuse a cached catalog blindly.
-        """
         return None
 
     @abstractmethod
     def build_catalog(self) -> dict[str, Any]:
-        """Return the canonical services/branches/doctors catalog for the agent."""
         raise NotImplementedError
 
     @abstractmethod
     def get_availability(self, request: AvailabilityRequest) -> AvailabilityResult:
-        """Return verified availability using the clinic system's own source of truth."""
         raise NotImplementedError
 
     @abstractmethod
     def get_patient_appointments(
         self, request: AppointmentReadRequest
     ) -> AppointmentReadResult:
-        """Return verified appointments belonging to one clinic patient."""
         raise NotImplementedError
 
     def get_patient(self, request: PatientReadRequest) -> PatientRecord:
-        """Return one verified patient through the source-system boundary."""
         self.require_capability(ClinicCapability.PATIENTS_READ)
         raise NotImplementedError
 
     def get_patient_payments(self, request: PaymentReadRequest) -> PaymentReadResult:
-        """Return canonical payment/refund facts owned by the clinic source."""
         self.require_capability(ClinicCapability.PAYMENTS_READ)
         raise NotImplementedError
 
     def create_appointment(
         self, request: CreateAppointmentRequest
     ) -> AppointmentMutationResult:
-        """Create an appointment after revalidating the selected slot."""
         self.require_capability(ClinicCapability.APPOINTMENTS_CREATE)
         raise NotImplementedError
 
     def confirm_appointment(
         self, request: ConfirmAppointmentRequest
     ) -> AppointmentMutationResult:
-        """Confirm one patient-owned appointment according to clinic policy."""
         self.require_capability(ClinicCapability.APPOINTMENTS_CONFIRM)
         raise NotImplementedError
 
     def cancel_appointment(
         self, request: CancelAppointmentRequest
     ) -> AppointmentMutationResult:
-        """Cancel one patient-owned appointment according to clinic policy."""
         self.require_capability(ClinicCapability.APPOINTMENTS_CANCEL)
         raise NotImplementedError
 
     def reschedule_appointment(
         self, request: RescheduleAppointmentRequest
     ) -> AppointmentMutationResult:
-        """Move one patient-owned appointment to an exact verified slot."""
         self.require_capability(ClinicCapability.APPOINTMENTS_RESCHEDULE)
         raise NotImplementedError
