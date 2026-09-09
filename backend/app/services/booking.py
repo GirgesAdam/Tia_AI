@@ -195,8 +195,14 @@ def calculate_availability(
         if service is None:
             raise BookingRuleError("Service not found or inactive.")
 
+    requires_device = bool(getattr(service, "requires_laser_device", False))
+    if requires_device and not laser_device_key:
+        raise BookingRuleError("Laser device choice is required for this service.")
+    if not requires_device and laser_device_key:
+        raise BookingRuleError("A laser device cannot be selected for this service.")
+
     device_price = None
-    if laser_device_key:
+    if requires_device:
         try:
             device_price = configured_device_price(
                 db,
@@ -283,6 +289,19 @@ def calculate_availability(
     for appointment in existing:
         by_doctor.setdefault(appointment.doctor_id, []).append(appointment)
 
+    device_existing: list[Appointment] = []
+    if requires_device and laser_device_key:
+        device_stmt = select(Appointment).where(
+            Appointment.workspace_id == workspace.id,
+            Appointment.laser_device_key == laser_device_key,
+            Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            Appointment.busy_start_at < day_end_utc,
+            Appointment.busy_end_at > day_start_utc,
+        )
+        if exclude_appointment_id is not None:
+            device_stmt = device_stmt.where(Appointment.id != exclude_appointment_id)
+        device_existing = list(db.scalars(device_stmt))
+
     minimum_start_utc = now_utc + timedelta(minutes=settings.minimum_notice_minutes)
     slots: list[SlotCandidate] = []
 
@@ -367,11 +386,17 @@ def calculate_availability(
                 busy_start_utc = busy_start.astimezone(UTC)
                 busy_end_utc = busy_end.astimezone(UTC)
 
-                if start_utc >= minimum_start_utc and not _overlaps_existing(
+                doctor_busy = _overlaps_existing(
                     busy_start_utc,
                     busy_end_utc,
                     by_doctor.get(doctor.id, []),
-                ):
+                )
+                device_busy = bool(device_key) and _overlaps_existing(
+                    busy_start_utc,
+                    busy_end_utc,
+                    device_existing,
+                )
+                if start_utc >= minimum_start_utc and not doctor_busy and not device_busy:
                     slots.append(
                         SlotCandidate(
                             branch_id=branch.id,
