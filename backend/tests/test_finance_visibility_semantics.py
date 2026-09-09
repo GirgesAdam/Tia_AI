@@ -32,14 +32,22 @@ def test_payment_method_breakdown_only_exposes_current_methods() -> None:
 
     assert result.rows == []
     params = db.statements[0].compile().params
-    assert ("cash", "visa", "instapay") in params.values()
+    collection_values = [
+        set(value)
+        for value in params.values()
+        if isinstance(value, (list, tuple, set))
+    ]
+    assert {"cash", "visa", "instapay"} in collection_values
 
 
-def test_outstanding_balances_only_include_completed_sessions() -> None:
+def test_outstanding_balances_only_start_after_completion_and_include_product_due() -> None:
     db = _Db()
     result = outstanding_balances(db, workspace_id=uuid4(), limit=50)
 
     assert result.rows == []
-    params = db.statements[0].compile().params
+    statement = db.statements[0]
+    params = statement.compile().params
+    sql = str(statement.compile()).lower()
     assert "completed" in params.values()
     assert "package_prepaid" in params.values()
+    assert "appointment_product_lines" in sql
