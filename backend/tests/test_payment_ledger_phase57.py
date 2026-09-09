@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.services.payments import _payment_totals, _refunds_by_payment
+from app.services.payments import STAFF_PAYMENT_METHODS, _payment_totals, _refunds_by_payment
 
 
 def _root() -> Path:
@@ -82,6 +82,10 @@ def test_payment_writes_lock_appointment_bound_amounts_and_audit() -> None:
     assert "re.search" not in source
 
 
+def test_staff_payment_methods_are_cash_visa_instapay_only() -> None:
+    assert STAFF_PAYMENT_METHODS == frozenset({"cash", "visa", "instapay"})
+
+
 def test_reschedule_reallocates_ledger_without_copying_financial_facts() -> None:
     service = (_root() / "backend/app/services/appointment_operations.py").read_text(encoding="utf-8")
     payments = (_root() / "backend/app/services/payments.py").read_text(encoding="utf-8")
@@ -101,7 +105,7 @@ def test_migration_backfills_legacy_snapshots_and_advances_readiness_head() -> N
     assert "legacy-payment" in migration
     assert "legacy-refund" in migration
     assert "a.payment_status IN ('paid', 'partial', 'refunded')" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0060_whatsapp_direct_credentials"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"' in readiness
 
 
 def test_historical_import_writes_canonical_payment_ledger_directly() -> None:
@@ -140,10 +144,29 @@ def test_package_prepaid_session_is_settled_without_appointment_revenue() -> Non
         price_minor=180_000,
         billing_context="package_prepaid",
     )
-    totals = _payment_totals(appointment=appointment, rows=[])
+    totals = _payment_totals(appointment=appointment, rows=[], due_minor=0)
     assert totals.gross_paid_minor == 0
     assert totals.refunded_minor == 0
     assert totals.net_paid_minor == 0
     assert totals.balance_minor == 0
     assert totals.payment_status == "paid"
     assert totals.payment_method == "unknown"
+
+
+def test_package_prepaid_products_remain_collectible() -> None:
+    appointment = SimpleNamespace(
+        price_minor=180_000,
+        billing_context="package_prepaid",
+    )
+    unpaid = _payment_totals(appointment=appointment, rows=[], due_minor=35_000)
+    assert unpaid.balance_minor == 35_000
+    assert unpaid.payment_status == "unpaid"
+
+    product_payment = _row(kind="payment", amount=35_000, method="cash")
+    paid = _payment_totals(
+        appointment=appointment,
+        rows=[product_payment],
+        due_minor=35_000,
+    )
+    assert paid.balance_minor == 0
+    assert paid.payment_status == "paid"
