@@ -51,6 +51,9 @@ class PatientPackageRead(BaseModel):
     sessions_consumed: int = 0
     sessions_remaining: int = 0
     sale_price_minor: int
+    amount_paid_minor: int = 0
+    amount_refunded_minor: int = 0
+    balance_due_minor: int = 0
     standalone_session_price_minor_at_purchase: int | None = None
     laser_device_key: str | None = None
     laser_device_name: str | None = None

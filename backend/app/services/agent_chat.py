@@ -1118,6 +1118,8 @@ def _booking_package_requirement_reply(
         except ValueError:
             return "الباكدج الموجودة مش صالحة للميعاد أو الجهاز المطلوب، فمش هحوّل الطلب لحجز عادي من غير موافقتك."
     return None
+
+
 def _package_booking_success_reply(appointment_payload: dict[str, object], package_result: dict[str, object] | None) -> str:
     if not package_result:
         return format_booking_success(appointment_payload)
@@ -1186,6 +1188,12 @@ def _apply_single_matching_package_to_booking(
         usable_only=True,
         on_date=appointment.start_at.date(),
     )
+    usable = [
+        item
+        for item in usable
+        if item.laser_device_key is None
+        or item.laser_device_key == appointment.laser_device_key
+    ]
     selected = _preferred_usable_package(list(usable))
     if selected is None:
         return None
@@ -1256,6 +1264,7 @@ def _prefetch_read_tools(
     service_id = text_value("service_id")
     branch_id = text_value("branch_id")
     doctor_id = text_value("doctor_id")
+    laser_device_key = text_value("laser_device_key")
     appointment_id = text_value("appointment_id")
     if not appointment_id and flow is not None and getattr(flow, "flow_type", None) == "appointment_reschedule":
         current_appointment = state.get("current_appointment")
@@ -1446,6 +1455,7 @@ def _prefetch_read_tools(
                     "service_id": service_id,
                     "branch_id": branch_id,
                     "doctor_id": doctor_id,
+                    "laser_device_key": laser_device_key,
                 }
             )
         else:
@@ -1500,6 +1510,7 @@ def _prefetch_read_tools(
                 "service_id": service_id,
                 "branch_id": branch_id,
                 "doctor_id": doctor_id,
+                "laser_device_key": laser_device_key,
                 "requested_start_time": requested_start_time,
                 "not_before_time": not_before_time,
                 "not_after_time": not_after_time,
@@ -1556,6 +1567,7 @@ def _prefetch_read_tools(
         if grounded_mode:
             reschedule_arguments["service_id"] = service_id
             reschedule_arguments["doctor_id"] = doctor_id
+            reschedule_arguments["laser_device_key"] = laser_device_key
         else:
             reschedule_arguments["service_search"] = service_query
         run("get_reschedule_options", reschedule_arguments)

@@ -44,6 +44,7 @@ from app.services.booking import BookingRuleError
 from app.services.campaign_attribution import record_direct_campaign_booking_conversion
 from app.services.crm_tasks import CRMTaskError, create_crm_task
 from app.services.handoffs import create_handoff
+from app.services.laser_booking_context import current_laser_device_key
 from app.services.patient_history import build_patient_history_context
 from app.services.patient_packages import list_patient_packages
 
@@ -475,6 +476,7 @@ def _adapter_availability(
     booking_date: date,
     doctor_id: str | None = None,
     exclude_appointment_id: str | None = None,
+    laser_device_key: str | None = None,
 ) -> AvailabilityResult:
     """Read verified availability through the workspace clinic adapter."""
     adapter = get_clinic_adapter(db=ctx.db, workspace=ctx.workspace)
@@ -486,6 +488,7 @@ def _adapter_availability(
             booking_date=booking_date,
             doctor_id=doctor_id,
             exclude_appointment_id=exclude_appointment_id,
+            laser_device_key=laser_device_key,
         )
     )
 
@@ -531,6 +534,8 @@ def _canonical_appointment_summary(appointment: AppointmentRecord) -> dict:
         "payment_method": appointment.payment_method,
         "billing_context": getattr(appointment, "billing_context", "standard"),
         "package_external_id": getattr(appointment, "package_external_id", None),
+        "laser_device_key": getattr(appointment, "laser_device_key", None),
+        "laser_device_name": getattr(appointment, "laser_device_name", None),
     }
 
 
@@ -547,6 +552,7 @@ def _availability_payload(
     lower_bound: time | None,
     upper_bound: time | None,
     exclude_appointment_id: str | UUID | None = None,
+    laser_device_key: str | None = None,
 ) -> dict:
     resolved_branch_id = branch_id or (str(branch.id) if branch is not None else None)
     resolved_service_id = service_id or (str(service.id) if service is not None else None)
@@ -564,6 +570,7 @@ def _availability_payload(
         exclude_appointment_id=(
             str(exclude_appointment_id) if exclude_appointment_id is not None else None
         ),
+        laser_device_key=laser_device_key,
     )
     timezone_name = availability.timezone
     slots = list(availability.slots)
@@ -621,6 +628,8 @@ def _availability_payload(
                 "duration_minutes": slot.duration_minutes,
                 "timezone": timezone_name,
                 "price": _money(slot.price_minor, slot.currency),
+                "laser_device_key": getattr(slot, "laser_device_key", None),
+                "laser_device_name": getattr(slot, "laser_device_name", None),
             }
         )
 
@@ -950,6 +959,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         service_id: str = "",
         branch_id: str = "",
         doctor_id: str = "",
+        laser_device_key: str = "",
         requested_start_time: str = "",
         not_before_time: str = "",
         not_after_time: str = "",
@@ -981,6 +991,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
             "not_after_time": not_after_time,
             "branch_id": branch_id,
             "doctor_id": doctor_id,
+            "laser_device_key": laser_device_key or None,
             "branch_search": branch_search,
             "doctor_search": doctor_search,
         }
@@ -1225,6 +1236,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 requested_start=requested_start,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
+                laser_device_key=laser_device_key or None,
             )
 
             payload = {
@@ -1268,6 +1280,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         appointment_id: str = "",
         service_id: str = "",
         doctor_id: str = "",
+        laser_device_key: str = "",
         service_search: str = "",
         requested_start_time: str = "",
         not_before_time: str = "",
@@ -1284,6 +1297,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
             "appointment_id": appointment_id or None,
             "service_id": service_id,
             "doctor_id": doctor_id or None,
+            "laser_device_key": laser_device_key or None,
             "service_search": service_search,
             "requested_start_time": requested_start_time,
             "not_before_time": not_before_time,
@@ -1381,6 +1395,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
                 exclude_appointment_id=current.appointment_id,
+                laser_device_key=(laser_device_key or current.laser_device_key),
             )
 
             payload = {
@@ -1499,6 +1514,8 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                         "end_time_24h": local_end.strftime("%H:%M"),
                         "timezone": timezone_name,
                         "price": _money(slot.price_minor, slot.currency),
+                        "laser_device_key": getattr(slot, "laser_device_key", None),
+                        "laser_device_name": getattr(slot, "laser_device_name", None),
                     }
                 )
 
@@ -1624,6 +1641,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     operation_id=str(ctx.run_id),
                     customer_note=customer_note,
                     patient_package_id=patient_package_id.strip() or None,
+                    laser_device_key=current_laser_device_key(),
                 )
             )
             try:
@@ -1825,6 +1843,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     branch_id=branch_id or None,
                     doctor_id=doctor_id or None,
                     service_id=service_id or None,
+                    laser_device_key=current_laser_device_key(),
                     reason=reason,
                 )
             )

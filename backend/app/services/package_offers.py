@@ -218,7 +218,16 @@ def purchase_package_offer(
         raise PackageOfferError(str(exc)) from exc
     if device_price is None or device_price.price_minor is None:
         raise PackageOfferError("Standalone device price is unavailable for this package offer.")
-    name = f"{offer.sessions_count} sessions · {offer.device_name}"
+    service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace_id,
+            Service.id == offer.service_id,
+            Service.is_active.is_(True),
+        )
+    )
+    if service is None:
+        raise PackageOfferNotFound("Package service not found or inactive.")
+    name = f"{service.name} · {offer.device_name} · {offer.sessions_count} sessions"
     return create_patient_package(
         db,
         workspace_id=workspace_id,

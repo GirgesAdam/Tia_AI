@@ -288,7 +288,11 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
                 laser_device_key=device_price.device_key,
             )
 
-        result = super().reschedule_appointment(request)
+        effective_request = replace(
+            request,
+            laser_device_key=(device_price.device_key if device_price is not None else None),
+        )
+        result = super().reschedule_appointment(effective_request)
         replacement_id = UUID(result.appointment.appointment_id)
         replacement = self.db.get(Appointment, replacement_id)
         if replacement is None:

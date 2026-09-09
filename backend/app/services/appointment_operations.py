@@ -11,6 +11,7 @@ from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
 from app.models.payment_transaction import PaymentAllocation
+from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
@@ -342,6 +343,7 @@ def reschedule_appointment_operation(
     branch_id: UUID | None = None,
     doctor_id: UUID | None = None,
     service_id: UUID | None = None,
+    laser_device_key: str | None = None,
     patient_id: UUID | None = None,
     reason: str = "appointment_rescheduled",
     idempotency_key: str | None = None,
@@ -383,8 +385,23 @@ def reschedule_appointment_operation(
     new_branch_id = branch_id or current.branch_id
     new_doctor_id = doctor_id or current.doctor_id
     new_service_id = service_id or current.service_id
+    target_service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace.id,
+            Service.id == new_service_id,
+            Service.is_active.is_(True),
+        )
+    )
+    if target_service is None:
+        raise AppointmentOperationError("Replacement service not found or inactive.")
+    new_laser_device_key = (
+        laser_device_key or current.laser_device_key
+        if bool(getattr(target_service, "requires_laser_device", False))
+        else None
+    )
     service_changed = new_service_id != current.service_id
-    if service_changed:
+    device_changed = new_laser_device_key != current.laser_device_key
+    if service_changed or device_changed:
         has_payment_allocation = (
             db.scalar(
                 select(PaymentAllocation.id)
@@ -405,7 +422,7 @@ def reschedule_appointment_operation(
             has_payment_allocation=has_payment_allocation,
         ):
             raise AppointmentServiceChangeRequiresHuman(
-                "Changing the service on this appointment needs staff review because "
+                "Changing the service or laser device on this appointment needs staff review because "
                 "payment or package state is attached to the booking."
             )
 
@@ -418,6 +435,7 @@ def reschedule_appointment_operation(
             doctor_id=new_doctor_id,
             requested_start_at=requested_start_at,
             exclude_appointment_id=current.id,
+            laser_device_key=new_laser_device_key,
         )
     except BookingRuleError as exc:
         raise AppointmentOperationError(str(exc)) from exc
@@ -445,6 +463,8 @@ def reschedule_appointment_operation(
         duration_minutes=slot.duration_minutes,
         price_minor=slot.price_minor,
         currency=slot.currency,
+        laser_device_key=slot.laser_device_key,
+        laser_device_name=slot.laser_device_name,
         payment_status=current.payment_status,
         amount_paid_minor=current.amount_paid_minor,
         payment_method=current.payment_method,
@@ -496,6 +516,9 @@ def reschedule_appointment_operation(
             "old_service_id": str(current.service_id),
             "new_service_id": str(replacement.service_id),
             "service_changed": service_changed,
+            "old_laser_device_key": current.laser_device_key,
+            "new_laser_device_key": replacement.laser_device_key,
+            "laser_device_changed": device_changed,
         },
     )
     add_appointment_history(
@@ -530,6 +553,9 @@ def reschedule_appointment_operation(
             "old_service_id": current.service_id,
             "new_service_id": replacement.service_id,
             "service_changed": service_changed,
+            "old_laser_device_key": current.laser_device_key,
+            "new_laser_device_key": replacement.laser_device_key,
+            "laser_device_changed": device_changed,
         },
     )
     db.flush()

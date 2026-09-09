@@ -64,6 +64,16 @@ def package_read(db: Session, package: PatientPackage, *, on_date: date | None =
     effective = _effective_status(package, on_date=on_date)
     if effective == "active" and remaining == 0:
         effective = "exhausted"
+    payments, refunds = _package_financial_rows(
+        db, workspace_id=package.workspace_id, package=package, for_update=False
+    )
+    amount_paid_minor = sum(int(row.amount_minor) for row in payments)
+    amount_refunded_minor = sum(int(row.amount_minor) for row in refunds)
+    balance_due_minor = (
+        max(int(package.sale_price_minor) - amount_paid_minor, 0)
+        if effective == "active"
+        else 0
+    )
     return PatientPackageRead(
         id=package.id,
         workspace_id=package.workspace_id,
@@ -78,6 +88,9 @@ def package_read(db: Session, package: PatientPackage, *, on_date: date | None =
         sessions_consumed=consumed,
         sessions_remaining=remaining,
         sale_price_minor=package.sale_price_minor,
+        amount_paid_minor=amount_paid_minor,
+        amount_refunded_minor=amount_refunded_minor,
+        balance_due_minor=balance_due_minor,
         standalone_session_price_minor_at_purchase=(
             package.standalone_session_price_minor_at_purchase
         ),

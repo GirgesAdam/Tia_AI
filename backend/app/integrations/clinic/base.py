@@ -223,6 +223,7 @@ class RescheduleAppointmentRequest:
     branch_id: str | None = None
     doctor_id: str | None = None
     service_id: str | None = None
+    laser_device_key: str | None = None
     reason: str = ""
 
 

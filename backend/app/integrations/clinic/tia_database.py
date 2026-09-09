@@ -236,6 +236,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             doctor_id=doctor_id,
             exclude_appointment_id=exclude_appointment_id,
             now=request.now,
+            laser_device_key=request.laser_device_key,
             preloaded_branch=branch,
             preloaded_service=service,
         )
@@ -272,6 +273,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 duration_minutes=slot.duration_minutes,
                 price_minor=slot.price_minor,
                 currency=slot.currency,
+                laser_device_key=slot.laser_device_key,
+                laser_device_name=slot.laser_device_name,
             )
             for slot in native_slots
         )
@@ -370,6 +373,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 if getattr(appointment, "patient_package_id", None)
                 else None
             ),
+            laser_device_key=getattr(appointment, "laser_device_key", None),
+            laser_device_name=getattr(appointment, "laser_device_name", None),
         )
 
     def _add_status_history(
@@ -426,6 +431,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             service_id=service_id,
             doctor_id=doctor_id,
             requested_start_at=requested_start,
+            laser_device_key=request.laser_device_key,
         )
         patient_package = None
         if patient_package_id is not None:
@@ -437,6 +443,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     patient_id=patient_id,
                     service_id=service_id,
                     appointment_start_at=slot.start_at,
+                    laser_device_key=slot.laser_device_key,
                 )
             except PackageOperationError as exc:
                 raise BookingRuleError(str(exc)) from exc
@@ -474,6 +481,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             duration_minutes=slot.duration_minutes,
             price_minor=slot.price_minor,
             currency=slot.currency,
+            laser_device_key=slot.laser_device_key,
+            laser_device_name=slot.laser_device_name,
             customer_note=request.customer_note.strip() or None,
             idempotency_key=(
                 "agent:"
@@ -597,7 +606,8 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         new_service_id = self._native_uuid(request.service_id, "service_id") if request.service_id else None
         idempotency_key = (
             f"agent:{request.operation_id}:reschedule:{appointment_id}:"
-            f"{new_doctor_id or 'same'}:{new_service_id or 'same'}:{requested_start.isoformat()}"
+            f"{new_doctor_id or 'same'}:{new_service_id or 'same'}:"
+            f"{request.laser_device_key or 'same'}:{requested_start.isoformat()}"
         )[:128]
 
         try:
@@ -610,6 +620,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 branch_id=new_branch_id,
                 doctor_id=new_doctor_id,
                 service_id=new_service_id,
+                laser_device_key=request.laser_device_key,
                 changed_by_user_id=None,
                 reason=request.reason.strip() or "appointment_rescheduled_by_ai",
                 idempotency_key=idempotency_key,
