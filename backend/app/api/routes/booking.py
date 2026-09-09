@@ -344,6 +344,7 @@ def create_appointment(
                 patient_id=payload.patient_id,
                 service_id=payload.service_id,
                 appointment_start_at=slot.start_at,
+                laser_device_key=slot.laser_device_key,
             )
         except PackageOperationError as exc:
             raise booking_conflict(str(exc)) from exc
