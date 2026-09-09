@@ -69,14 +69,7 @@ jobs:
       - name: Apply migrations on clean PostgreSQL
         run: python -m alembic upgrade head
       - name: Run backend tests
-        run: python -m pytest -q --junitxml=pytest-report.xml
-      - name: Upload pytest failure report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-pytest-report
-          path: backend/pytest-report.xml
-          retention-days: 3
+        run: python -m pytest -q
   frontend:
     runs-on: ubuntu-latest
     defaults:
