@@ -76,6 +76,7 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert revisions["0033_sync_authority"] == "0032_external_sync_engine"
     assert revisions["0034_drop_customer_email"] == "0033_sync_authority"
     assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
+    assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
 
 
 
