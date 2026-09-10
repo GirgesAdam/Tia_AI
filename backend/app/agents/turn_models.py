@@ -24,6 +24,8 @@ PackageIntent = Literal["none", "inquire", "purchase", "use_existing", "avoid_ex
 FlowTurnAction = Literal["continue", "modify", "select_option", "cancel_flow", "interrupt"]
 LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
 PackageSessionsCount = Literal[3, 6, 9]
+CompoundItemKind = Literal["appointment", "package_purchase"]
+CompoundAppointmentPackageIntent = Literal["none", "use_existing", "avoid_existing"]
 ClearableFlowEntity = Literal[
     "service_query", "service_id", "service_candidate_ids", "branch_query", "branch_id",
     "branch_candidate_ids", "doctor_query", "doctor_id", "doctor_candidate_ids", "laser_device_key",
@@ -36,6 +38,28 @@ def _require_all_schema_fields(schema: dict) -> None:
     properties = schema.get("properties")
     if isinstance(properties, dict):
         schema["required"] = list(properties)
+
+
+class CompoundRequestedItem(BaseModel):
+    """One independently executable operation inside a multi-item customer request."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_require_all_schema_fields)
+
+    kind: CompoundItemKind
+    service_query: str | None = None
+    service_id: str | None = None
+    service_candidate_ids: list[str] = Field(default_factory=list)
+    doctor_query: str | None = None
+    doctor_id: str | None = None
+    doctor_candidate_ids: list[str] = Field(default_factory=list)
+    laser_device_key: LaserDeviceKey | None = None
+    package_sessions_count: PackageSessionsCount | None = None
+    requested_date: str | None = None
+    requested_start_time: str | None = None
+    not_before_time: str | None = None
+    not_after_time: str | None = None
+    package_intent: CompoundAppointmentPackageIntent = "none"
+    missing_information: list[str] = Field(default_factory=list)
 
 
 class SemanticEntityHints(BaseModel):
@@ -62,6 +86,15 @@ class SemanticEntityHints(BaseModel):
         description=(
             "For a package inquiry or purchase, capture the requested configured package size only when "
             "the customer clearly chose 3, 6, or 9 sessions. Never infer a package size from an appointment count."
+        ),
+    )
+    requested_items: list[CompoundRequestedItem] = Field(
+        default_factory=list,
+        max_length=6,
+        description=(
+            "Use only when the latest customer turn clearly requests two or more independently executable "
+            "appointments/package purchases. Preserve the customer's requested operations in order. "
+            "Leave empty for a normal single-operation turn or for alternatives/ambiguity."
         ),
     )
     appointment_id: str | None = Field(
@@ -142,6 +175,7 @@ def empty_entity_hints() -> SemanticEntityHints:
         doctor_query=None,
         laser_device_key=None,
         package_sessions_count=None,
+        requested_items=[],
         requested_date=None,
         requested_start_time=None,
         not_before_time=None,
