@@ -2824,6 +2824,18 @@ def _run_after_inbound(
                 last_decision=_decision_payload(semantic_decision),
                 run_id=run_id,
             )
+            # A fresh reschedule still belongs to this same interpreted customer turn.
+            # Preserve the structured write authorization so the verified exact-slot
+            # path can execute without forcing a redundant second confirmation.
+            if flow_type == "appointment_reschedule":
+                flow_turn = unified_turn.as_flow_turn_decision().model_copy(
+                    update={
+                        "capabilities": list(semantic_decision.capabilities),
+                        "package_intent": semantic_decision.package_intent,
+                        "entity_hints": semantic_decision.entity_hints,
+                    }
+                )
+                turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
     elif (
         flow_turn is not None
         and flow_turn.action in {"continue", "modify"}
