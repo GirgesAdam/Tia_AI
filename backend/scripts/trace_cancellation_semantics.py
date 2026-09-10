@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.agents.capability_policy import CapabilityPolicyDecision
 from app.agents.clinic_grounding import build_clinic_catalog
-from app.agents.turn_interpreter import interpret_customer_turn
+from app.agents.tools.clinic_tools import AgentToolContext
 from app.core.config import settings
+from app.models.conversation import Conversation
 from app.models.workspace import Workspace
-from app.services.agent_chat import _with_current_patient_appointments
+from app.services.agent_chat import (
+    _verified_cancellation_action,
+    _with_current_patient_appointments,
+)
 from scripts.run_realistic_system_journeys import (
     HYDRA,
     UNDERARM,
-    TokenMeter,
+    _actions,
     _find_slot,
     _new_patient,
     _seed_appointment,
@@ -28,61 +33,93 @@ def main() -> None:
     connection = engine.connect()
     outer = connection.begin()
     db = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
-    meter = TokenMeter()
-    meter.install()
-    mark = meter.mark()
     try:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
         if workspace is None:
             raise RuntimeError("Workspace not found: tia")
-        patient = _new_patient(db, workspace, 9911)
+
+        patient = _new_patient(db, workspace, 9912)
         laser_slot = _find_slot(db, workspace, UNDERARM, laser_device_key="prime_lase")
         laser = _seed_appointment(db, workspace, patient, laser_slot)
         hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser.start_at, laser.end_at)])
-        _seed_appointment(db, workspace, patient, hydra_slot)
+        hydra = _seed_appointment(db, workspace, patient, hydra_slot)
+
+        now = datetime.now(UTC)
+        conversation = Conversation(
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            channel="whatsapp",
+            status="open",
+            owner_type="ai",
+            unread_count=0,
+            ownership_changed_at=now,
+            started_at=now,
+            last_message_at=now,
+        )
+        db.add(conversation)
         db.flush()
 
-        catalog = build_clinic_catalog(db, workspace)
         catalog = _with_current_patient_appointments(
             db=db,
             workspace=workspace,
             patient=patient,
+            clinic_catalog=build_clinic_catalog(db, workspace),
+        )
+        target = next(
+            row
+            for row in list(catalog.get("appointments") or [])
+            if str(row.get("appointment_id") or row.get("id") or "") == str(hydra.id)
+        )
+
+        policy = CapabilityPolicyDecision(
+            capabilities=frozenset({"appointment_cancellation"}),
+            allowed_tools=frozenset({"get_customer_appointments", "cancel_appointment"}),
+            write_capabilities=frozenset({"appointment_cancellation"}),
+            requires_human=False,
+            handoff_category="other",
+            handoff_priority="normal",
+            risk_flags=frozenset(),
+        )
+        decision = SimpleNamespace(
+            entity_hints=SimpleNamespace(
+                appointment_id=str(hydra.id),
+                service_id=str(hydra.service_id),
+                service_candidate_ids=[],
+                doctor_id=str(hydra.doctor_id),
+                doctor_candidate_ids=[],
+                requested_date=None,
+                requested_start_time=None,
+            )
+        )
+        tool_context = AgentToolContext(
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            conversation=conversation,
+            run_id=uuid4(),
+        )
+
+        before = {"laser": laser.status, "hydra": hydra.status}
+        result = _verified_cancellation_action(
+            tool_context=tool_context,
+            policy=policy,
+            decision=decision,
             clinic_catalog=catalog,
         )
-        appointments = list(catalog.get("appointments") or [])
-        if len(appointments) != 2:
-            raise RuntimeError(f"Expected exactly two upcoming appointments, got {len(appointments)}")
+        db.flush()
+        db.refresh(laser)
+        db.refresh(hydra)
+        after = {"laser": laser.status, "hydra": hydra.status}
 
-        listing = "\n".join(
-            f"{idx}. {row['service_name']}: {row['start_local']} مع {row['doctor_name']}"
-            for idx, row in enumerate(appointments, start=1)
-        )
-        history = [
-            HumanMessage(content="عايز ألغي معاد عندي."),
-            AIMessage(content=f"عندك معادين مؤكدين، تحب تلغي أنهي واحد؟\n{listing}"),
-            HumanMessage(content="قصدي معاد الهيدرافيشل، سيب معاد الليزر زي ما هو."),
-        ]
-        timezone_name = workspace.timezone or "Africa/Cairo"
-        try:
-            tz = ZoneInfo(timezone_name)
-        except Exception:
-            timezone_name = "Africa/Cairo"
-            tz = ZoneInfo(timezone_name)
-
-        decision = interpret_customer_turn(
-            flow=None,
-            history=history,
-            timezone_name=timezone_name,
-            local_now=datetime.now(tz),
-            clinic_catalog=catalog,
-        )
-        usage = meter.since(mark)
         print(
             json.dumps(
                 {
-                    "catalog_appointments": appointments,
-                    "decision": decision.model_dump(mode="json"),
-                    "tokens": usage,
+                    "target": target,
+                    "helper_result": result,
+                    "before": before,
+                    "after": after,
+                    "actions": _actions(db, workspace, patient),
+                    "openai_calls": 0,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -90,7 +127,6 @@ def main() -> None:
             )
         )
     finally:
-        meter.uninstall()
         db.close()
         if outer.is_active:
             outer.rollback()
