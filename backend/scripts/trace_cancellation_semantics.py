@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 
 import app.services.agent_chat as agent_chat_module
 from app.core.config import settings
-from app.models.conversation_flow_state import ConversationFlowState
-from app.models.message import Message
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
 from scripts.run_realistic_system_journeys import (
@@ -22,6 +20,32 @@ from scripts.run_realistic_system_journeys import (
 )
 
 
+def _small(decision) -> dict[str, object]:
+    data = decision.model_dump(mode="json")
+    hints = data.get("entity_hints") or {}
+    return {
+        "capabilities": data.get("capabilities"),
+        "action": data.get("action"),
+        "selection_index": data.get("selection_index"),
+        "missing_information": data.get("missing_information"),
+        "confidence": data.get("confidence"),
+        "reason": data.get("reason"),
+        "entity_hints": {
+            key: hints.get(key)
+            for key in (
+                "service_query",
+                "service_id",
+                "doctor_query",
+                "doctor_id",
+                "appointment_id",
+                "appointment_reference",
+                "requested_date",
+                "requested_start_time",
+            )
+        },
+    }
+
+
 def main() -> None:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     connection = engine.connect()
@@ -33,24 +57,24 @@ def main() -> None:
 
     def traced_interpreter(*args, **kwargs):
         decision = original_interpreter(*args, **kwargs)
-        semantic_decisions.append(decision.model_dump(mode="json"))
+        semantic_decisions.append(_small(decision))
         return decision
 
     agent_chat_module.interpret_customer_turn = traced_interpreter
     meter.install()
-    mark = meter.mark()
     try:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
         if workspace is None:
             raise RuntimeError("Workspace not found: tia")
 
-        patient = _new_patient(db, workspace, 9914)
+        patient = _new_patient(db, workspace, 9915)
         laser_slot = _find_slot(db, workspace, UNDERARM, laser_device_key="prime_lase")
-        _seed_appointment(db, workspace, patient, laser_slot)
-        hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser_slot.start_at, laser_slot.end_at)])
-        _seed_appointment(db, workspace, patient, hydra_slot)
+        laser = _seed_appointment(db, workspace, patient, laser_slot)
+        hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser.start_at, laser.end_at)])
+        hydra = _seed_appointment(db, workspace, patient, hydra_slot)
 
-        response = agent_chat_module.run_agent_chat(
+        mark1 = meter.mark()
+        first = agent_chat_module.run_agent_chat(
             db=db,
             workspace=workspace,
             payload=AgentChatRequest(
@@ -59,60 +83,48 @@ def main() -> None:
                 message="عايز ألغي معاد عندي.",
             ),
         )
-        db.flush()
+        usage1 = meter.since(mark1)
 
-        flows = list(
-            db.scalars(
-                select(ConversationFlowState)
-                .where(
-                    ConversationFlowState.workspace_id == workspace.id,
-                    ConversationFlowState.conversation_id == response.conversation_id,
-                )
-                .order_by(ConversationFlowState.created_at.asc())
-            )
+        mark2 = meter.mark()
+        second = agent_chat_module.run_agent_chat(
+            db=db,
+            workspace=workspace,
+            payload=AgentChatRequest(
+                patient_id=patient.id,
+                conversation_id=first.conversation_id,
+                channel="whatsapp",
+                message="قصدي معاد الهيدرافيشل، سيب معاد الليزر زي ما هو.",
+            ),
         )
-        messages = list(
-            db.scalars(
-                select(Message)
-                .where(
-                    Message.workspace_id == workspace.id,
-                    Message.conversation_id == response.conversation_id,
-                )
-                .order_by(Message.created_at.asc())
-            )
-        )
-        usage = meter.since(mark)
+        usage2 = meter.since(mark2)
+        db.flush()
+        db.refresh(laser)
+        db.refresh(hydra)
 
         print(
             json.dumps(
                 {
-                    "assistant": response.reply,
-                    "model": response.model,
-                    "semantic_decisions": semantic_decisions,
-                    "flows": [
+                    "turn1": {
+                        "assistant": first.reply,
+                        "model": first.model,
+                        "semantic": semantic_decisions[0] if semantic_decisions else None,
+                        "tokens": usage1,
+                    },
+                    "turn2": {
+                        "assistant": second.reply,
+                        "model": second.model,
+                        "semantic": semantic_decisions[1] if len(semantic_decisions) > 1 else None,
+                        "tokens": usage2,
+                    },
+                    "after": {"laser": laser.status, "hydra": hydra.status},
+                    "actions": [
                         {
-                            "flow_type": flow.flow_type,
-                            "status": flow.status,
-                            "is_active": flow.is_active,
-                            "capabilities": flow.capabilities,
-                            "entity_state": flow.entity_state,
-                            "missing_information": flow.missing_information,
-                            "option_snapshot": flow.option_snapshot,
-                            "last_decision": flow.last_decision,
+                            "tool": row.get("tool"),
+                            "status": row.get("status"),
+                            "appointment_id": row.get("appointment_id"),
                         }
-                        for flow in flows
+                        for row in _actions(db, workspace, patient)
                     ],
-                    "actions": _actions(db, workspace, patient),
-                    "messages": [
-                        {
-                            "sender_type": message.sender_type,
-                            "direction": message.direction,
-                            "content": message.content,
-                            "metadata": message.metadata_json,
-                        }
-                        for message in messages
-                    ],
-                    "tokens": usage,
                 },
                 ensure_ascii=False,
                 indent=2,
