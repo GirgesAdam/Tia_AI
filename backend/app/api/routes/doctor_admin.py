@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,7 +19,8 @@ from app.models.doctor_service import DoctorService
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import DoctorWorkingHour
-from app.schemas.clinic import DoctorRead, WorkingHoursReplace
+from app.models.workspace import Workspace
+from app.schemas.clinic import DoctorRead, DoctorWorkingHourRead, WorkingHoursReplace
 from app.services.activity import record_activity_event
 
 router = APIRouter()
@@ -31,7 +32,6 @@ class DoctorAdminCreate(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
-    branch_id: UUID
     service_ids: list[UUID] = Field(min_length=1, max_length=200)
     working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
     booking_enabled: bool = True
@@ -78,6 +78,109 @@ def _active_service_ids(
     return rows
 
 
+def _operational_branch(db: Session, workspace: Workspace) -> Branch:
+    """Resolve the hidden scheduling location for the branchless product UI.
+
+    The canonical booking schema still requires a branch row. Single-location clinics
+    should not have to manage that implementation detail, so prefer an active branch
+    named after the workspace and otherwise fall back deterministically.
+    """
+    branch = db.scalar(
+        select(Branch)
+        .where(
+            Branch.workspace_id == workspace.id,
+            Branch.is_active.is_(True),
+            func.lower(Branch.name) == workspace.name.strip().lower(),
+        )
+        .order_by(Branch.created_at)
+    )
+    if branch is None:
+        branch = db.scalar(
+            select(Branch)
+            .where(Branch.workspace_id == workspace.id, Branch.is_active.is_(True))
+            .order_by(Branch.created_at)
+        )
+    if branch is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Clinic scheduling location is not configured.",
+        )
+    return branch
+
+
+def _doctor_operational_branch(
+    db: Session,
+    *,
+    workspace: Workspace,
+    doctor_id: UUID,
+) -> Branch:
+    assignment = db.execute(
+        select(DoctorBranch, Branch)
+        .join(
+            Branch,
+            (Branch.workspace_id == DoctorBranch.workspace_id)
+            & (Branch.id == DoctorBranch.branch_id),
+        )
+        .where(
+            DoctorBranch.workspace_id == workspace.id,
+            DoctorBranch.doctor_id == doctor_id,
+            DoctorBranch.is_active.is_(True),
+            Branch.is_active.is_(True),
+        )
+        .order_by(DoctorBranch.is_primary.desc(), DoctorBranch.created_at)
+    ).first()
+    if assignment is not None:
+        return assignment[1]
+
+    branch = _operational_branch(db, workspace)
+    db.add(
+        DoctorBranch(
+            workspace_id=workspace.id,
+            doctor_id=doctor_id,
+            branch_id=branch.id,
+            is_primary=True,
+            is_active=True,
+        )
+    )
+    return branch
+
+
+def _replace_doctor_hours(
+    db: Session,
+    *,
+    workspace: Workspace,
+    doctor_id: UUID,
+    payload: WorkingHoursReplace,
+) -> list[DoctorWorkingHour]:
+    branch = _doctor_operational_branch(
+        db,
+        workspace=workspace,
+        doctor_id=doctor_id,
+    )
+    rows = list(
+        db.scalars(
+            select(DoctorWorkingHour).where(
+                DoctorWorkingHour.workspace_id == workspace.id,
+                DoctorWorkingHour.doctor_id == doctor_id,
+                DoctorWorkingHour.branch_id == branch.id,
+            )
+        )
+    )
+    for row in rows:
+        db.delete(row)
+    replacements = [
+        DoctorWorkingHour(
+            workspace_id=workspace.id,
+            doctor_id=doctor_id,
+            branch_id=branch.id,
+            **interval.model_dump(),
+        )
+        for interval in payload.intervals
+    ]
+    db.add_all(replacements)
+    return replacements
+
+
 def _commit_or_conflict(db: Session, detail: str) -> None:
     try:
         db.commit()
@@ -92,19 +195,10 @@ def create_doctor_from_admin(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Doctor:
-    workspace_id = access.workspace.id
-    branch = db.scalar(
-        select(Branch).where(
-            Branch.workspace_id == workspace_id,
-            Branch.id == payload.branch_id,
-            Branch.is_active.is_(True),
-        )
-    )
-    if branch is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found.")
+    workspace = access.workspace
     service_ids = _active_service_ids(
         db,
-        workspace_id=workspace_id,
+        workspace_id=workspace.id,
         service_ids=payload.service_ids,
     )
     first_name, last_name = normalize_doctor_name_parts(
@@ -112,7 +206,7 @@ def create_doctor_from_admin(
     )
 
     staff = Staff(
-        workspace_id=workspace_id,
+        workspace_id=workspace.id,
         first_name=first_name,
         last_name=last_name,
         email=_clean_optional(payload.email),
@@ -123,7 +217,7 @@ def create_doctor_from_admin(
     db.flush()
 
     doctor = Doctor(
-        workspace_id=workspace_id,
+        workspace_id=workspace.id,
         staff_id=staff.id,
         doctor_type="regular",
         specialization=_clean_optional(payload.specialization),
@@ -132,19 +226,11 @@ def create_doctor_from_admin(
     db.add(doctor)
     db.flush()
 
-    db.add(
-        DoctorBranch(
-            workspace_id=workspace_id,
-            doctor_id=doctor.id,
-            branch_id=branch.id,
-            is_primary=True,
-            is_active=True,
-        )
-    )
+    _doctor_operational_branch(db, workspace=workspace, doctor_id=doctor.id)
     db.add_all(
         [
             DoctorService(
-                workspace_id=workspace_id,
+                workspace_id=workspace.id,
                 doctor_id=doctor.id,
                 service_id=service_id,
                 is_active=True,
@@ -152,20 +238,15 @@ def create_doctor_from_admin(
             for service_id in sorted(service_ids, key=str)
         ]
     )
-    db.add_all(
-        [
-            DoctorWorkingHour(
-                workspace_id=workspace_id,
-                doctor_id=doctor.id,
-                branch_id=branch.id,
-                **interval.model_dump(),
-            )
-            for interval in payload.working_hours.intervals
-        ]
+    _replace_doctor_hours(
+        db,
+        workspace=workspace,
+        doctor_id=doctor.id,
+        payload=payload.working_hours,
     )
     record_activity_event(
         db,
-        workspace_id=workspace_id,
+        workspace_id=workspace.id,
         actor_type="staff",
         actor_user_id=access.user.id,
         action="clinic.doctor_created",
@@ -173,7 +254,6 @@ def create_doctor_from_admin(
         entity_id=doctor.id,
         summary="Doctor created from doctors schedule page.",
         metadata={
-            "branch_id": branch.id,
             "service_ids": sorted(str(item) for item in service_ids),
             "working_hour_intervals": len(payload.working_hours.intervals),
         },
@@ -265,6 +345,47 @@ def update_doctor_from_admin(
     _commit_or_conflict(db, "Could not update doctor.")
     db.refresh(doctor)
     return doctor
+
+
+@router.put(
+    "/doctor-admin/{doctor_id}/working-hours",
+    response_model=list[DoctorWorkingHourRead],
+)
+def update_doctor_hours_from_admin(
+    doctor_id: UUID,
+    payload: WorkingHoursReplace,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DoctorWorkingHour]:
+    doctor = db.scalar(
+        select(Doctor).where(
+            Doctor.workspace_id == access.workspace.id,
+            Doctor.id == doctor_id,
+            Doctor.is_active.is_(True),
+        )
+    )
+    if doctor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+    rows = _replace_doctor_hours(
+        db,
+        workspace=access.workspace,
+        doctor_id=doctor.id,
+        payload=payload,
+    )
+    record_activity_event(
+        db,
+        workspace_id=access.workspace.id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="clinic.doctor_working_hours_replaced",
+        entity_type="doctor",
+        entity_id=doctor.id,
+        summary="Doctor working hours replaced from doctors schedule page.",
+        metadata={"interval_count": len(rows)},
+        flush=False,
+    )
+    _commit_or_conflict(db, "Doctor working-hour intervals must be unique and valid.")
+    return rows
 
 
 @router.delete("/doctor-admin/{doctor_id}", status_code=status.HTTP_204_NO_CONTENT)
