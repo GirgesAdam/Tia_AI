@@ -415,7 +415,7 @@ def _interpreter_system_prompt(
         "GROUNDING: resolve service, doctor, and any existing appointment only against the supplied "
         "canonical clinic catalog. "
         "When both a doctor and service are mentioned, respect their canonical compatibility relationships. "
-        "When current-patient appointments are supplied and a reschedule turn clearly identifies one existing "
+        "When current-patient appointments are supplied and a reschedule or cancellation turn clearly identifies one existing "
         "appointment from its displayed date/time/service/doctor, set appointment_id to that exact catalog ID; "
         "appointment_reference may still describe it in customer-facing terms. Never use the replacement target "
         "date/time/service to choose the existing appointment. "

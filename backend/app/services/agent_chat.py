@@ -1969,30 +1969,86 @@ def _verified_cancellation_action(
     decision: SemanticCapabilityDecision,
     clinic_catalog: dict[str, object],
 ) -> tuple[str, str] | None:
-    """Execute only a semantically selected, current-patient appointment cancellation.
+    """Cancel one verified current-patient appointment selected by semantic entities.
 
-    The interpreter selects a canonical appointment ID from the verified current-patient
-    catalog. Python never matches customer wording here: it only rechecks that exact ID
-    against the same verified appointment set before authorizing the write.
+    The semantic layer owns meaning. Python only intersects canonical IDs/date/time
+    fields with the verified current-patient appointment set, and writes only when the
+    intersection contains exactly one appointment. Customer wording is never parsed here.
     """
     if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:
-        return None
-    appointment_id = str(decision.entity_hints.appointment_id or "").strip()
-    if not appointment_id:
         return None
     rows = clinic_catalog.get("appointments")
     if not isinstance(rows, list):
         return None
-    selected = next(
-        (
+    candidates = [row for row in rows if isinstance(row, dict)]
+    hints = decision.entity_hints
+    appointment_id = str(hints.appointment_id or "").strip()
+
+    if appointment_id:
+        candidates = [
             row
-            for row in rows
-            if isinstance(row, dict)
-            and str(row.get("appointment_id") or row.get("id") or "") == appointment_id
-        ),
-        None,
-    )
-    if selected is None:
+            for row in candidates
+            if str(row.get("appointment_id") or row.get("id") or "") == appointment_id
+        ]
+    else:
+        filters_applied = 0
+        service_ids: list[str] = []
+        if hints.service_id:
+            service_ids = [str(hints.service_id)]
+        elif hints.service_candidate_ids:
+            service_ids = [str(value) for value in hints.service_candidate_ids]
+        if service_ids:
+            candidates = [
+                row for row in candidates if str(row.get("service_id") or "") in service_ids
+            ]
+            filters_applied += 1
+
+        doctor_ids: list[str] = []
+        if hints.doctor_id:
+            doctor_ids = [str(hints.doctor_id)]
+        elif hints.doctor_candidate_ids:
+            doctor_ids = [str(value) for value in hints.doctor_candidate_ids]
+        if doctor_ids:
+            candidates = [
+                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids
+            ]
+            filters_applied += 1
+
+        requested_date = str(hints.requested_date or "").strip()
+        if requested_date:
+            candidates = [
+                row
+                for row in candidates
+                if str(row.get("start_local") or "")[:10] == requested_date
+            ]
+            filters_applied += 1
+
+        requested_time = str(hints.requested_start_time or "").strip()
+        if requested_time:
+            normalized_time = requested_time
+            if len(normalized_time) == 4 and normalized_time[1] == ":":
+                normalized_time = "0" + normalized_time
+            matched: list[dict[str, object]] = []
+            for row in candidates:
+                try:
+                    row_time = datetime.fromisoformat(
+                        str(row.get("start_local") or "")
+                    ).strftime("%H:%M")
+                except ValueError:
+                    continue
+                if row_time == normalized_time:
+                    matched.append(row)
+            candidates = matched
+            filters_applied += 1
+
+        if filters_applied == 0:
+            return None
+
+    if len(candidates) != 1:
+        return None
+    selected = candidates[0]
+    appointment_id = str(selected.get("appointment_id") or selected.get("id") or "").strip()
+    if not appointment_id:
         return None
 
     result = _invoke_authorized_tool(
@@ -2012,8 +2068,8 @@ def _verified_cancellation_action(
     raw_start = selected.get("start_local")
     if raw_start:
         try:
-            start = datetime.fromisoformat(str(raw_start))
-            start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"
+            start_at = datetime.fromisoformat(str(raw_start))
+            start_label = f" يوم {start_at.strftime('%d/%m/%Y')} الساعة {start_at.strftime('%H:%M')}"
         except ValueError:
             start_label = ""
     return (
