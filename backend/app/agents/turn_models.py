@@ -46,12 +46,40 @@ class CompoundRequestedItem(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra=_require_all_schema_fields)
 
     kind: CompoundItemKind
-    service_query: str | None = None
-    service_id: str | None = None
-    service_candidate_ids: list[str] = Field(default_factory=list)
-    doctor_query: str | None = None
-    doctor_id: str | None = None
-    doctor_candidate_ids: list[str] = Field(default_factory=list)
+    service_query: str | None = Field(
+        default=None,
+        description="Service wording for this specific compound item; this is not a substitute for canonical grounding.",
+    )
+    service_id: str | None = Field(
+        default=None,
+        description=(
+            "Canonical service UUID from the supplied clinic catalog for this item. When this item clearly refers "
+            "to exactly one catalog service, copy that service's exact UUID here. Use null only when no catalog "
+            "service is identified uniquely; use service_candidate_ids for genuine ambiguity."
+        ),
+    )
+    service_candidate_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Canonical service UUIDs from the supplied clinic catalog only when this item's service is genuinely "
+            "ambiguous. Leave empty when service_id is selected."
+        ),
+    )
+    doctor_query: str | None = Field(
+        default=None,
+        description="Doctor wording for this specific compound item; this is not a substitute for canonical grounding.",
+    )
+    doctor_id: str | None = Field(
+        default=None,
+        description=(
+            "Canonical doctor UUID from the supplied clinic catalog for this item. When exactly one catalog doctor "
+            "is clearly intended, copy that doctor's exact UUID here."
+        ),
+    )
+    doctor_candidate_ids: list[str] = Field(
+        default_factory=list,
+        description="Canonical doctor UUIDs from the supplied catalog only for genuine ambiguity in this item.",
+    )
     laser_device_key: LaserDeviceKey | None = None
     package_sessions_count: PackageSessionsCount | None = None
     requested_date: str | None = None
@@ -93,7 +121,8 @@ class SemanticEntityHints(BaseModel):
         max_length=6,
         description=(
             "Use only when the latest customer turn clearly requests two or more independently executable "
-            "appointments/package purchases. Preserve the customer's requested operations in order. "
+            "appointments/package purchases. Preserve the customer's requested operations in order. For each item, "
+            "ground an unambiguous service/doctor to the exact canonical catalog UUID just as for top-level hints. "
             "Leave empty for a normal single-operation turn or for alternatives/ambiguity."
         ),
     )
