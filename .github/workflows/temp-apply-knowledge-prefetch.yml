@@ -1,0 +1,32 @@
+name: Temp apply knowledge prefetch
+
+on:
+  push:
+    branches:
+      - feat/clinic-knowledge-settings
+    paths:
+      - backend/scripts/apply_knowledge_prefetch_patch.py
+      - .github/workflows/temp-apply-knowledge-prefetch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-knowledge-settings
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python backend/scripts/apply_knowledge_prefetch_patch.py
+      - name: Commit generated patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py backend/tests/test_clinic_knowledge_agent_contract.py
+          git diff --cached --quiet && exit 0
+          git commit -m "feat(agent): retrieve scoped clinic knowledge after grounding"
+          git push
