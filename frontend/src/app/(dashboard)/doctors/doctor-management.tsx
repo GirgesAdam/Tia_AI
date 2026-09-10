@@ -5,7 +5,7 @@ import { CheckCircle2, Clock3, LoaderCircle, Plus, Save, Stethoscope, Trash2, Us
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { KnowledgeBranch, KnowledgeDoctor, KnowledgeHour, KnowledgeService } from "@/lib/agent-knowledge-types";
+import type { KnowledgeHour, KnowledgeService } from "@/lib/agent-knowledge-types";
 
 import {
   createDoctorAction,
@@ -15,6 +15,21 @@ import {
   updateDoctorAction,
   updateDoctorScheduleAction,
 } from "./actions";
+
+export type DoctorAdminItem = {
+  id: string;
+  staff_id: string;
+  name: string;
+  first_name: string;
+  last_name: string;
+  specialization: string | null;
+  phone: string | null;
+  email: string | null;
+  booking_enabled: boolean;
+  is_active: boolean;
+  services: Array<{ id: string; name: string }>;
+  working_hours: KnowledgeHour[];
+};
 
 const days = [
   { weekday: 5, label: "السبت" },
@@ -38,11 +53,7 @@ function shortTime(value: string) {
 
 function normalizeHours(hours: KnowledgeHour[]): EditableInterval[] {
   return hours
-    .map((row) => ({
-      weekday: row.weekday,
-      start_time: shortTime(row.start_time),
-      end_time: shortTime(row.end_time),
-    }))
+    .map((row) => ({ weekday: row.weekday, start_time: shortTime(row.start_time), end_time: shortTime(row.end_time) }))
     .sort((a, b) => a.weekday - b.weekday || a.start_time.localeCompare(b.start_time));
 }
 
@@ -91,30 +102,14 @@ function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] 
             <div className="space-y-2">
               {dayIntervals.length ? dayIntervals.map(({ row, index }) => (
                 <div key={`${day.weekday}-${index}`} className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="time"
-                    value={row.start_time}
-                    onChange={(event) => updateInterval(index, "start_time", event.target.value)}
-                    className="form-control h-9 min-h-9 w-[125px]"
-                    aria-label={`بداية ${day.label}`}
-                  />
+                  <input type="time" value={row.start_time} onChange={(event) => updateInterval(index, "start_time", event.target.value)} className="form-control h-9 min-h-9 w-[125px]" aria-label={`بداية ${day.label}`} />
                   <span className="text-xs text-slate-400">إلى</span>
-                  <input
-                    type="time"
-                    value={row.end_time}
-                    onChange={(event) => updateInterval(index, "end_time", event.target.value)}
-                    className="form-control h-9 min-h-9 w-[125px]"
-                    aria-label={`نهاية ${day.label}`}
-                  />
-                  <button type="button" onClick={() => removeInterval(index)} className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700" aria-label={`حذف فترة ${day.label}`}>
-                    <Trash2 size={14} />
-                  </button>
+                  <input type="time" value={row.end_time} onChange={(event) => updateInterval(index, "end_time", event.target.value)} className="form-control h-9 min-h-9 w-[125px]" aria-label={`نهاية ${day.label}`} />
+                  <button type="button" onClick={() => removeInterval(index)} className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700" aria-label={`حذف فترة ${day.label}`}><Trash2 size={14} /></button>
                 </div>
               )) : <span className="text-xs font-semibold text-slate-400">مغلق</span>}
             </div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => addInterval(day.weekday)} className="justify-self-start sm:justify-self-end">
-              <Plus size={13} /> فترة
-            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => addInterval(day.weekday)} className="justify-self-start sm:justify-self-end"><Plus size={13} /> فترة</Button>
           </div>
         );
       })}
@@ -136,7 +131,7 @@ function ServiceChecklist({ services, selectedIds = [] }: { services: KnowledgeS
   );
 }
 
-function CreateDoctorForm({ branches, services }: { branches: KnowledgeBranch[]; services: KnowledgeService[] }) {
+function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(createDoctorAction, initialDoctorAdminState);
   return (
     <details className="rounded-2xl border border-teal-200 bg-teal-50/40 p-4">
@@ -148,16 +143,9 @@ function CreateDoctorForm({ branches, services }: { branches: KnowledgeBranch[];
           <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
           <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
           <label className="text-xs font-bold text-slate-700">البريد الإلكتروني<input name="email" type="email" maxLength={320} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
-          <label className="text-xs font-bold text-slate-700">الفرع<select name="branch_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10"><option value="" disabled>اختار الفرع</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
         </div>
-        <div>
-          <div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div>
-          <ServiceChecklist services={services} />
-        </div>
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل</div>
-          <ScheduleFields />
-        </div>
+        <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div><ServiceChecklist services={services} /></div>
+        <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
         <ActionState state={state} />
         <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
       </form>
@@ -165,7 +153,7 @@ function CreateDoctorForm({ branches, services }: { branches: KnowledgeBranch[];
   );
 }
 
-function DoctorProfileForm({ doctor, services }: { doctor: KnowledgeDoctor; services: KnowledgeService[] }) {
+function DoctorProfileForm({ doctor, services }: { doctor: DoctorAdminItem; services: KnowledgeService[] }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorAction, initialDoctorAdminState);
   return (
     <form action={action} className="space-y-4">
@@ -178,40 +166,30 @@ function DoctorProfileForm({ doctor, services }: { doctor: KnowledgeDoctor; serv
         <label className="text-xs font-bold text-slate-700">البريد الإلكتروني<input name="email" type="email" defaultValue={doctor.email || ""} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
         <label className="flex items-center gap-2 self-end rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700"><input type="checkbox" name="booking_enabled" defaultChecked={doctor.booking_enabled} /> متاح للحجز</label>
       </div>
-      <div>
-        <div className="mb-2 text-xs font-black text-slate-700">الخدمات</div>
-        <ServiceChecklist services={services} selectedIds={doctor.services.map((service) => service.id)} />
-      </div>
+      <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات</div><ServiceChecklist services={services} selectedIds={doctor.services.map((service) => service.id)} /></div>
       <ActionState state={state} />
       <Button type="submit" size="sm" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} حفظ البيانات</Button>
     </form>
   );
 }
 
-function DoctorScheduleForm({ doctor, branchId, branchName, hours }: { doctor: KnowledgeDoctor; branchId: string; branchName: string; hours: KnowledgeHour[] }) {
+function DoctorScheduleForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorScheduleAction, initialDoctorAdminState);
   return (
     <form action={action} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
       <input type="hidden" name="doctor_id" value={doctor.id} />
-      <input type="hidden" name="branch_id" value={branchId} />
-      <div className="flex items-center gap-2 text-sm font-black text-slate-900"><Clock3 size={15} /> {branchName}</div>
-      <ScheduleFields initialHours={hours} />
+      <div className="flex items-center gap-2 text-sm font-black text-slate-900"><Clock3 size={15} /> مواعيد العمل الأسبوعية</div>
+      <ScheduleFields initialHours={doctor.working_hours} />
       <ActionState state={state} />
       <Button type="submit" size="sm" variant="outline" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} حفظ المواعيد</Button>
     </form>
   );
 }
 
-function RemoveDoctorForm({ doctor }: { doctor: KnowledgeDoctor }) {
+function RemoveDoctorForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(removeDoctorAction, initialDoctorAdminState);
   return (
-    <form
-      action={action}
-      onSubmit={(event) => {
-        if (!window.confirm(`إزالة ${doctor.name} من الحجز النشط؟ المواعيد التاريخية ستظل محفوظة.`)) event.preventDefault();
-      }}
-      className="space-y-2 border-t border-red-100 pt-4"
-    >
+    <form action={action} onSubmit={(event) => { if (!window.confirm(`إزالة ${doctor.name} من الحجز النشط؟ المواعيد التاريخية ستظل محفوظة.`)) event.preventDefault(); }} className="space-y-2 border-t border-red-100 pt-4">
       <input type="hidden" name="doctor_id" value={doctor.id} />
       <ActionState state={state} />
       <Button type="submit" size="sm" variant="danger" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />} مسح الدكتور</Button>
@@ -220,9 +198,8 @@ function RemoveDoctorForm({ doctor }: { doctor: KnowledgeDoctor }) {
   );
 }
 
-export function DoctorManagementPanel({ doctors, branches, services }: { doctors: KnowledgeDoctor[]; branches: KnowledgeBranch[]; services: KnowledgeService[] }) {
+export function DoctorManagementPanel({ doctors, services }: { doctors: DoctorAdminItem[]; services: KnowledgeService[] }) {
   const activeDoctors = doctors.filter((doctor) => doctor.is_active);
-  const activeBranches = branches.filter((branch) => branch.is_active);
   const activeServices = services.filter((service) => service.is_active);
 
   return (
@@ -232,28 +209,17 @@ export function DoctorManagementPanel({ doctors, branches, services }: { doctors
         <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: أضف دكتور، عدّل بياناته وخدماته ومواعيد عمله، أو أزله من الحجز النشط.</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <CreateDoctorForm branches={activeBranches} services={activeServices} />
-        {activeDoctors.map((doctor) => {
-          const branchSchedules = doctor.branches.map((branch) => ({
-            branch,
-            hours: doctor.schedules.find((schedule) => schedule.branch_id === branch.id)?.working_hours || [],
-          }));
-          return (
-            <details key={doctor.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-              <summary className="cursor-pointer text-sm font-black text-slate-950">{doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}</summary>
-              <div className="mt-5 space-y-5">
-                <DoctorProfileForm doctor={doctor} services={activeServices} />
-                <div className="space-y-3">
-                  <div className="text-xs font-black text-slate-700">مواعيد العمل حسب الفرع</div>
-                  {branchSchedules.length ? branchSchedules.map(({ branch, hours }) => (
-                    <DoctorScheduleForm key={branch.id} doctor={doctor} branchId={branch.id} branchName={branch.name} hours={hours} />
-                  )) : <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">الدكتور غير مرتبط بفرع نشط حاليًا. اربطه بفرع من إعدادات العيادة قبل إضافة مواعيد عمل.</div>}
-                </div>
-                <RemoveDoctorForm doctor={doctor} />
-              </div>
-            </details>
-          );
-        })}
+        <CreateDoctorForm services={activeServices} />
+        {activeDoctors.map((doctor) => (
+          <details key={doctor.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+            <summary className="cursor-pointer text-sm font-black text-slate-950">{doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}</summary>
+            <div className="mt-5 space-y-5">
+              <DoctorProfileForm doctor={doctor} services={activeServices} />
+              <DoctorScheduleForm doctor={doctor} />
+              <RemoveDoctorForm doctor={doctor} />
+            </div>
+          </details>
+        ))}
       </CardContent>
     </Card>
   );
