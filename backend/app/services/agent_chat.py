@@ -38,7 +38,11 @@ from app.agents.semantic_actions import (
 from app.agents.tia_customer_agent import run_tia_customer_agent
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.agents.turn_interpreter import interpret_customer_turn
-from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
+from app.agents.turn_models import (
+    CompoundRequestedItem,
+    FlowTurnDecision,
+    SemanticCapabilityDecision,
+)
 from app.core.config import settings
 from app.integrations.clinic.base import AppointmentReadRequest
 from app.integrations.clinic.registry import get_clinic_adapter
@@ -74,6 +78,19 @@ from app.services.conversation_ownership import (
 )
 from app.services.handoff_intelligence import build_handoff_context
 from app.services.handoffs import get_active_handoff
+from app.services.compound_customer_requests import (
+    COMPOUND_CURRENT_SERVICE_KEY,
+    appointment_decision_from_item,
+    appointment_item_state,
+    appointment_items,
+    compound_progress,
+    compound_union_decision,
+    ground_compound_requested_items,
+    has_compound_request,
+    package_items,
+    purchase_compound_package_batch,
+    queue_from_flow_state,
+)
 from app.services.package_offers import (
     PackageOfferError,
     list_package_offers,
@@ -2391,16 +2408,27 @@ def _structured_flow_write(
                 db=db, workspace_id=tool_context.workspace.id,
                 patient_id=tool_context.patient.id, appointment_payload=appointment,
             )
-        complete_flow(
-            db,
-            flow,
+        booking_reply = _package_booking_success_reply(appointment, package_result)
+        next_flow, next_item = _advance_compound_booking_flow(
+            db=db,
+            flow=flow,
+            workspace=tool_context.workspace,
             run_id=run_id,
-            result={"tool": tool_name, "output": result},
+            result=result,
         )
-        return (
-            _package_booking_success_reply(appointment, package_result),
-            "flow-interpreter:verified-booking",
-        )
+        if next_flow is not None and next_item is not None:
+            continuation = _continue_compound_booking_flow(
+                db=db,
+                flow=next_flow,
+                item=next_item,
+                base_decision=_flow_turn_as_capability_decision(turn),
+                tool_context=tool_context,
+                run_id=run_id,
+            )
+            if continuation is not None:
+                booking_reply = f"{booking_reply}\n\n{continuation[0]}"
+            return (booking_reply, "flow-interpreter:verified-compound-booking")
+        return (booking_reply, "flow-interpreter:verified-booking")
     complete_flow(
         db,
         flow,
@@ -2417,6 +2445,172 @@ def _structured_flow_write(
         reschedule_reply,
         "flow-interpreter:deterministic-reschedule",
     )
+
+def _compound_initial_entity_state(
+    *,
+    decision: SemanticCapabilityDecision,
+    first_item: CompoundRequestedItem,
+    remaining: list[CompoundRequestedItem],
+    total: int,
+    clinic_catalog: dict[str, object],
+) -> dict[str, object]:
+    state = appointment_item_state(
+        first_item,
+        remaining=remaining,
+        total=total,
+        completed=0,
+        catalog=clinic_catalog,
+    )
+    for key in ("branch_query", "branch_id"):
+        value = getattr(decision.entity_hints, key, None)
+        if value:
+            state[key] = value
+    branch_candidates = list(decision.entity_hints.branch_candidate_ids or [])
+    if branch_candidates:
+        state["branch_candidate_ids"] = branch_candidates
+    return state
+
+
+def _advance_compound_booking_flow(
+    *,
+    db: Session,
+    flow: ConversationFlowState,
+    workspace: Workspace,
+    run_id: UUID,
+    result: dict[str, object],
+) -> tuple[ConversationFlowState | None, CompoundRequestedItem | None]:
+    queue = queue_from_flow_state(flow.entity_state)
+    if not queue:
+        complete_flow(
+            db,
+            flow,
+            run_id=run_id,
+            result={"tool": "book_appointment", "output": result},
+        )
+        return None, None
+
+    completed, total = compound_progress(flow.entity_state)
+    total = max(total, completed + 1 + len(queue))
+    next_item = queue[0]
+    remaining = queue[1:]
+    catalog = build_clinic_catalog(db, workspace)
+    state = appointment_item_state(
+        next_item,
+        remaining=remaining,
+        total=total,
+        completed=completed + 1,
+        catalog=catalog,
+    )
+    if workspace.primary_branch_id is not None:
+        state["branch_id"] = str(workspace.primary_branch_id)
+    flow = transition_flow(
+        db,
+        flow,
+        actor_type="tool",
+        event_type="compound_item_completed",
+        run_id=run_id,
+        status="collecting_requirements",
+        capabilities=["availability_discovery", "appointment_creation"],
+        entity_state=state,
+        missing_information=list(next_item.missing_information),
+        pending_action={"last_completed": result},
+        option_snapshot={},
+    )
+    return flow, next_item
+
+
+def _continue_compound_booking_flow(
+    *,
+    db: Session,
+    flow: ConversationFlowState,
+    item: CompoundRequestedItem,
+    base_decision: SemanticCapabilityDecision,
+    tool_context: AgentToolContext,
+    run_id: UUID,
+) -> tuple[str, str] | None:
+    decision = appointment_decision_from_item(base_decision, item)
+    catalog = build_clinic_catalog(db, tool_context.workspace)
+    decision = _with_implicit_primary_branch(
+        decision,
+        workspace=tool_context.workspace,
+        clinic_catalog=catalog,
+    )
+    policy = resolve_capability_policy(decision)
+    if policy.requires_human:
+        return _handoff_direct(
+            db=db,
+            tool_context=tool_context,
+            policy=policy,
+            reason=decision.reason,
+            run_id=run_id,
+            flow=flow,
+        )
+
+    service_name = str((flow.entity_state or {}).get(COMPOUND_CURRENT_SERVICE_KEY) or "الخدمة التالية")
+    service_id = str(decision.entity_hints.service_id or "").strip()
+    requested_date = str(decision.entity_hints.requested_date or "").strip()
+    if not service_id:
+        return (
+            f"باقي طلبك هو {service_name}، لكن محتاج تحدد الخدمة المقصودة بدقة قبل ما أكمل الحجز.",
+            "flow-interpreter:compound-needs-service",
+        )
+    if not requested_date:
+        return (
+            f"حجزت الجزء السابق من طلبك. بالنسبة لـ{service_name}، تحب الحجز يوم إيه؟",
+            "flow-interpreter:compound-needs-date",
+        )
+
+    arguments = {
+        "booking_date": requested_date,
+        "service_id": service_id,
+        "branch_id": str(decision.entity_hints.branch_id or ""),
+        "doctor_id": str(decision.entity_hints.doctor_id or ""),
+        "requested_start_time": str(decision.entity_hints.requested_start_time or ""),
+        "not_before_time": str(decision.entity_hints.not_before_time or ""),
+        "not_after_time": str(decision.entity_hints.not_after_time or ""),
+    }
+    if decision.entity_hints.laser_device_key:
+        arguments["laser_device_key"] = str(decision.entity_hints.laser_device_key)
+    result = _invoke_authorized_tool(
+        tool_context=tool_context,
+        policy=policy,
+        tool_name="get_booking_options",
+        arguments=arguments,
+    )
+    if not isinstance(result, dict):
+        return None
+    flow = _sync_flow_from_verified_prefetch(
+        db=db,
+        flow=flow,
+        prefetched_results={"get_booking_options": result},
+        run_id=run_id,
+    ) or flow
+
+    selection_index = _exact_action_selection_index(
+        decision=decision,
+        payload=result,
+        required_capability="appointment_creation",
+    )
+    if selection_index is not None:
+        return _structured_flow_write(
+            db=db,
+            flow=flow,
+            turn=_exact_action_flow_turn(decision, selection_index=selection_index),
+            policy=policy,
+            tool_context=tool_context,
+            run_id=run_id,
+        )
+
+    reply = _verified_booking_slots_reply(result, booking_authorized=True)
+    if reply is None:
+        reply = format_verified_tool_fallback("get_booking_options", result)
+    if reply is None:
+        reply = "محتاج اختيار إضافي عشان أكمل الحجز التالي بأمان."
+    return (
+        f"حجزت الجزء السابق من طلبك. وبالنسبة لـ{service_name}: {reply}",
+        "flow-interpreter:compound-next-booking",
+    )
+
 
 def _run_after_inbound(
     *,
@@ -2482,12 +2676,36 @@ def _run_after_inbound(
         local_now=local_now,
         clinic_catalog=clinic_catalog,
     )
-    semantic_decision = _package_intent_non_booking(unified_turn.as_semantic_decision())
+    raw_semantic_decision = unified_turn.as_semantic_decision()
+    grounded_compound_items = ground_compound_requested_items(
+        list(raw_semantic_decision.entity_hints.requested_items),
+        clinic_catalog,
+    )
+    compound_active = has_compound_request(grounded_compound_items)
+    if compound_active:
+        semantic_decision = compound_union_decision(
+            raw_semantic_decision, grounded_compound_items
+        )
+        if flow is not None:
+            cancel_flow(
+                db,
+                flow,
+                run_id=run_id,
+                reason="superseded_by_compound_request",
+            )
+            flow = None
+    else:
+        semantic_decision = _package_intent_non_booking(raw_semantic_decision)
     semantic_decision = _with_implicit_primary_branch(
         semantic_decision,
         workspace=workspace,
         clinic_catalog=clinic_catalog,
     )
+    compound_first_item: CompoundRequestedItem | None = None
+    compound_remaining_items: list[CompoundRequestedItem] = []
+    compound_total_appointments = 0
+    compound_prefix_reply = ""
+    compound_direct: tuple[str, str] | None = None
     if flow is not None:
         flow_turn = unified_turn.as_flow_turn_decision().model_copy(
             update={
@@ -2527,13 +2745,67 @@ def _run_after_inbound(
     policy = resolve_capability_policy(
         semantic_decision, inherited_capabilities=inherited_capabilities,
     )
+    if compound_active and not policy.requires_human:
+        requested_packages = package_items(grounded_compound_items)
+        requested_appointments = appointment_items(grounded_compound_items)
+        if requested_packages:
+            batch_result = purchase_compound_package_batch(
+                db,
+                workspace=workspace,
+                patient=patient,
+                conversation=conversation,
+                run_id=run_id,
+                items=requested_packages,
+            )
+            if not batch_result.ok:
+                compound_direct = (
+                    batch_result.reply,
+                    "deterministic:compound-package-validation",
+                )
+            else:
+                compound_prefix_reply = batch_result.reply
+        if compound_direct is None and requested_appointments:
+            compound_first_item = requested_appointments[0]
+            compound_remaining_items = requested_appointments[1:]
+            compound_total_appointments = len(requested_appointments)
+            semantic_decision = appointment_decision_from_item(
+                semantic_decision, compound_first_item
+            )
+            semantic_decision = _with_implicit_primary_branch(
+                semantic_decision,
+                workspace=workspace,
+                clinic_catalog=clinic_catalog,
+            )
+            policy = resolve_capability_policy(semantic_decision)
+        elif compound_direct is None:
+            compound_direct = (
+                compound_prefix_reply or "تم تنفيذ الطلب المركب الموثق.",
+                "deterministic:compound-package-purchase",
+            )
     if flow is not None and str(semantic_decision.package_intent) == "purchase":
         cancel_flow(db, flow, run_id=run_id, reason="customer_switched_to_package_purchase")
         flow = None
         flow_turn = None
-    if flow is None:
+    if flow is None and compound_direct is None:
         flow_type = _flow_type_from_capabilities(set(policy.capabilities))
         if flow_type is not None and not policy.requires_human:
+            initial_entity_state = {
+                **semantic_decision.entity_hints.model_dump(mode="json", exclude_none=True),
+                **(
+                    {"package_intent": str(semantic_decision.package_intent)}
+                    if str(semantic_decision.package_intent) in {"use_existing", "avoid_existing"}
+                    else {}
+                ),
+            }
+            initial_entity_state.pop("requested_items", None)
+            if compound_first_item is not None:
+                initial_entity_state = _compound_initial_entity_state(
+                    decision=semantic_decision,
+                    first_item=compound_first_item,
+                    remaining=compound_remaining_items,
+                    total=compound_total_appointments,
+                    clinic_catalog=clinic_catalog,
+                )
             flow = start_flow(
                 db,
                 workspace_id=workspace.id,
@@ -2541,14 +2813,7 @@ def _run_after_inbound(
                 patient_id=patient.id,
                 flow_type=flow_type,
                 capabilities=_persistent_flow_capabilities(flow_type, policy.capabilities),
-                entity_state={
-                    **semantic_decision.entity_hints.model_dump(mode="json", exclude_none=True),
-                    **(
-                        {"package_intent": str(semantic_decision.package_intent)}
-                        if str(semantic_decision.package_intent) in {"use_existing", "avoid_existing"}
-                        else {}
-                    ),
-                },
+                entity_state=initial_entity_state,
                 missing_information=semantic_decision.missing_information,
                 last_decision=_decision_payload(semantic_decision),
                 run_id=run_id,
@@ -2588,7 +2853,7 @@ def _run_after_inbound(
         ),
     )
 
-    direct: tuple[str, str] | None = None
+    direct: tuple[str, str] | None = compound_direct
     if policy.requires_human:
         direct = _handoff_direct(
             db=db,
@@ -3011,6 +3276,8 @@ def _run_after_inbound(
                     conversation_id=conversation.id,
                     run_id=run_id,
                 )
+    if compound_prefix_reply and not reply.startswith(compound_prefix_reply):
+        reply = f"{compound_prefix_reply}\n\n{reply}"
     reply = sanitize_customer_reply(reply)
     persistence_started = perf_counter()
     db.refresh(conversation)
