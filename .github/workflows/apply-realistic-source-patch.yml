@@ -1,4 +1,4 @@
-name: Verify Appointment ID Contract
+name: Verify Committed Cancellation Contract
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_schema_contract_unused
-  SUPABASE_SECRET_KEY: sb_secret_schema_contract_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_committed_cancel_unused
+  SUPABASE_SECRET_KEY: sb_secret_committed_cancel_unused
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   LLM_PROVIDER: openai
   OPENAI_MODEL: gpt-5.6-luna
@@ -52,42 +52,28 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Clarify appointment ID schema description in working tree
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('app/agents/turn_models.py')
-          text = path.read_text(encoding='utf-8')
-          old = 'description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",'
-          new = 'description=(\n            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "\n            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "\n            "appointment, copy that appointment exact ID here. A direct answer to the assistant immediately preceding question about "\n            "which appointment to act on is a selection when it uniquely identifies one appointment. An appointment explicitly said "\n            "to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "\n            "appointment genuinely still fits."\n        ),'
-          if old not in text:
-              raise RuntimeError('appointment_id description anchor not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
       - name: Focused tests without model calls
         run: |
           python -m pytest tests/test_unified_turn_interpreter.py tests/test_verified_cancellation_execution.py -q
-          python -m compileall -q app/agents/turn_models.py
-      - name: Trace cancellation semantics once
-        run: python -m scripts.trace_cancellation_semantics
-      - name: Run real cancellation journey once
+          python -m compileall -q app/agents/turn_models.py app/services/agent_chat.py
+      - name: Run committed cancellation journey
         run: |
           mkdir -p artifacts
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
-            --report artifacts/cancellation-schema-contract.json \
+            --report artifacts/cancellation-committed.json \
             --scenario ambiguous_cancel_two_appointments
       - name: Require exact DB behavior
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path('artifacts/cancellation-schema-contract.json').read_text(encoding='utf-8'))
+          report = json.loads(Path('artifacts/cancellation-committed.json').read_text(encoding='utf-8'))
           scenario = report['scenarios'][0]
           after = {row['service']: row['status'] for row in scenario['after']['appointments']}
-          cancel_actions = [row for row in scenario['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
+          cancels = [row for row in scenario['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
           assert after['هيدرافيشل'] == 'cancelled', after
           assert after['ليزر إزالة الشعر - إبط'] == 'confirmed', after
-          assert len(cancel_actions) == 1, cancel_actions
-          print(json.dumps({'assistant': scenario['turns'][-1]['assistant'], 'after': after, 'cancel_actions': len(cancel_actions), 'tokens': scenario['tokens']}, ensure_ascii=False, indent=2))
+          assert len(cancels) == 1, cancels
+          print(json.dumps({'assistant': scenario['turns'][-1]['assistant'], 'after': after, 'cancels': len(cancels), 'tokens': scenario['tokens']}, ensure_ascii=False, indent=2))
           PY
