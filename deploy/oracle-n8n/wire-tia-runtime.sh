@@ -8,7 +8,7 @@ workflow_dir="${repo_root}/n8n/workflows"
 secrets_file=".runtime-secrets/tia-runtime.env"
 
 if [[ ! -f "$secrets_file" ]]; then
-  echo "Missing $secrets_file. Generate the Oracle runtime tokens first." >&2
+  echo "Missing $secrets_file. Generate the Oracle runtime token first." >&2
   exit 1
 fi
 
@@ -25,10 +25,8 @@ fi
 # Recreate n8n so Docker Compose loads the local runtime-token env file.
 docker compose up -d --force-recreate n8n >/dev/null
 
-docker compose exec -T n8n sh -lc '
-  test -n "$TIA_AUTOMATION_TOKEN" && test -n "$TIA_CHANNEL_TOKEN"
-' || {
-  echo "n8n did not receive the Tia runtime token environment variables." >&2
+docker compose exec -T n8n sh -lc 'test -n "$TIA_AUTOMATION_TOKEN"' || {
+  echo "n8n did not receive TIA_AUTOMATION_TOKEN." >&2
   exit 1
 }
 
@@ -43,93 +41,62 @@ if [[ -z "$owner_id" ]]; then
   exit 1
 fi
 
+source_name="tia_automation_scheduler.json"
+source_path="${workflow_dir}/${source_name}"
+workflow_id="tiaAutoSched0001"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-python3 - "$workflow_dir" "$tmp_dir" <<'PY'
+python3 - "$source_path" "$tmp_dir/$source_name" <<'PY'
 import json
 import pathlib
 import sys
 
-workflow_dir = pathlib.Path(sys.argv[1])
-tmp_dir = pathlib.Path(sys.argv[2])
+source = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
 
-configs = {
-    "tia_automation_scheduler.json": {
-        "id": "tiaAutoSched0001",
-        "header": "X-Automation-Token",
-        "env": "TIA_AUTOMATION_TOKEN",
-        "nodes": {
-            "Tia Plan + Claim",
-            "Tia Execute Automation",
-            "Tia Clinic Sync Tick",
-        },
-    },
-    "tia_whatsapp_outbox_worker.json": {
-        "id": "tiaWAOutbox00001",
-        "header": "X-Channel-Token",
-        "env": "TIA_CHANNEL_TOKEN",
-        "nodes": {
-            "Tia Claim Outbox",
-            "Tia Record Template Result",
-            "Tia Record Text Result",
-        },
-    },
-    "tia_whatsapp_inbound_status.json": {
-        "id": "tiaWAInbound0001",
-        "header": "X-Channel-Token",
-        "env": "TIA_CHANNEL_TOKEN",
-        "nodes": {
-            "Tia Accept Inbound",
-            "Tia Process With AI",
-            "Tia Record Delivery Status",
-        },
-    },
+if not source.is_file():
+    raise SystemExit(f"Missing workflow template: {source}")
+
+data = json.loads(source.read_text(encoding="utf-8"))
+data["id"] = "tiaAutoSched0001"
+expected_nodes = {
+    "Tia Plan + Claim",
+    "Tia Execute Automation",
+    "Tia Clinic Sync Tick",
 }
+found = set()
 
-for filename, config in configs.items():
-    source = workflow_dir / filename
-    if not source.is_file():
-        raise SystemExit(f"Missing workflow template: {source}")
+for node in data.get("nodes", []):
+    name = node.get("name")
+    if name not in expected_nodes:
+        continue
+    if node.get("type") != "n8n-nodes-base.httpRequest":
+        raise SystemExit(f"Expected HTTP Request node: {name}")
 
-    data = json.loads(source.read_text(encoding="utf-8"))
-    data["id"] = config["id"]
-    found = set()
+    params = node.setdefault("parameters", {})
+    params.pop("authentication", None)
+    params.pop("genericAuthType", None)
+    params["sendHeaders"] = True
+    params["headerParameters"] = {
+        "parameters": [
+            {
+                "name": "X-Automation-Token",
+                "value": "={{ $env.TIA_AUTOMATION_TOKEN }}",
+            }
+        ]
+    }
+    found.add(name)
 
-    for node in data.get("nodes", []):
-        name = node.get("name")
-        if name not in config["nodes"]:
-            continue
-        if node.get("type") != "n8n-nodes-base.httpRequest":
-            raise SystemExit(f"Expected HTTP Request node: {name}")
+missing = expected_nodes - found
+if missing:
+    raise SystemExit(f"Scheduler is missing expected Tia auth nodes: {sorted(missing)}")
 
-        params = node.setdefault("parameters", {})
-        params.pop("authentication", None)
-        params.pop("genericAuthType", None)
-        params["sendHeaders"] = True
-        params["headerParameters"] = {
-            "parameters": [
-                {
-                    "name": config["header"],
-                    "value": "={{ $env." + config["env"] + " }}",
-                }
-            ]
-        }
-        found.add(name)
-
-    missing = config["nodes"] - found
-    if missing:
-        raise SystemExit(
-            f"Workflow {filename} is missing expected Tia auth nodes: {sorted(missing)}"
-        )
-
-    output = tmp_dir / filename
-    output.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Prepared {filename}: {len(found)} Tia-authenticated HTTP nodes")
+output.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"Prepared {source.name}: {len(found)} Tia-authenticated HTTP nodes")
 PY
 
 workflow_exists() {
-  local workflow_id="$1"
   local count
   count="$(
     docker compose exec -T n8n_db \
@@ -140,32 +107,23 @@ workflow_exists() {
   [[ "$count" == "1" ]]
 }
 
-import_one() {
-  local filename="$1"
-  local workflow_id="$2"
+docker compose cp "$tmp_dir/$source_name" "n8n:/tmp/$source_name" >/dev/null
 
-  docker compose cp "$tmp_dir/$filename" "n8n:/tmp/$filename" >/dev/null
-
-  if workflow_exists "$workflow_id"; then
-    echo "Updating existing workflow: $workflow_id"
-    docker compose exec -T --user node n8n \
-      n8n import:workflow --input="/tmp/$filename"
-  else
-    echo "Creating workflow for owner: $workflow_id"
-    docker compose exec -T --user node n8n \
-      n8n import:workflow --input="/tmp/$filename" --userId="$owner_id"
-  fi
-}
-
-import_one "tia_automation_scheduler.json" "tiaAutoSched0001"
-import_one "tia_whatsapp_outbox_worker.json" "tiaWAOutbox00001"
-import_one "tia_whatsapp_inbound_status.json" "tiaWAInbound0001"
+if workflow_exists; then
+  echo "Updating existing scheduler: $workflow_id"
+  docker compose exec -T --user node n8n \
+    n8n import:workflow --input="/tmp/$source_name"
+else
+  echo "Creating scheduler for owner: $workflow_id"
+  docker compose exec -T --user node n8n \
+    n8n import:workflow --input="/tmp/$source_name" --userId="$owner_id"
+fi
 
 docker compose restart n8n >/dev/null
 
 echo
-echo "Tia runtime authentication is wired into n8n. Raw tokens were not printed."
-echo "Workflows remain inactive until WhatsApp/Meta credentials are configured:"
+echo "Tia automation scheduler authentication is wired into n8n. Raw token was not printed."
+echo "WhatsApp transport credentials are intentionally not wired into Oracle n8n."
 docker compose exec -T n8n_db \
   psql -U n8n -d n8n \
-  -c "SELECT id, name, active FROM workflow_entity WHERE id IN ('tiaAutoSched0001','tiaWAOutbox00001','tiaWAInbound0001') ORDER BY name;"
+  -c "SELECT id, name, active FROM workflow_entity WHERE id = '${workflow_id}';"
