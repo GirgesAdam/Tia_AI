@@ -1,4 +1,4 @@
-name: Verify Structured Cancellation Fallback
+name: Verify Semantic Entity Contract
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_cancel_fallback_unused
-  SUPABASE_SECRET_KEY: sb_secret_cancel_fallback_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_schema_contract_unused
+  SUPABASE_SECRET_KEY: sb_secret_schema_contract_unused
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   LLM_PROVIDER: openai
   OPENAI_MODEL: gpt-5.6-luna
@@ -52,89 +52,69 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Apply structured-query fallback in working tree
+      - name: Apply schema-only clarification in working tree
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('app/services/agent_chat.py')
+          path = Path('app/agents/turn_models.py')
           text = path.read_text(encoding='utf-8')
-          old_import = 'from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools\n'
-          new_import = 'from app.agents.tools.clinic_tools import (\n    AgentToolContext,\n    _normalize_lookup_text,\n    build_clinic_tools,\n)\n'
-          if old_import not in text:
-              raise RuntimeError('clinic_tools import anchor not found')
-          text = text.replace(old_import, new_import, 1)
-
-          old_service = '''        if service_ids:\n            candidates = [\n                row for row in candidates if str(row.get("service_id") or "") in service_ids\n            ]\n            filters_applied += 1\n\n        doctor_ids: list[str] = []\n'''
-          new_service = '''        if service_ids:\n            candidates = [\n                row for row in candidates if str(row.get("service_id") or "") in service_ids\n            ]\n            filters_applied += 1\n        else:\n            service_query = str(getattr(hints, "service_query", None) or "").strip()\n            normalized_service_query = _normalize_lookup_text(service_query)\n            if normalized_service_query:\n                candidates = [\n                    row\n                    for row in candidates\n                    if _normalize_lookup_text(str(row.get("service_name") or ""))\n                    == normalized_service_query\n                ]\n                filters_applied += 1\n\n        doctor_ids: list[str] = []\n'''
-          if old_service not in text:
-              raise RuntimeError('service filter anchor not found')
-          text = text.replace(old_service, new_service, 1)
-
-          old_doctor = '''        if doctor_ids:\n            candidates = [\n                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids\n            ]\n            filters_applied += 1\n\n        requested_date = str(hints.requested_date or "").strip()\n'''
-          new_doctor = '''        if doctor_ids:\n            candidates = [\n                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids\n            ]\n            filters_applied += 1\n        else:\n            doctor_query = str(getattr(hints, "doctor_query", None) or "").strip()\n            normalized_doctor_query = _normalize_lookup_text(doctor_query)\n            if normalized_doctor_query:\n                candidates = [\n                    row\n                    for row in candidates\n                    if _normalize_lookup_text(str(row.get("doctor_name") or ""))\n                    == normalized_doctor_query\n                ]\n                filters_applied += 1\n\n        requested_date = str(hints.requested_date or "").strip()\n'''
-          if old_doctor not in text:
-              raise RuntimeError('doctor filter anchor not found')
-          text = text.replace(old_doctor, new_doctor, 1)
+          replacements = {
+              'service_id: str | None = Field(default=None, description="Canonical service UUID from the supplied clinic catalog.")': '''service_id: str | None = Field(
+        default=None,
+        description=(
+            "Canonical service UUID from the supplied clinic catalog. When the latest customer turn "
+            "clearly identifies exactly one catalog service, copy that service's exact UUID here. "
+            "Use null only when no service is identified uniquely; use service_candidate_ids only for genuine ambiguity."
+        ),
+    )''',
+              'doctor_id: str | None = Field(default=None, description="Canonical doctor UUID from the supplied clinic catalog.")': '''doctor_id: str | None = Field(
+        default=None,
+        description=(
+            "Canonical doctor UUID from the supplied clinic catalog. When the latest customer turn "
+            "clearly identifies exactly one catalog doctor, copy that doctor's exact UUID here. "
+            "Use doctor_candidate_ids only when genuine ambiguity remains."
+        ),
+    )''',
+              'description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",': '''description=(
+            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "
+            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "
+            "appointment, copy that appointment's exact ID here. A direct answer to the assistant's immediately preceding question "
+            "about which appointment to act on is a selection when it uniquely identifies one appointment; an appointment explicitly "
+            "said to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "
+            "appointment genuinely still fits."
+        ),''',
+              'description="Customer-facing reference identifying an existing appointment."': '''description=(
+            "Customer-facing reference identifying an existing appointment. Use the latest turn plus recent conversation to describe "
+            "the one current appointment being acted on when it is uniquely identified; this complements appointment_id and does not "
+            "replace canonical ID selection."
+        )''',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise RuntimeError(f'anchor not found: {old[:80]}')
+              text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
-          PY
-      - name: Add focused worktree tests
-        run: |
-          cat >> tests/test_verified_cancellation_execution.py <<'PY'
-
-          def test_unique_structured_service_query_resolves_without_raw_customer_text(monkeypatch):
-              calls = _capture(monkeypatch)
-              result = agent_chat._verified_cancellation_action(
-                  tool_context=object(),
-                  policy=_policy(),
-                  decision=_decision(service_query="هيدرافيشل"),
-                  clinic_catalog=_catalog(),
-              )
-              assert result is not None
-              assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"
-              assert len(calls) == 1
-
-
-          def test_structured_service_query_stays_ambiguous_for_two_matching_appointments(monkeypatch):
-              calls = _capture(monkeypatch)
-              result = agent_chat._verified_cancellation_action(
-                  tool_context=object(),
-                  policy=_policy(),
-                  decision=_decision(service_query="هيدرافيشل"),
-                  clinic_catalog=_catalog(duplicate_hydra=True),
-              )
-              assert result is None
-              assert calls == []
-
-
-          def test_unknown_structured_service_query_never_writes(monkeypatch):
-              calls = _capture(monkeypatch)
-              result = agent_chat._verified_cancellation_action(
-                  tool_context=object(),
-                  policy=_policy(),
-                  decision=_decision(service_query="خدمة غير موجودة"),
-                  clinic_catalog=_catalog(),
-              )
-              assert result is None
-              assert calls == []
           PY
       - name: Focused tests without model calls
         run: |
-          python -m pytest tests/test_verified_cancellation_execution.py -q
-          python -m compileall -q app/services/agent_chat.py
+          python -m pytest tests/test_unified_turn_interpreter.py tests/test_verified_cancellation_execution.py -q
+          python -m compileall -q app/agents/turn_models.py
+      - name: Trace cancellation semantics once
+        run: python -m scripts.trace_cancellation_semantics
       - name: Run real cancellation journey once
         run: |
           mkdir -p artifacts
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
-            --report artifacts/cancellation-query-fallback.json \
+            --report artifacts/cancellation-schema-contract.json \
             --scenario ambiguous_cancel_two_appointments
       - name: Require exact DB behavior
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path('artifacts/cancellation-query-fallback.json').read_text(encoding='utf-8'))
+          report = json.loads(Path('artifacts/cancellation-schema-contract.json').read_text(encoding='utf-8'))
           scenario = report['scenarios'][0]
           after = {row['service']: row['status'] for row in scenario['after']['appointments']}
           cancel_actions = [row for row in scenario['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
