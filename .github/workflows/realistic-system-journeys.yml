@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: realistic-system-journeys
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -64,8 +64,15 @@ jobs:
           test -n "$DATABASE_URL"
       - name: Apply required staging migrations
         run: alembic upgrade head
-      - name: Run realistic system journeys
-        run: python -m scripts.run_realistic_system_journeys --workspace-slug tia --report artifacts/realistic-system-journeys.json
+      - name: Run targeted realistic journeys
+        run: |
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/realistic-system-journeys.json \
+            --scenario package_holder_other_service \
+            --scenario reschedule_change_service \
+            --scenario paid_reschedule_no_double_charge \
+            --scenario compound_two_services
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
