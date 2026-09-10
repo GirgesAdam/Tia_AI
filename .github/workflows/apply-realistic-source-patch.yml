@@ -1,4 +1,4 @@
-name: Cancellation Journey Verification
+name: Cancellation Turn Runtime Trace
 
 on:
   push:
@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  verify:
+  trace:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -62,9 +62,5 @@ jobs:
             tests/test_verified_cancellation_execution.py \
             tests/test_clinic_grounding_compatibility.py \
             tests/test_unified_turn_interpreter.py -q
-      - name: Verify cancellation journey only
-        run: |
-          python -m scripts.run_realistic_system_journeys \
-            --workspace-slug tia \
-            --report artifacts/cancellation-current.json \
-            --scenario ambiguous_cancel_two_appointments
+      - name: Trace full cancellation follow-up turn
+        run: python -m scripts.trace_cancellation_semantics
