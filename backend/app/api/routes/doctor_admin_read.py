@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
 from app.database.session import get_db
-from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -25,19 +24,12 @@ router = APIRouter()
 class DoctorAdminNamedLink(BaseModel):
     id: UUID
     name: str
-    is_primary: bool = False
 
 
 class DoctorAdminHour(BaseModel):
     weekday: int
     start_time: str
     end_time: str
-
-
-class DoctorAdminSchedule(BaseModel):
-    branch_id: UUID
-    branch_name: str
-    working_hours: list[DoctorAdminHour] = Field(default_factory=list)
 
 
 class DoctorAdminListItem(BaseModel):
@@ -51,9 +43,8 @@ class DoctorAdminListItem(BaseModel):
     email: str | None
     booking_enabled: bool
     is_active: bool
-    branches: list[DoctorAdminNamedLink]
     services: list[DoctorAdminNamedLink]
-    schedules: list[DoctorAdminSchedule]
+    working_hours: list[DoctorAdminHour] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,22 +73,6 @@ def list_doctors_for_admin(
     if not doctor_ids:
         return []
 
-    branch_rows = list(
-        db.execute(
-            select(DoctorBranch, Branch)
-            .join(
-                Branch,
-                (Branch.workspace_id == DoctorBranch.workspace_id)
-                & (Branch.id == DoctorBranch.branch_id),
-            )
-            .where(
-                DoctorBranch.workspace_id == workspace_id,
-                DoctorBranch.doctor_id.in_(doctor_ids),
-                DoctorBranch.is_active.is_(True),
-                Branch.is_active.is_(True),
-            )
-        )
-    )
     service_rows = list(
         db.execute(
             select(DoctorService, Service)
@@ -114,33 +89,50 @@ def list_doctors_for_admin(
             )
         )
     )
-    hour_rows = list(
+    assignments = list(
         db.scalars(
-            select(DoctorWorkingHour)
+            select(DoctorBranch)
             .where(
-                DoctorWorkingHour.workspace_id == workspace_id,
-                DoctorWorkingHour.doctor_id.in_(doctor_ids),
+                DoctorBranch.workspace_id == workspace_id,
+                DoctorBranch.doctor_id.in_(doctor_ids),
+                DoctorBranch.is_active.is_(True),
             )
             .order_by(
-                DoctorWorkingHour.doctor_id,
-                DoctorWorkingHour.branch_id,
-                DoctorWorkingHour.weekday,
-                DoctorWorkingHour.start_time,
+                DoctorBranch.doctor_id,
+                DoctorBranch.is_primary.desc(),
+                DoctorBranch.created_at,
             )
         )
     )
+    primary_branch_by_doctor: dict[UUID, UUID] = {}
+    for assignment in assignments:
+        primary_branch_by_doctor.setdefault(assignment.doctor_id, assignment.branch_id)
 
-    branches_by_doctor: dict[UUID, list[DoctorAdminNamedLink]] = defaultdict(list)
-    branch_name_by_id: dict[UUID, str] = {}
-    for assignment, branch in branch_rows:
-        branch_name_by_id[branch.id] = branch.name
-        branches_by_doctor[assignment.doctor_id].append(
-            DoctorAdminNamedLink(
-                id=branch.id,
-                name=branch.name,
-                is_primary=assignment.is_primary,
+    selected_pairs = [
+        (doctor_id, branch_id)
+        for doctor_id, branch_id in primary_branch_by_doctor.items()
+    ]
+    hour_rows: list[DoctorWorkingHour] = []
+    if selected_pairs:
+        candidate_hours = list(
+            db.scalars(
+                select(DoctorWorkingHour)
+                .where(
+                    DoctorWorkingHour.workspace_id == workspace_id,
+                    DoctorWorkingHour.doctor_id.in_(doctor_ids),
+                )
+                .order_by(
+                    DoctorWorkingHour.doctor_id,
+                    DoctorWorkingHour.weekday,
+                    DoctorWorkingHour.start_time,
+                )
             )
         )
+        hour_rows = [
+            row
+            for row in candidate_hours
+            if primary_branch_by_doctor.get(row.doctor_id) == row.branch_id
+        ]
 
     services_by_doctor: dict[UUID, list[DoctorAdminNamedLink]] = defaultdict(list)
     for assignment, service in service_rows:
@@ -148,9 +140,9 @@ def list_doctors_for_admin(
             DoctorAdminNamedLink(id=service.id, name=service.name)
         )
 
-    hours_by_pair: dict[tuple[UUID, UUID], list[DoctorAdminHour]] = defaultdict(list)
+    hours_by_doctor: dict[UUID, list[DoctorAdminHour]] = defaultdict(list)
     for hour in hour_rows:
-        hours_by_pair[(hour.doctor_id, hour.branch_id)].append(
+        hours_by_doctor[hour.doctor_id].append(
             DoctorAdminHour(
                 weekday=hour.weekday,
                 start_time=hour.start_time.strftime("%H:%M"),
@@ -158,35 +150,20 @@ def list_doctors_for_admin(
             )
         )
 
-    result: list[DoctorAdminListItem] = []
-    for doctor, staff in rows:
-        branches = sorted(
-            branches_by_doctor.get(doctor.id, []),
-            key=lambda item: (not item.is_primary, item.name),
+    return [
+        DoctorAdminListItem(
+            id=doctor.id,
+            staff_id=doctor.staff_id,
+            name=f"{staff.first_name} {staff.last_name}".strip() or "دكتور",
+            first_name=staff.first_name,
+            last_name=staff.last_name,
+            specialization=doctor.specialization,
+            phone=staff.phone,
+            email=staff.email,
+            booking_enabled=doctor.booking_enabled,
+            is_active=doctor.is_active,
+            services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
+            working_hours=hours_by_doctor.get(doctor.id, []),
         )
-        schedules = [
-            DoctorAdminSchedule(
-                branch_id=branch.id,
-                branch_name=branch.name,
-                working_hours=hours_by_pair.get((doctor.id, branch.id), []),
-            )
-            for branch in branches
-        ]
-        result.append(
-            DoctorAdminListItem(
-                id=doctor.id,
-                staff_id=doctor.staff_id,
-                name=f"{staff.first_name} {staff.last_name}".strip() or "دكتور",
-                first_name=staff.first_name,
-                last_name=staff.last_name,
-                specialization=doctor.specialization,
-                phone=staff.phone,
-                email=staff.email,
-                booking_enabled=doctor.booking_enabled,
-                is_active=doctor.is_active,
-                branches=branches,
-                services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
-                schedules=schedules,
-            )
-        )
-    return result
+        for doctor, staff in rows
+    ]
