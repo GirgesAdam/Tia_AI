@@ -510,6 +510,7 @@ def _merge_flow_entity_state(
         "service_candidate_ids",
         "branch_candidate_ids",
         "doctor_candidate_ids",
+        "requested_items",
     }
     for field_name, value in hints.items():
         if field_name in clear_fields:
