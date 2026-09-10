@@ -10,6 +10,7 @@ from app.api.routes.booking import router as booking_router
 from app.api.routes.campaign_analytics import router as campaign_analytics_router
 from app.api.routes.channels import router as channels_router
 from app.api.routes.clinic import router as clinic_router
+from app.api.routes.clinic_knowledge_base import router as clinic_knowledge_base_router
 from app.api.routes.clinic_setup_v2 import router as clinic_setup_v2_router
 from app.api.routes.crm import router as crm_router
 from app.api.routes.crm_task_executor import router as crm_task_executor_router
@@ -46,6 +47,7 @@ api_router.include_router(
     tags=["whatsapp-setup"],
 )
 api_router.include_router(clinic_router, prefix="/clinic", tags=["clinic"])
+api_router.include_router(clinic_knowledge_base_router, prefix="/clinic", tags=["clinic-knowledge"])
 api_router.include_router(doctor_admin_router, prefix="/clinic", tags=["clinic"])
 api_router.include_router(doctor_admin_read_router, prefix="/clinic", tags=["clinic"])
 api_router.include_router(clinic_setup_v2_router, prefix="/clinic", tags=["clinic-setup"])
