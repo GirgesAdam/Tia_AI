@@ -57,6 +57,7 @@ from app.models.patient_package import PatientPackage
 from app.models.working_hours import BranchWorkingHour
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest, AgentChatResponse
+from app.services.clinic_knowledge_base import relevant_knowledge_context
 from app.services.compound_customer_requests import (
     COMPOUND_CURRENT_SERVICE_KEY,
     appointment_decision_from_item,
@@ -2979,6 +2980,27 @@ def _run_after_inbound(
                         option_snapshot=snapshot,
                         last_decision=_decision_payload(semantic_decision),
                     )
+        if grounded_mode and not policy.requires_human:
+            service_uuid = _uuid_from_metadata(semantic_decision.entity_hints.service_id)
+            device_key = str(semantic_decision.entity_hints.laser_device_key or "").strip() or None
+            include_clinic_knowledge = "clinic_information" in set(policy.capabilities)
+            if (
+                include_clinic_knowledge
+                or service_uuid is not None
+                or device_key is not None
+            ) and set(policy.capabilities).intersection(
+                {"clinic_information", "service_information", "pricing"}
+            ):
+                knowledge_context = relevant_knowledge_context(
+                    db,
+                    workspace_id=workspace.id,
+                    service_id=service_uuid,
+                    device_key=device_key,
+                    include_clinic=include_clinic_knowledge,
+                )
+                if knowledge_context is not None:
+                    prefetched_results["clinic_knowledge"] = knowledge_context
+
         if (
             grounded_mode
             and "clinic_catalog" not in prefetched_results
