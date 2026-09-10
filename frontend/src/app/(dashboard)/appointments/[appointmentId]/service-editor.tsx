@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useState } from "react";
 import { Save, Stethoscope } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format";
 
-import { changeAppointmentService } from "./actions";
+import { changeAppointmentService, type AppointmentServiceChangeState } from "./actions";
 
 export type AppointmentServiceOption = {
   id: string;
@@ -26,26 +26,39 @@ export type AppointmentDevicePrice = {
   configured: boolean;
 };
 
+export type AppointmentDoctorOption = {
+  id: string;
+  name: string;
+};
+
 type Props = {
   appointmentId: string;
   patientId: string;
   currentServiceId: string;
+  currentDoctorId: string;
   currentDeviceKey: string | null;
   packageBacked: boolean;
   services: AppointmentServiceOption[];
+  doctors: AppointmentDoctorOption[];
   devicePrices: AppointmentDevicePrice[];
 };
+
+const initialState: AppointmentServiceChangeState = { ok: false, error: null };
 
 export function AppointmentServiceEditor({
   appointmentId,
   patientId,
   currentServiceId,
+  currentDoctorId,
   currentDeviceKey,
   packageBacked,
   services,
+  doctors,
   devicePrices,
 }: Props) {
+  const [state, formAction, pending] = useActionState(changeAppointmentService, initialState);
   const [serviceId, setServiceId] = useState(currentServiceId);
+  const [doctorId, setDoctorId] = useState(currentDoctorId);
   const [deviceKey, setDeviceKey] = useState(currentDeviceKey || "");
   const selected = services.find((service) => service.id === serviceId) || null;
   const devices = devicePrices.filter(
@@ -53,14 +66,17 @@ export function AppointmentServiceEditor({
   );
   const selectedDevice = devices.find((row) => row.device_key === deviceKey) || null;
   const deviceReady = !selected?.requires_laser_device || Boolean(selectedDevice);
-  const changed = serviceId !== currentServiceId || deviceKey !== (currentDeviceKey || "");
+  const changed =
+    serviceId !== currentServiceId ||
+    doctorId !== currentDoctorId ||
+    deviceKey !== (currentDeviceKey || "");
 
   return (
     <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
       <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900">
         <Stethoscope size={16} /> تعديل الخدمة يدويًا
       </summary>
-      <form action={changeAppointmentService} className="mt-4 space-y-3">
+      <form action={formAction} className="mt-4 space-y-3">
         <input type="hidden" name="appointment_id" value={appointmentId} />
         <input type="hidden" name="patient_id" value={patientId} />
         <label className="block text-xs font-bold text-slate-700">
@@ -79,6 +95,22 @@ export function AppointmentServiceEditor({
               <option key={service.id} value={service.id}>{service.name}</option>
             ))}
           </select>
+        </label>
+
+        <label className="block text-xs font-bold text-slate-700">
+          الدكتور
+          <select
+            name="doctor_id"
+            value={doctorId}
+            onChange={(event) => setDoctorId(event.target.value)}
+            required
+            className="form-control mt-1.5 h-10 min-h-10"
+          >
+            {doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.name}</option>)}
+          </select>
+          <span className="mt-1 block text-[11px] font-semibold text-slate-500">
+            لو الخدمة الجديدة مش متاحة مع الدكتور الحالي، اختار دكتور تاني وسيتم فحص نفس الميعاد قبل الحفظ.
+          </span>
         </label>
 
         {selected?.requires_laser_device ? (
@@ -118,8 +150,18 @@ export function AppointmentServiceEditor({
         <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
           سيُعاد فحص نفس التوقيت مع الدكتور والجهاز. المدفوعات المسجلة لن تُحذف؛ سيُعاد فقط حساب المتبقي على السعر الجديد.
         </div>
-        <Button type="submit" size="sm" disabled={!changed || !deviceReady}>
-          <Save size={14} /> حفظ تغيير الخدمة
+        {state.error && (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-800">
+            {state.error}
+          </div>
+        )}
+        {state.ok && !state.error && (
+          <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-xs font-bold text-teal-800">
+            تم حفظ تعديل الخدمة بنجاح.
+          </div>
+        )}
+        <Button type="submit" size="sm" disabled={!changed || !deviceReady || !doctorId || pending}>
+          <Save size={14} /> {pending ? "جاري الحفظ..." : "حفظ تغيير الخدمة"}
         </Button>
       </form>
     </details>
