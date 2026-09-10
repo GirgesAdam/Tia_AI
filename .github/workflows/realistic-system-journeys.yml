@@ -65,14 +65,18 @@ jobs:
           test -n "$DATABASE_URL"
       - name: Apply required staging migrations
         run: alembic upgrade head
-      - name: Run targeted realistic journeys
+      - name: Run high-probability realistic journeys
         run: |
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
             --report artifacts/realistic-system-journeys.json \
+            --scenario exact_time_then_verified_alternative \
+            --scenario existing_package_separate_session \
             --scenario package_holder_other_service \
             --scenario paid_reschedule_no_double_charge \
-            --scenario compound_two_services
+            --scenario ambiguous_cancel_two_appointments \
+            --scenario partial_payment_status \
+            --scenario human_takeover_and_return
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
