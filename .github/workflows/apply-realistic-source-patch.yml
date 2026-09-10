@@ -1,4 +1,4 @@
-name: Semantic Context Size Audit
+name: Semantic Catalog Field Audit
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_context_audit_unused
-  SUPABASE_SECRET_KEY: sb_secret_context_audit_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_catalog_audit_unused
+  SUPABASE_SECRET_KEY: sb_secret_catalog_audit_unused
   CORS_ORIGINS: ""
 
 jobs:
@@ -42,67 +42,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Audit semantic context without model calls
+      - name: Audit service and doctor field weight without model calls
         run: |
           python - <<'PY'
           import json
-          from datetime import UTC, datetime
+          from collections import defaultdict
           import tiktoken
           from sqlalchemy import create_engine, select
           from sqlalchemy.orm import Session
-
           from app.agents.clinic_grounding import build_clinic_catalog
-          from app.agents.turn_interpreter import _interpreter_system_prompt, _semantic_catalog_for_single_location
+          from app.agents.turn_interpreter import _semantic_catalog_for_single_location
           from app.core.config import settings
           from app.models.workspace import Workspace
-          from app.services.agent_chat import _with_current_patient_appointments
-          from scripts.run_realistic_system_journeys import HYDRA, UNDERARM, _find_slot, _new_patient, _seed_appointment
 
           enc = tiktoken.get_encoding('o200k_base')
-          def measure(value):
-              text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str, separators=(',', ':'))
-              return {'chars': len(text), 'estimated_tokens': len(enc.encode(text))}
+          def tokens(value):
+              return len(enc.encode(json.dumps(value, ensure_ascii=False, default=str, separators=(',', ':'))))
 
           engine = create_engine(settings.database_url, pool_pre_ping=True)
-          connection = engine.connect()
-          outer = connection.begin()
-          db = Session(bind=connection, join_transaction_mode='create_savepoint', expire_on_commit=False)
-          try:
+          with Session(engine) as db:
               workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
-              if workspace is None:
-                  raise RuntimeError('Workspace not found')
-              patient = _new_patient(db, workspace, 9920)
-              laser_slot = _find_slot(db, workspace, UNDERARM, laser_device_key='prime_lase')
-              laser = _seed_appointment(db, workspace, patient, laser_slot)
-              hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser.start_at, laser.end_at)])
-              _seed_appointment(db, workspace, patient, hydra_slot)
-
-              catalog = build_clinic_catalog(db, workspace)
-              catalog = _with_current_patient_appointments(
-                  db=db, workspace=workspace, patient=patient, clinic_catalog=catalog
-              )
-              semantic = _semantic_catalog_for_single_location(catalog)
-              system_prompt = _interpreter_system_prompt(
-                  timezone_name=workspace.timezone,
-                  local_now=datetime.now(UTC),
-                  active_flow=False,
-              )
-              per_key = {}
-              for key, value in semantic.items():
-                  item = measure(value)
-                  item['count'] = len(value) if isinstance(value, list) else None
-                  per_key[key] = item
-              print(json.dumps({
-                  'openai_calls': 0,
-                  'system_prompt': measure(system_prompt),
-                  'semantic_catalog_total': measure(semantic),
-                  'catalog_sections': per_key,
-                  'latest_customer_example': measure('قصدي معاد الهيدرافيشل، سيب معاد الليزر زي ما هو.'),
-              }, ensure_ascii=False, indent=2))
-          finally:
-              db.close()
-              if outer.is_active:
-                  outer.rollback()
-              connection.close()
-              engine.dispose()
+              catalog = _semantic_catalog_for_single_location(build_clinic_catalog(db, workspace))
+              output = {'openai_calls': 0}
+              for section in ('services', 'doctors'):
+                  rows = [r for r in (catalog.get(section) or []) if isinstance(r, dict)]
+                  keys = sorted({k for r in rows for k in r})
+                  field_weights = {}
+                  for key in keys:
+                      field_weights[key] = tokens([{key: r.get(key)} for r in rows if key in r])
+                  output[section] = {
+                      'count': len(rows),
+                      'row_keys': keys,
+                      'field_estimated_tokens': dict(sorted(field_weights.items(), key=lambda x: x[1], reverse=True)),
+                      'sample': rows[0] if rows else None,
+                      'total_estimated_tokens': tokens(rows),
+                  }
+              print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
+          engine.dispose()
           PY
