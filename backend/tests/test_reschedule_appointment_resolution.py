@@ -36,6 +36,8 @@ def test_active_reschedule_catalog_exposes_verified_upcoming_appointment(monkeyp
         timezone="Africa/Cairo",
         start_at=agent_chat.datetime.fromisoformat("2026-09-10T13:00:00+00:00"),
         end_at=agent_chat.datetime.fromisoformat("2026-09-10T13:15:00+00:00"),
+        laser_device_key=None,
+        laser_device_name=None,
     )
     adapter = SimpleNamespace(
         get_patient_appointments=lambda request: SimpleNamespace(appointments=(record,))
@@ -60,5 +62,7 @@ def test_active_reschedule_catalog_exposes_verified_upcoming_appointment(monkeyp
             "status": "confirmed",
             "start_local": "2026-09-10T16:00:00+03:00",
             "end_local": "2026-09-10T16:15:00+03:00",
+            "laser_device_key": None,
+            "laser_device_name": None,
         }
     ]
