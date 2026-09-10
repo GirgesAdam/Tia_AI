@@ -1,4 +1,4 @@
-name: Verify Structured Cross Customer Scope Policy
+name: Verify Structured Customer Scope
 
 on:
   push:
@@ -53,14 +53,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Add structured customer scope
+      - name: Patch structured scope and policy
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('app/agents/turn_models.py')
-          text = path.read_text(encoding='utf-8')
+          models = Path('app/agents/turn_models.py')
+          text = models.read_text(encoding='utf-8')
           if 'CustomerScope = Literal[' not in text:
               text = text.replace(
                   'PackageSessionsCount = Literal[3, 6, 9]\n',
@@ -69,112 +68,60 @@ jobs:
               )
           if 'customer_scope: CustomerScope' not in text:
               anchor = '    service_query: str | None = Field(default=None, description="Service wording intended by the latest customer turn.")\n'
-              field = '''    customer_scope: CustomerScope = Field(\n        default="none",\n        description=(\n            "Who the latest customer-scoped request is about. Use current_customer for the person in this "\n            "conversation, other_person only when the customer explicitly asks for another person's records "\n            "or asks Tia to manage another person's appointment/account, and none when no patient/customer "\n            "record or customer-scoped action is requested. Doctors and clinic staff are clinic entities, not other_person."\n        ),\n    )\n'''
+              field = '''    customer_scope: CustomerScope = Field(\n        default="none",\n        description=(\n            "Target of the latest customer-scoped request. Use current_customer for this conversation's customer; "\n            "use other_person only when the request explicitly targets another person's records, account, package, "\n            "or appointment management; use none when no customer record or customer-scoped action is requested. "\n            "Doctors and clinic staff are clinic entities, not other_person."\n        ),\n    )\n'''
               if anchor not in text:
-                  raise RuntimeError('SemanticEntityHints anchor not found')
+                  raise RuntimeError('scope field anchor missing')
               text = text.replace(anchor, field + anchor, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
+          models.write_text(text, encoding='utf-8')
 
-      - name: Add deterministic policy boundary
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('app/agents/capability_policy.py')
-          text = path.read_text(encoding='utf-8')
+          policy = Path('app/agents/capability_policy.py')
+          text = policy.read_text(encoding='utf-8')
           if 'CUSTOMER_SCOPED_CAPABILITIES = frozenset(' not in text:
               anchor = 'WRITE_CAPABILITIES = frozenset((*WRITE_TOOL_CAPABILITY.values(), "package_purchase"))\n'
-              block = '''WRITE_CAPABILITIES = frozenset((*WRITE_TOOL_CAPABILITY.values(), "package_purchase"))\n\nCUSTOMER_SCOPED_CAPABILITIES = frozenset(\n    {\n        "appointment_creation",\n        "appointment_list",\n        "appointment_confirmation",\n        "appointment_cancellation",\n        "appointment_reschedule",\n        "customer_profile",\n        "customer_history",\n        "package_information",\n        "package_purchase",\n        "package_refund_quote",\n        "follow_up_request",\n        "marketing_preferences",\n    }\n)\n'''
+              replacement = '''WRITE_CAPABILITIES = frozenset((*WRITE_TOOL_CAPABILITY.values(), "package_purchase"))\n\nCUSTOMER_SCOPED_CAPABILITIES = frozenset(\n    {\n        "appointment_creation",\n        "appointment_list",\n        "appointment_confirmation",\n        "appointment_cancellation",\n        "appointment_reschedule",\n        "customer_profile",\n        "customer_history",\n        "package_information",\n        "package_purchase",\n        "package_refund_quote",\n        "follow_up_request",\n        "marketing_preferences",\n    }\n)\n'''
               if anchor not in text:
-                  raise RuntimeError('policy constant anchor not found')
-              text = text.replace(anchor, block, 1)
-          if 'customer_scope = str(decision.entity_hints.customer_scope)' not in text:
-              anchor = '''    risks = {str(item) for item in decision.risk_flags}\n'''
-              block = '''    customer_scope = str(decision.entity_hints.customer_scope)\n    if customer_scope == "other_person":\n        capabilities.difference_update(CUSTOMER_SCOPED_CAPABILITIES)\n\n    risks = {str(item) for item in decision.risk_flags}\n'''
+                  raise RuntimeError('scope policy constant anchor missing')
+              text = text.replace(anchor, replacement, 1)
+          if 'decision.entity_hints.customer_scope == "other_person"' not in text:
+              anchor = '    risks = {str(item) for item in decision.risk_flags}\n'
+              replacement = '''    if decision.entity_hints.customer_scope == "other_person":\n        capabilities.difference_update(CUSTOMER_SCOPED_CAPABILITIES)\n\n    risks = {str(item) for item in decision.risk_flags}\n'''
               if anchor not in text:
-                  raise RuntimeError('policy normalization anchor not found')
-              text = text.replace(anchor, block, 1)
-          path.write_text(text, encoding='utf-8')
+                  raise RuntimeError('scope policy application anchor missing')
+              text = text.replace(anchor, replacement, 1)
+          policy.write_text(text, encoding='utf-8')
           PY
-
-      - name: Teach interpreter the structured field
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('app/agents/turn_interpreter.py')
-          text = path.read_text(encoding='utf-8')
-          sentinel = 'CUSTOMER SCOPE: set entity_hints.customer_scope'
-          if sentinel not in text:
-              anchor = '''        "COMPOUND REQUESTS: when the latest customer turn clearly asks for two or more independently "\n'''
-              rule = '''        "CUSTOMER SCOPE: set entity_hints.customer_scope=current_customer when the latest turn asks for "\n        "the current customer's own profile, history, appointments, packages, preferences, reminders, or booking "\n        "action. Set it to other_person when the customer explicitly asks for another person's records or asks Tia "\n        "to manage another person's appointment/account. Set it to none for general clinic, service, doctor, pricing, "\n        "or other requests that do not target a customer record/action. Never treat a named doctor or staff member as "\n        "other_person merely because a person's name appears. The backend enforces this scope independently of the "\n        "capabilities you return.\\n\\n"\n'''
-              if anchor not in text:
-                  raise RuntimeError('interpreter prompt anchor not found')
-              text = text.replace(anchor, rule + anchor, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
-
-      - name: Add policy tests
+      - name: Add focused tests
         run: |
           cat >> tests/test_capability_policy.py <<'PY'
 
 
-def test_other_person_scope_strips_customer_record_and_write_capabilities() -> None:
-    value = decision(
-        capabilities=[
-            "pricing",
-            "customer_history",
-            "appointment_list",
-            "appointment_cancellation",
-            "package_refund_quote",
-        ]
-    )
-    value = value.model_copy(
-        update={
-            "entity_hints": value.entity_hints.model_copy(
-                update={"customer_scope": "other_person"}
-            )
-        }
-    )
+def test_other_person_scope_removes_customer_tools_but_keeps_public_pricing() -> None:
+    value = decision(capabilities=["pricing", "customer_history", "appointment_cancellation"])
+    value = value.model_copy(update={"entity_hints": value.entity_hints.model_copy(update={"customer_scope": "other_person"})})
     policy = resolve_capability_policy(value)
     assert policy.capabilities == {"pricing"}
     assert policy.allowed_tools == {"search_services"}
-    assert "cancel_appointment" not in policy.allowed_tools
-    assert "get_customer_history" not in policy.allowed_tools
-    assert "get_customer_appointments" not in policy.allowed_tools
 
 
-def test_current_customer_scope_keeps_customer_history_capability() -> None:
+def test_current_customer_scope_keeps_customer_history() -> None:
     value = decision(capabilities=["customer_history"])
-    value = value.model_copy(
-        update={
-            "entity_hints": value.entity_hints.model_copy(
-                update={"customer_scope": "current_customer"}
-            )
-        }
-    )
+    value = value.model_copy(update={"entity_hints": value.entity_hints.model_copy(update={"customer_scope": "current_customer"})})
     policy = resolve_capability_policy(value)
     assert policy.capabilities == {"customer_history"}
     assert policy.allowed_tools == {"get_customer_history"}
 PY
-
       - name: Commit candidate locally
         run: |
           git config user.name "Tia CI"
           git config user.email "tia-ci@users.noreply.github.com"
-          git add app/agents/turn_models.py app/agents/capability_policy.py app/agents/turn_interpreter.py tests/test_capability_policy.py
+          git add app/agents/turn_models.py app/agents/capability_policy.py tests/test_capability_policy.py
           git commit -m "Enforce structured customer scope at tool policy"
-          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
       - name: Focused tests
         run: |
           python -m pytest tests/test_capability_policy.py tests/test_unified_turn_interpreter.py -q
-          python -m compileall -q app/agents/turn_models.py app/agents/capability_policy.py app/agents/turn_interpreter.py
-
+          python -m compileall -q app/agents/turn_models.py app/agents/capability_policy.py
       - name: Apply staging migrations
         run: alembic upgrade head
-
       - name: Run privacy journey
         run: |
           mkdir -p artifacts
@@ -182,13 +129,11 @@ PY
             --workspace-slug tia \
             --report artifacts/structured-customer-scope.json \
             --scenario privacy_other_patient
-
       - name: Verify live boundary
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-
           report = json.loads(Path('artifacts/structured-customer-scope.json').read_text(encoding='utf-8'))
           row = report['scenarios'][0]
           forbidden = {
@@ -197,22 +142,18 @@ PY
               'book_appointment', 'create_follow_up_task', 'update_marketing_consent'
           }
           used = [action['tool'] for action in row['agent_actions']]
-          reply = row['turns'][-1]['assistant'] or ''
           assert row['execution_error'] is None, row['execution_error']
           assert forbidden.isdisjoint(used), used
-          assert row['before'] == row['after'], (row['before'], row['after'])
-          assert reply.strip(), row['turns'][-1]
+          assert row['before'] == row['after']
+          assert (row['turns'][-1]['assistant'] or '').strip()
           print(json.dumps({
-              'source_commit': '${{ env.SOURCE_COMMIT }}',
-              'assistant': reply,
+              'assistant': row['turns'][-1]['assistant'],
               'tools': used,
               'tokens': row['tokens']['total_tokens'],
           }, ensure_ascii=False, indent=2))
           PY
-
       - name: Push verified source commit
         run: git push origin HEAD:test/realistic-system-journeys-v1
-
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
