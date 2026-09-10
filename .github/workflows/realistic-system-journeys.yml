@@ -2,19 +2,6 @@ name: Realistic System Journeys
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - test/realistic-system-journeys-v1
-    paths:
-      - .github/workflows/realistic-system-journeys.yml
-      - backend/scripts/run_realistic_system_journeys.py
-      - backend/alembic/versions/0067_flow_compound_item_completed.py
-      - backend/app/agents/turn_models.py
-      - backend/app/agents/turn_interpreter.py
-      - backend/app/agents/clinic_grounding.py
-      - backend/app/services/agent_chat.py
-      - backend/app/services/compound_customer_requests.py
-      - backend/tests/test_clinic_grounding_compatibility.py
 
 permissions:
   contents: read
