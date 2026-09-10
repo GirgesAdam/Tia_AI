@@ -8,6 +8,7 @@ Create Date: 2026-09-10
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0066_clinic_knowledge_entries"
