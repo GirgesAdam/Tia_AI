@@ -54,9 +54,13 @@ def upgrade() -> None:
     op.create_index("ix_clinic_knowledge_entries_scope_type", "clinic_knowledge_entries", ["scope_type"])
     op.create_index("ix_clinic_knowledge_entries_service_id", "clinic_knowledge_entries", ["service_id"])
     op.create_index("ix_clinic_knowledge_entries_device_key", "clinic_knowledge_entries", ["device_key"])
+    op.execute(sa.text("ALTER TABLE public.clinic_knowledge_entries ENABLE ROW LEVEL SECURITY"))
+    op.execute(sa.text("REVOKE ALL ON TABLE public.clinic_knowledge_entries FROM anon, authenticated"))
 
 
 def downgrade() -> None:
+    op.execute(sa.text("GRANT ALL ON TABLE public.clinic_knowledge_entries TO authenticated"))
+    op.execute(sa.text("ALTER TABLE public.clinic_knowledge_entries DISABLE ROW LEVEL SECURITY"))
     op.drop_index("ix_clinic_knowledge_entries_device_key", table_name="clinic_knowledge_entries")
     op.drop_index("ix_clinic_knowledge_entries_service_id", table_name="clinic_knowledge_entries")
     op.drop_index("ix_clinic_knowledge_entries_scope_type", table_name="clinic_knowledge_entries")
