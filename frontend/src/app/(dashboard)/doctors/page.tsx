@@ -5,9 +5,13 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import type { KnowledgeService } from "@/lib/agent-knowledge-types";
 import { appointmentLabels, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
+import { getAppContext } from "@/lib/tia/workspace";
 import { cn } from "@/lib/utils";
+
+import { DoctorManagementPanel, type DoctorAdminItem } from "./doctor-management";
 
 type DoctorCalendarDoctor = {
   id: string;
@@ -135,12 +139,19 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
   const selectedDateKey = parseDateKey(raw.date) ? raw.date! : cairoToday();
   const selectedDate = parseDateKey(selectedDateKey)!;
   const doctorId = raw.doctor_id || "";
+  const ctx = await getAppContext();
+  const isAdmin = ctx.workspace.role === "admin";
 
   const rangeStart = view === "month" ? startOfMonth(selectedDate) : selectedDate;
   const rangeEnd = view === "month" ? endOfMonth(selectedDate) : selectedDate;
   const query = new URLSearchParams({ start_date: dateKey(rangeStart), end_date: dateKey(rangeEnd) });
   if (doctorId) query.set("doctor_id", doctorId);
-  const calendar = await tiaRequest<DoctorCalendar>(`/booking/doctor-calendar?${query.toString()}`);
+
+  const [calendar, adminDoctors, services] = await Promise.all([
+    tiaRequest<DoctorCalendar>(`/booking/doctor-calendar?${query.toString()}`),
+    isAdmin ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin") : Promise.resolve([]),
+    isAdmin ? tiaRequest<KnowledgeService[]>("/clinic/services") : Promise.resolve([]),
+  ]);
 
   const selectedDoctor = calendar.doctors.find((doctor) => doctor.id === doctorId) || null;
   const currentParams: SearchParams = { view, date: selectedDateKey, doctor_id: doctorId || undefined };
@@ -170,29 +181,17 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
         description="تابع مواعيد كل دكتور يوميًا أو على مستوى الشهر، وافتح أي موعد مباشرة من الجدول."
       />
 
+      {isAdmin && <DoctorManagementPanel doctors={adminDoctors} services={services} />}
+
       <Card className="mb-5">
         <CardContent className="flex flex-col gap-4 p-4 sm:p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={hrefFor(currentParams, { view: "day" })}
-              className={buttonVariants({ variant: view === "day" ? "default" : "outline", size: "sm" })}
-            >
-              <Clock3 size={15} /> يومي
-            </Link>
-            <Link
-              href={hrefFor(currentParams, { view: "month" })}
-              className={buttonVariants({ variant: view === "month" ? "default" : "outline", size: "sm" })}
-            >
-              <CalendarDays size={15} /> شهري
-            </Link>
+            <Link href={hrefFor(currentParams, { view: "day" })} className={buttonVariants({ variant: view === "day" ? "default" : "outline", size: "sm" })}><Clock3 size={15} /> يومي</Link>
+            <Link href={hrefFor(currentParams, { view: "month" })} className={buttonVariants({ variant: view === "month" ? "default" : "outline", size: "sm" })}><CalendarDays size={15} /> شهري</Link>
             <span className="mx-1 hidden h-7 w-px bg-slate-200 sm:block" />
-            <Link href={hrefFor(currentParams, { date: dateKey(previousDate) })} className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="الفترة السابقة">
-              <ChevronRight size={16} />
-            </Link>
+            <Link href={hrefFor(currentParams, { date: dateKey(previousDate) })} className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="الفترة السابقة"><ChevronRight size={16} /></Link>
             <div className="min-w-[190px] text-center text-sm font-black text-slate-900">{title}</div>
-            <Link href={hrefFor(currentParams, { date: dateKey(nextDate) })} className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="الفترة التالية">
-              <ChevronLeft size={16} />
-            </Link>
+            <Link href={hrefFor(currentParams, { date: dateKey(nextDate) })} className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="الفترة التالية"><ChevronLeft size={16} /></Link>
             <Link href={hrefFor(currentParams, { date: cairoToday() })} className={buttonVariants({ variant: "ghost", size: "sm" })}>اليوم</Link>
           </div>
 
@@ -203,9 +202,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
               الدكتور
               <select name="doctor_id" defaultValue={doctorId} className="form-control mt-1.5 h-10 min-h-10">
                 <option value="">كل الدكاترة</option>
-                {calendar.doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.id}>{doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}</option>
-                ))}
+                {calendar.doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}</option>)}
               </select>
             </label>
             <Button type="submit" variant="outline">تطبيق</Button>
@@ -221,30 +218,15 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[760px] text-right text-sm">
                   <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3 font-bold">الوقت</th>
-                      <th className="px-4 py-3 font-bold">الدكتور</th>
-                      <th className="px-4 py-3 font-bold">العميل</th>
-                      <th className="px-4 py-3 font-bold">الخدمة</th>
-                      <th className="px-4 py-3 font-bold">الحالة</th>
-                    </tr>
+                    <tr><th className="px-4 py-3 font-bold">الوقت</th><th className="px-4 py-3 font-bold">الدكتور</th><th className="px-4 py-3 font-bold">العميل</th><th className="px-4 py-3 font-bold">الخدمة</th><th className="px-4 py-3 font-bold">الحالة</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {calendar.events.map((event) => (
                       <tr key={event.appointment_id} className="transition hover:bg-slate-50/80">
-                        <td className="whitespace-nowrap px-4 py-3 font-black text-teal-800">
-                          <Link href={`/appointments/${event.appointment_id}`} className="hover:underline">
-                            {eventTime(event.start_at, calendar.timezone)} – {eventTime(event.end_at, calendar.timezone)}
-                          </Link>
-                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-black text-teal-800"><Link href={`/appointments/${event.appointment_id}`} className="hover:underline">{eventTime(event.start_at, calendar.timezone)} – {eventTime(event.end_at, calendar.timezone)}</Link></td>
                         <td className="px-4 py-3"><div className="font-bold text-slate-900">{event.doctor_name}</div></td>
-                        <td className="px-4 py-3">
-                          <Link href={`/patients/${event.patient_id}`} className="font-bold text-slate-900 hover:text-teal-800 hover:underline">{event.patient_name}</Link>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-semibold text-slate-800">{event.service_name}</div>
-                          {event.laser_device_name && <div className="mt-1 text-[11px] font-bold text-teal-700">{event.laser_device_name}</div>}
-                        </td>
+                        <td className="px-4 py-3"><Link href={`/patients/${event.patient_id}`} className="font-bold text-slate-900 hover:text-teal-800 hover:underline">{event.patient_name}</Link></td>
+                        <td className="px-4 py-3"><div className="font-semibold text-slate-800">{event.service_name}</div>{event.laser_device_name && <div className="mt-1 text-[11px] font-bold text-teal-700">{event.laser_device_name}</div>}</td>
                         <td className="px-4 py-3"><Badge tone={toneForStatus(event.status)}>{appointmentLabels[event.status] || event.status}</Badge></td>
                       </tr>
                     ))}
@@ -252,11 +234,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
                 </table>
               </div>
             ) : (
-              <div className="p-10 text-center">
-                <Stethoscope className="mx-auto text-slate-300" size={32} />
-                <div className="mt-3 font-black text-slate-900">لا توجد مواعيد في اليوم ده</div>
-                <div className="mt-1 text-sm text-slate-500">غيّر اليوم أو اختار دكتور تاني.</div>
-              </div>
+              <div className="p-10 text-center"><Stethoscope className="mx-auto text-slate-300" size={32} /><div className="mt-3 font-black text-slate-900">لا توجد مواعيد في اليوم ده</div><div className="mt-1 text-sm text-slate-500">غيّر اليوم أو اختار دكتور تاني.</div></div>
             )}
           </CardContent>
         </Card>
@@ -275,25 +253,16 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
                 return (
                   <div key={key} className={cn("min-h-32 border-b border-l border-slate-100 p-2 last:border-l-0", !inMonth && "bg-slate-50/60 text-slate-400")}>
                     <div className="flex items-center justify-between gap-1">
-                      <Link href={hrefFor(currentParams, { view: "day", date: key })} className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-black", isToday && "bg-teal-700 text-white", !isToday && inMonth && "text-slate-800 hover:bg-teal-50 hover:text-teal-800")}>
-                        {day.getUTCDate().toLocaleString("ar-EG")}
-                      </Link>
+                      <Link href={hrefFor(currentParams, { view: "day", date: key })} className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-black", isToday && "bg-teal-700 text-white", !isToday && inMonth && "text-slate-800 hover:bg-teal-50 hover:text-teal-800")}>{day.getUTCDate().toLocaleString("ar-EG")}</Link>
                       {dayEvents.length > 0 && <span className="text-[10px] font-bold text-slate-400">{dayEvents.length.toLocaleString("ar-EG")}</span>}
                     </div>
                     <div className="mt-2 space-y-1">
                       {dayEvents.slice(0, 4).map((event) => (
                         <Link key={event.appointment_id} href={`/appointments/${event.appointment_id}`} className="block rounded-md border border-teal-100 bg-teal-50/70 px-1.5 py-1 text-[10px] leading-4 text-teal-950 transition hover:border-teal-300 hover:bg-teal-50">
-                          <span className="font-black">{eventTime(event.start_at, calendar.timezone)}</span>
-                          <span className="mx-1 text-teal-500">·</span>
-                          <span className="font-bold">{event.doctor_name}</span>
-                          <span className="block truncate text-slate-600">{event.service_name} · {event.patient_name}</span>
+                          <span className="font-black">{eventTime(event.start_at, calendar.timezone)}</span><span className="mx-1 text-teal-500">·</span><span className="font-bold">{event.doctor_name}</span><span className="block truncate text-slate-600">{event.service_name} · {event.patient_name}</span>
                         </Link>
                       ))}
-                      {dayEvents.length > 4 && (
-                        <Link href={hrefFor(currentParams, { view: "day", date: key })} className="block text-center text-[10px] font-black text-teal-700 hover:underline">
-                          +{(dayEvents.length - 4).toLocaleString("ar-EG")} مواعيد
-                        </Link>
-                      )}
+                      {dayEvents.length > 4 && <Link href={hrefFor(currentParams, { view: "day", date: key })} className="block text-center text-[10px] font-black text-teal-700 hover:underline">+{(dayEvents.length - 4).toLocaleString("ar-EG")} مواعيد</Link>}
                     </div>
                   </div>
                 );
@@ -303,9 +272,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
         </Card>
       )}
 
-      <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-        <UserRound size={14} /> اضغط على أي موعد لفتح تفاصيله، أو على اسم العميل لفتح ملفه.
-      </div>
+      <div className="mt-4 flex items-center gap-2 text-xs text-slate-500"><UserRound size={14} /> اضغط على أي موعد لفتح تفاصيله، أو على اسم العميل لفتح ملفه.</div>
     </>
   );
 }
