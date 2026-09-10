@@ -1,4 +1,4 @@
-name: Cancellation Deterministic Execution Trace
+name: Cancellation Journey Verification
 
 on:
   push:
@@ -19,10 +19,20 @@ env:
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
   SUPABASE_PUBLISHABLE_KEY: sb_publishable_realistic_journey_unused
   SUPABASE_SECRET_KEY: sb_secret_realistic_journey_unused
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  LLM_PROVIDER: openai
+  OPENAI_MODEL: gpt-5.6-luna
+  OPENAI_FALLBACK_MODEL: gpt-5-mini
+  OPENAI_REASONING_EFFORT: low
+  OPENAI_FALLBACK_REASONING_EFFORT: low
+  LLM_TIMEOUT_SECONDS: "60"
+  LLM_MAX_RETRIES: "2"
+  LLM_REALTIME_MAX_RETRIES: "0"
+  AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
   CORS_ORIGINS: ""
 
 jobs:
-  trace:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -42,7 +52,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify database secret
-        run: test -n "$DATABASE_URL"
-      - name: Trace deterministic cancellation execution
-        run: python -m scripts.trace_cancellation_semantics
+      - name: Verify staging secrets
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$DATABASE_URL"
+      - name: Focused cancellation unit tests
+        run: |
+          python -m pytest \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_clinic_grounding_compatibility.py \
+            tests/test_unified_turn_interpreter.py -q
+      - name: Verify cancellation journey only
+        run: |
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/cancellation-current.json \
+            --scenario ambiguous_cancel_two_appointments
