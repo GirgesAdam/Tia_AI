@@ -26,3 +26,25 @@ def test_service_editor_handles_conflicts_inline() -> None:
     assert "catch (error)" in actions
     assert "useActionState" in editor
     assert "state.error" in editor
+
+
+def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
+    route = (ROOT / "backend/app/api/routes/doctor_admin.py").read_text(encoding="utf-8")
+    actions = (ROOT / "frontend/src/app/(dashboard)/doctors/actions.ts").read_text(encoding="utf-8")
+    panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-management.tsx").read_text(encoding="utf-8")
+    page = (ROOT / "frontend/src/app/(dashboard)/doctors/page.tsx").read_text(encoding="utf-8")
+
+    assert "get_workspace_admin" in route
+    assert '"/doctor-admin/{doctor_id}/working-hours"' in route
+    assert "branch_id" not in actions
+    assert "الفرع" not in panel
+    assert 'ctx.workspace.role === "admin"' in page
+    assert "DoctorManagementPanel" in page
+
+
+def test_doctor_delete_is_soft_and_preserves_history() -> None:
+    route = (ROOT / "backend/app/api/routes/doctor_admin.py").read_text(encoding="utf-8")
+    assert "doctor.is_active = False" in route
+    assert "doctor.booking_enabled = False" in route
+    assert 'action="clinic.doctor_archived"' in route
+    assert '"soft_delete": True' in route
