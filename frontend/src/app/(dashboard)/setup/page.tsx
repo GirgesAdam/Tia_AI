@@ -25,7 +25,7 @@ export default async function SetupPage() {
       <PageHeader
         title="إعدادات العيادة"
         description="مصدر بيانات العيادة ومعرفة Tia: معلومات العيادة، مواعيد وسياسة الحجز، الشرح الذي تستخدمه Tia، وربط البيانات القديمة."
-        action={<Link href="/knowledge" className={buttonVariants({ variant: "outline" })}><Database size={16} /> عرض البيانات التشغيلية</Link>}
+        action={<Link href="/knowledge" className={buttonVariants({ variant: "outline" })}><Database size={16} /> معلومات Tia التشغيلية</Link>}
       />
 
       <Card className="mb-5 border-teal-200 bg-teal-50/50">
