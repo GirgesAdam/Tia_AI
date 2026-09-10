@@ -1962,6 +1962,66 @@ def _flow_turn_as_capability_decision(
         reason=turn.reason,
     )
 
+def _verified_cancellation_action(
+    *,
+    tool_context: AgentToolContext,
+    policy: CapabilityPolicyDecision,
+    decision: SemanticCapabilityDecision,
+    clinic_catalog: dict[str, object],
+) -> tuple[str, str] | None:
+    """Execute only a semantically selected, current-patient appointment cancellation.
+
+    The interpreter selects a canonical appointment ID from the verified current-patient
+    catalog. Python never matches customer wording here: it only rechecks that exact ID
+    against the same verified appointment set before authorizing the write.
+    """
+    if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:
+        return None
+    appointment_id = str(decision.entity_hints.appointment_id or "").strip()
+    if not appointment_id:
+        return None
+    rows = clinic_catalog.get("appointments")
+    if not isinstance(rows, list):
+        return None
+    selected = next(
+        (
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("appointment_id") or row.get("id") or "") == appointment_id
+        ),
+        None,
+    )
+    if selected is None:
+        return None
+
+    result = _invoke_authorized_tool(
+        tool_context=tool_context,
+        policy=policy,
+        tool_name="cancel_appointment",
+        arguments={
+            "appointment_id": appointment_id,
+            "reason": "Customer explicitly requested cancellation.",
+        },
+    )
+    if not result or result.get("ok") is not True:
+        return None
+
+    service_name = str(selected.get("service_name") or "الموعد").strip()
+    start_label = ""
+    raw_start = selected.get("start_local")
+    if raw_start:
+        try:
+            start = datetime.fromisoformat(str(raw_start))
+            start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"
+        except ValueError:
+            start_label = ""
+    return (
+        f"تمام، ألغيت موعد {service_name}{start_label}.",
+        "deterministic:verified-appointment-cancellation",
+    )
+
+
 def _flow_type_from_capabilities(capabilities: set[str]) -> str | None:
     if "appointment_reschedule" in capabilities:
         return "appointment_reschedule"
@@ -3129,6 +3189,18 @@ def _run_after_inbound(
 
         if (
             prefetch_direct is None
+            and grounded_mode
+            and "appointment_cancellation" in set(policy.capabilities)
+        ):
+            prefetch_direct = _verified_cancellation_action(
+                tool_context=tool_context,
+                policy=policy,
+                decision=semantic_decision,
+                clinic_catalog=clinic_catalog,
+            )
+
+        if (
+            prefetch_direct is None
             and str(semantic_decision.package_intent) in {"purchase", "inquire"}
         ):
             offer_payload = prefetched_results.get("package_offers")
@@ -3269,6 +3341,10 @@ def _run_after_inbound(
                     : settings.agent_operational_context_max_chars
                 ]
             agent_allowed_tools = set(policy.allowed_tools) - prefetched_tool_names
+            if grounded_mode and "appointment_cancellation" in set(policy.capabilities):
+                # Grounded cancellation writes are owned by the deterministic path above.
+                # The conversational fallback may explain or clarify, but cannot guess a target.
+                agent_allowed_tools.discard("cancel_appointment")
             if grounded_mode:
                 # In the grounded runtime, customer language has already been mapped
                 # to canonical PostgreSQL IDs by the unified interpreter. Do not let
