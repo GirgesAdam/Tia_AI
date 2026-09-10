@@ -131,6 +131,14 @@ def test_oracle_setup_can_only_import_and_wire_scheduler() -> None:
     assert "TIA_CHANNEL_TOKEN" not in token_generator
     assert "tia_ch_" not in token_generator
 
+    for retired in (
+        "configure-meta-whatsapp.sh",
+        "publish-whatsapp-inbound.sh",
+        "publish-whatsapp-outbox.sh",
+        "repair-whatsapp-outbox-results.sh",
+    ):
+        assert not (root / retired).exists()
+
 
 def test_oracle_publish_guardrail_unpublishes_any_legacy_adapter_workflow() -> None:
     script = (_root() / "deploy/oracle-n8n/publish-scheduler.sh").read_text(encoding="utf-8")
@@ -142,3 +150,23 @@ def test_oracle_publish_guardrail_unpublishes_any_legacy_adapter_workflow() -> N
     assert "CAST(nodes AS text) LIKE '%/adapter/outbox/provider-status%'" in script
     assert "CAST(nodes AS text) LIKE '%/channels/adapter/inbound%'" in script
     assert 'n8n unpublish:workflow --id="$workflow_id"' in script
+
+
+def test_oracle_healthcheck_enforces_and_repairs_scheduler_only_state() -> None:
+    script = (_root() / "deploy/oracle-n8n/healthcheck-production.sh").read_text(encoding="utf-8")
+
+    assert "id = 'tiaAutoSched0001' AND active IS TRUE" in script
+    assert "LEGACY_ACTIVE_COUNT" in script
+    assert "bash ./publish-scheduler.sh" in script
+    assert "id IN ('tiaWAInbound0001','tiaWAOutbox00001')" in script
+    assert "Expected 3 active Tia production workflows" not in script
+
+
+def test_oracle_backup_verifier_requires_scheduler_and_no_active_legacy_transport() -> None:
+    script = (_root() / "deploy/oracle-n8n/verify-production-backup.sh").read_text(encoding="utf-8")
+
+    assert "^TIA_AUTOMATION_TOKEN=.+" in script
+    assert "SCHEDULER_ACTIVE_COUNT" in script
+    assert "LEGACY_ACTIVE_COUNT" in script
+    assert "id = 'tiaAutoSched0001' AND active IS TRUE" in script
+    assert "Expected 3 active Tia production workflows" not in script
