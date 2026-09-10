@@ -107,7 +107,7 @@ using the platform transport token. Clinic Meta credentials stay encrypted in Ti
 
 Any previously imported Oracle workflow that does one of the following must remain disabled:
 
-- receives WhatsApp through an n8n WhatsApp Trigger;
+- receives patient WhatsApp webhooks inside n8n;
 - posts inbound messages to the generic Tia channel adapter;
 - claims the generic Tia channel outbox;
 - sends through n8n WhatsApp provider nodes;
