@@ -1,4 +1,4 @@
-name: Cancellation First-Turn State Trace
+name: Cancellation Two-Turn Semantic Trace
 
 on:
   push:
@@ -52,5 +52,5 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Trace first cancellation turn state only
+      - name: Trace both cancellation semantic decisions
         run: python -m scripts.trace_cancellation_semantics
