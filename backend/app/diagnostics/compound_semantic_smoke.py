@@ -32,16 +32,9 @@ class ConversationCase:
 def _catalog_row(catalog: dict, collection: str, name: str) -> dict:
     rows = [row for row in catalog.get(collection, []) if isinstance(row, dict)]
     exact = [row for row in rows if str(row.get("name") or "").strip() == name]
-    if len(exact) == 1:
-        return exact[0]
-    suffix = [
-        row
-        for row in rows
-        if str(row.get("name") or "").strip().endswith(" " + name)
-    ]
-    if len(suffix) == 1:
-        return suffix[0]
-    raise RuntimeError(f"Required catalog row not found or ambiguous: {collection}/{name}")
+    if len(exact) != 1:
+        raise RuntimeError(f"Required exact catalog row not found or ambiguous: {collection}/{name}")
+    return exact[0]
 
 
 def _items(decision: UnifiedTurnDecision) -> list:
@@ -56,9 +49,10 @@ def _compound_two_appointments(
         len(items) == 2
         and [item.kind for item in items] == ["appointment", "appointment"]
         and str(items[0].service_id or "") == expected["underarm"]
-        and str(items[1].service_id or "") == expected["full_body"]
+        and str(items[1].service_id or "") == expected["full_body_women"]
         and bool(items[0].requested_date)
         and bool(items[1].requested_date)
+        and items[0].requested_date != items[1].requested_date
         and "appointment_creation" in set(decision.capabilities or [])
     )
     return ok, (
@@ -75,10 +69,9 @@ def _compound_two_packages(
     ok = (
         len(items) == 2
         and [item.kind for item in items] == ["package_purchase", "package_purchase"]
-        and str(items[0].service_id or "") == expected["full_body"]
+        and all(str(item.service_id or "") == expected["package_full_body"] for item in items)
         and items[0].package_sessions_count == 6
         and items[0].laser_device_key == "candela_gentle"
-        and str(items[1].service_id or "") == expected["underarm"]
         and items[1].package_sessions_count == 3
         and items[1].laser_device_key == "prime_lase"
         and "package_purchase" in set(decision.capabilities or [])
@@ -95,10 +88,10 @@ def _package_then_first_session(
     ok = (
         len(items) == 2
         and [item.kind for item in items] == ["package_purchase", "appointment"]
-        and str(items[0].service_id or "") == expected["full_body"]
+        and str(items[0].service_id or "") == expected["package_full_body"]
         and items[0].package_sessions_count == 6
         and items[0].laser_device_key == "candela_gentle"
-        and str(items[1].service_id or "") == expected["full_body"]
+        and str(items[1].service_id or "") == expected["package_full_body"]
         and items[1].laser_device_key == "candela_gentle"
         and items[1].package_intent == "use_existing"
         and bool(items[1].requested_date)
@@ -139,32 +132,62 @@ def _single_booking_stays_single(
 def _cases() -> list[ConversationCase]:
     return [
         ConversationCase(
-            name="two_services_two_days",
-            history=[HumanMessage(content="عايز احجز ليزر ابط السبت الجاي وكمان فول بادي يوم الأحد اللي بعده")],
+            name="two_exact_services_two_days",
+            history=[
+                HumanMessage(
+                    content=(
+                        "عايز احجز خدمة ليزر إزالة الشعر - إبط السبت الجاي، "
+                        "وكمان خدمة ليزر إزالة الشعر - جسم كامل سيدات يوم الأحد اللي بعده"
+                    )
+                )
+            ],
             check=_compound_two_appointments,
         ),
         ConversationCase(
-            name="two_packages_two_devices",
-            history=[HumanMessage(content="عايز أشتري باكدج فول بادي 6 جلسات كانديلا وباكدج إبط 3 جلسات برايم ليز")],
+            name="two_exact_package_purchases",
+            history=[
+                HumanMessage(
+                    content=(
+                        "عايز أشتري باكدج Full Body Laser 6 جلسات كانديلا، "
+                        "وكمان باكدج Full Body Laser 3 جلسات برايم ليز"
+                    )
+                )
+            ],
             check=_compound_two_packages,
         ),
         ConversationCase(
-            name="package_then_first_session",
-            history=[HumanMessage(content="عايز باكدج فول بادي 6 جلسات كانديلا واحجزلي أول جلسة منه السبت الجاي")],
+            name="exact_package_then_first_session",
+            history=[
+                HumanMessage(
+                    content=(
+                        "عايز باكدج Full Body Laser 6 جلسات كانديلا "
+                        "واحجزلي أول جلسة منه السبت الجاي"
+                    )
+                )
+            ],
             check=_package_then_first_session,
         ),
         ConversationCase(
-            name="compound_followup_clarification",
+            name="compound_followup_keeps_exact_packages",
             history=[
-                HumanMessage(content="عايز أشتري باكدج فول بادي 6 جلسات وكمان باكدج إبط 3 جلسات برايم ليز"),
-                AIMessage(content="تمام، باكدج الفول بادي تحبه على كانديلا ولا برايم ليز؟"),
+                HumanMessage(
+                    content=(
+                        "عايز باكدج Full Body Laser 6 جلسات، "
+                        "وكمان باكدج Full Body Laser 3 جلسات برايم ليز"
+                    )
+                ),
+                AIMessage(content="تمام، الباكيدج الأولى تحبها على كانديلا ولا برايم ليز؟"),
                 HumanMessage(content="كانديلا"),
             ],
             check=_clarification_keeps_both_packages,
         ),
         ConversationCase(
             name="single_booking_regression",
-            history=[HumanMessage(content="عايز احجز ليزر ابط السبت الجاي الساعة 6 بالليل")],
+            history=[
+                HumanMessage(
+                    content="عايز احجز خدمة ليزر إزالة الشعر - إبط السبت الجاي الساعة 6 بالليل"
+                )
+            ],
             check=_single_booking_stays_single,
         ),
     ]
@@ -178,10 +201,14 @@ def main() -> int:
             raise RuntimeError("Workspace 'tia' not found.")
         catalog = build_clinic_catalog(db, workspace)
         underarm = _catalog_row(catalog, "services", "ليزر إزالة الشعر - إبط")
-        full_body = _catalog_row(catalog, "services", "ليزر إزالة الشعر - جسم كامل سيدات")
+        full_body_women = _catalog_row(
+            catalog, "services", "ليزر إزالة الشعر - جسم كامل سيدات"
+        )
+        package_full_body = _catalog_row(catalog, "services", "Full Body Laser")
         expected = {
             "underarm": str(underarm["id"]),
-            "full_body": str(full_body["id"]),
+            "full_body_women": str(full_body_women["id"]),
+            "package_full_body": str(package_full_body["id"]),
         }
         timezone_name = (workspace.timezone or "Africa/Cairo").strip()
         local_now = datetime.now(ZoneInfo(timezone_name))
