@@ -1,4 +1,4 @@
-name: Cancellation Turn Runtime Trace
+name: Apply Cancellation Selection Fix
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
       - .github/workflows/apply-realistic-source-patch.yml
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ENVIRONMENT: staging
@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  trace:
+  apply-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -52,15 +52,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify staging secrets
-        run: |
-          test -n "$OPENAI_API_KEY"
-          test -n "$DATABASE_URL"
-      - name: Focused cancellation unit tests
+      - name: Apply minimal selection-index fix
+        run: python -m scripts.apply_cancellation_selection_index_fix
+      - name: Focused cancellation tests
         run: |
           python -m pytest \
             tests/test_verified_cancellation_execution.py \
             tests/test_clinic_grounding_compatibility.py \
             tests/test_unified_turn_interpreter.py -q
-      - name: Trace full cancellation follow-up turn
-        run: python -m scripts.trace_cancellation_semantics
+      - name: Verify real two-turn cancellation journey
+        run: |
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/cancellation-selection-fixed.json \
+            --scenario ambiguous_cancel_two_appointments
+      - name: Verify deterministic DB effect
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path('artifacts/cancellation-selection-fixed.json').read_text(encoding='utf-8'))
+          scenario = report['scenarios'][0]
+          after = {row['service']: row['status'] for row in scenario['after']['appointments']}
+          cancel_actions = [row for row in scenario['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
+          assert after['هيدرافيشل'] == 'cancelled', after
+          assert after['ليزر إزالة الشعر - إبط'] == 'confirmed', after
+          assert len(cancel_actions) == 1, cancel_actions
+          print(json.dumps({'after': after, 'cancel_actions': len(cancel_actions), 'tokens': scenario['tokens']}, ensure_ascii=False, indent=2))
+          PY
+      - name: Commit verified source fix
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py backend/tests/test_verified_cancellation_execution.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Preserve structured cancellation option selection"
+          git push origin HEAD:test/realistic-system-journeys-v1
