@@ -10,7 +10,9 @@ on:
       - backend/scripts/run_realistic_system_journeys.py
       - backend/alembic/versions/0067_flow_compound_item_completed.py
       - backend/app/agents/turn_models.py
+      - backend/app/agents/turn_interpreter.py
       - backend/app/agents/clinic_grounding.py
+      - backend/app/services/agent_chat.py
       - backend/app/services/compound_customer_requests.py
       - backend/tests/test_clinic_grounding_compatibility.py
 
@@ -69,12 +71,12 @@ jobs:
         run: alembic upgrade head
       - name: Focused grounding regression tests
         run: python -m pytest tests/test_clinic_grounding_compatibility.py -q
-      - name: Run paid reschedule journey
+      - name: Run package-holder other-service journey
         run: |
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
             --report artifacts/realistic-system-journeys.json \
-            --scenario paid_reschedule_no_double_charge
+            --scenario package_holder_other_service
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
