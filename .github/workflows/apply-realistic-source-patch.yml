@@ -57,7 +57,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           models = Path('app/agents/turn_models.py')
           text = models.read_text(encoding='utf-8')
           if 'CustomerScope = Literal[' not in text:
@@ -73,7 +72,6 @@ jobs:
                   raise RuntimeError('scope field anchor missing')
               text = text.replace(anchor, field + anchor, 1)
           models.write_text(text, encoding='utf-8')
-
           policy = Path('app/agents/capability_policy.py')
           text = policy.read_text(encoding='utf-8')
           if 'CUSTOMER_SCOPED_CAPABILITIES = frozenset(' not in text:
@@ -90,36 +88,41 @@ jobs:
               text = text.replace(anchor, replacement, 1)
           policy.write_text(text, encoding='utf-8')
           PY
-      - name: Add focused tests
-        run: |
-          cat >> tests/test_capability_policy.py <<'PY'
-
-
-def test_other_person_scope_removes_customer_tools_but_keeps_public_pricing() -> None:
-    value = decision(capabilities=["pricing", "customer_history", "appointment_cancellation"])
-    value = value.model_copy(update={"entity_hints": value.entity_hints.model_copy(update={"customer_scope": "other_person"})})
-    policy = resolve_capability_policy(value)
-    assert policy.capabilities == {"pricing"}
-    assert policy.allowed_tools == {"search_services"}
-
-
-def test_current_customer_scope_keeps_customer_history() -> None:
-    value = decision(capabilities=["customer_history"])
-    value = value.model_copy(update={"entity_hints": value.entity_hints.model_copy(update={"customer_scope": "current_customer"})})
-    policy = resolve_capability_policy(value)
-    assert policy.capabilities == {"customer_history"}
-    assert policy.allowed_tools == {"get_customer_history"}
-PY
       - name: Commit candidate locally
         run: |
           git config user.name "Tia CI"
           git config user.email "tia-ci@users.noreply.github.com"
-          git add app/agents/turn_models.py app/agents/capability_policy.py tests/test_capability_policy.py
+          git add app/agents/turn_models.py app/agents/capability_policy.py
           git commit -m "Enforce structured customer scope at tool policy"
-      - name: Focused tests
+      - name: Focused deterministic checks
         run: |
           python -m pytest tests/test_capability_policy.py tests/test_unified_turn_interpreter.py -q
           python -m compileall -q app/agents/turn_models.py app/agents/capability_policy.py
+          python - <<'PY'
+          from app.agents.capability_policy import resolve_capability_policy
+          from app.agents.turn_models import SemanticCapabilityDecision, empty_entity_hints
+          def make(scope):
+              hints = empty_entity_hints().model_copy(update={"customer_scope": scope})
+              return SemanticCapabilityDecision(
+                  domains=["patient"],
+                  capabilities=["pricing", "customer_history", "appointment_cancellation"],
+                  risk_flags=[],
+                  flow_signal="none",
+                  entity_hints=hints,
+                  missing_information=[],
+                  recommended_handoff_category="other",
+                  recommended_handoff_priority="normal",
+                  confidence=1.0,
+                  reason="scope check",
+              )
+          other = resolve_capability_policy(make("other_person"))
+          current = resolve_capability_policy(make("current_customer"))
+          assert other.capabilities == {"pricing"}, other
+          assert other.allowed_tools == {"search_services"}, other
+          assert "get_customer_history" in current.allowed_tools, current
+          assert "cancel_appointment" in current.allowed_tools, current
+          print("structured scope deterministic policy: ok")
+          PY
       - name: Apply staging migrations
         run: alembic upgrade head
       - name: Run privacy journey
@@ -146,11 +149,7 @@ PY
           assert forbidden.isdisjoint(used), used
           assert row['before'] == row['after']
           assert (row['turns'][-1]['assistant'] or '').strip()
-          print(json.dumps({
-              'assistant': row['turns'][-1]['assistant'],
-              'tools': used,
-              'tokens': row['tokens']['total_tokens'],
-          }, ensure_ascii=False, indent=2))
+          print(json.dumps({"assistant": row['turns'][-1]['assistant'], "tools": used, "tokens": row['tokens']['total_tokens']}, ensure_ascii=False, indent=2))
           PY
       - name: Push verified source commit
         run: git push origin HEAD:test/realistic-system-journeys-v1
