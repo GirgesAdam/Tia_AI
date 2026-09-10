@@ -1,0 +1,52 @@
+name: Compound request lint polish
+
+on:
+  push:
+    branches:
+      - feat/compound-customer-requests
+    paths:
+      - .github/workflows/compound-polish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compound-customer-requests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Keep verified compound writes deterministic
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/services/agent_chat.py')
+          source = path.read_text(encoding='utf-8')
+          replacements = {
+              '"deterministic:compound-package-validation"': '"flow-interpreter:deterministic-compound-package-validation"',
+              '"deterministic:compound-package-purchase"': '"flow-interpreter:deterministic-compound-package-purchase"',
+              '"flow-interpreter:verified-compound-booking"': '"flow-interpreter:deterministic-compound-booking"',
+          }
+          for old, new in replacements.items():
+              if old not in source:
+                  raise SystemExit(f'missing expected marker: {old}')
+              source = source.replace(old, new)
+          path.write_text(source, encoding='utf-8')
+          PY
+      - name: Apply Ruff fixes
+        run: |
+          cd backend
+          python -m pip install 'ruff>=0.12,<1.0'
+          ruff check --fix app/services/agent_chat.py app/services/compound_customer_requests.py tests/test_compound_customer_requests.py
+          ruff check app/services/agent_chat.py app/services/compound_customer_requests.py tests/test_compound_customer_requests.py
+      - name: Commit product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_chat.py backend/app/services/compound_customer_requests.py backend/tests/test_compound_customer_requests.py
+          git commit -m "style(agent): polish compound request flow"
+          git push origin HEAD:feat/compound-customer-requests
