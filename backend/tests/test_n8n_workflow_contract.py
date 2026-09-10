@@ -95,3 +95,50 @@ def test_provider_send_retries_remain_in_tia_state_machine_not_n8n() -> None:
     assert "WhatsApp Send Text" not in worker
     assert "retry_after_seconds=30" in transport
     assert "record_dispatch_result(" in transport
+
+
+def test_real_runtime_docs_match_native_whatsapp_architecture() -> None:
+    root = _root()
+    for relative in (
+        "n8n/REAL_RUNTIME_SETUP.md",
+        "n8n/WHATSAPP_SETUP.md",
+        "deploy/oracle-n8n/README.md",
+    ):
+        docs = (root / relative).read_text(encoding="utf-8")
+        assert "tia_automation_scheduler.json" in docs
+        assert "tia-whatsapp-transport-waker" in docs
+        assert "/api/v1/channels/whatsapp/transport/tick" in docs
+        assert "tia_whatsapp_inbound_status.json" not in docs
+        assert "/adapter/outbox/claim" not in docs
+        assert "n8n WhatsApp Trigger" not in docs
+        assert "n8n WhatsApp Business Cloud API credential" not in docs
+
+
+def test_oracle_setup_can_only_import_and_wire_scheduler() -> None:
+    root = _root() / "deploy" / "oracle-n8n"
+    importer = (root / "import-production-workflows.sh").read_text(encoding="utf-8")
+    wiring = (root / "wire-tia-runtime.sh").read_text(encoding="utf-8")
+    token_generator = (root / "generate-runtime-tokens.sh").read_text(encoding="utf-8")
+
+    for raw in (importer, wiring):
+        assert "tia_automation_scheduler.json" in raw
+        assert "tia_whatsapp_inbound_status.json" not in raw
+        assert "tia_whatsapp_outbox_worker.json" not in raw
+        assert "TIA_CHANNEL_TOKEN" not in raw
+        assert "X-Channel-Token" not in raw
+
+    assert "TIA_AUTOMATION_TOKEN" in token_generator
+    assert "TIA_CHANNEL_TOKEN" not in token_generator
+    assert "tia_ch_" not in token_generator
+
+
+def test_oracle_publish_guardrail_unpublishes_any_legacy_adapter_workflow() -> None:
+    script = (_root() / "deploy/oracle-n8n/publish-scheduler.sh").read_text(encoding="utf-8")
+
+    assert "publish:workflow --id=tiaAutoSched0001" in script
+    assert "unpublish:workflow --id=tiaWAInbound0001" in script
+    assert "unpublish:workflow --id=tiaWAOutbox00001" in script
+    assert "CAST(nodes AS text) LIKE '%/adapter/outbox/claim%'" in script
+    assert "CAST(nodes AS text) LIKE '%/adapter/outbox/provider-status%'" in script
+    assert "CAST(nodes AS text) LIKE '%/channels/adapter/inbound%'" in script
+    assert 'n8n unpublish:workflow --id="$workflow_id"' in script

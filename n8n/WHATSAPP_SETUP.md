@@ -1,27 +1,23 @@
-# Tia AI — WhatsApp Business Cloud + n8n Bridge
+# Tia AI — WhatsApp Business Cloud
 
-This bridge connects real WhatsApp conversations to Tia AI without making n8n the system of record.
-PostgreSQL/Tia AI remains authoritative for patients, conversations, messages, bookings, handoffs, and delivery state.
+Tia owns the WhatsApp runtime directly. n8n is not the WhatsApp transport and is not the source of truth for conversations, delivery state, retries, booking state, or clinic credentials.
 
-## Architecture
+## Current architecture
 
 ```text
 WhatsApp Business Cloud
         |
         v
-n8n WhatsApp Trigger
-        |
-        v
-Tia /channels/adapter/inbound
+Tia /api/v1/channels/whatsapp/webhook/{connection_id}
         |
         v
 Tia AI + CRM + Booking + Handoff
         |
         v
-Tia message_dispatches outbox
+Tia message_dispatches
         |
         v
-n8n Outbox Worker
+Tia native Meta transport
         |
         v
 WhatsApp Business Cloud
@@ -33,135 +29,81 @@ sent / delivered / read / failed callbacks
 Tia channel_delivery_events
 ```
 
-n8n holds the Meta credentials. Tia stores only non-secret account metadata plus a SHA-256 hash of the Tia adapter token.
+Meta calls Tia's webhook directly. Tia validates the webhook signature with the encrypted App Secret for that clinic connection. Outbound messages are sent from Tia to Meta Graph API using the encrypted provider credential for that connection.
 
-## What you need from Meta/n8n
-
-Create/configure a Meta Business app with the WhatsApp product. In n8n you will use two credential types:
-
-1. **WhatsApp OAuth credential** for the **WhatsApp Trigger** node.
-2. **WhatsApp Business Cloud API credential** for the **WhatsApp Business Cloud** send node. It uses the Meta API access token and WhatsApp Business Account ID.
-
-Do not put Meta access tokens, app secrets, passwords, or Tia adapter tokens inside `channel_connections.config`.
-
-## 1. Apply the database migration
-
-From `backend/`:
-
-```powershell
-alembic upgrade head
-```
-
-Expected head:
+The shared Railway service `tia-whatsapp-transport-waker` wakes the transport through:
 
 ```text
-0010_whatsapp_n8n_bridge (head)
+POST /api/v1/channels/whatsapp/transport/tick
+Header: X-Tia-Transport-Token: <CHANNEL_TRANSPORT_WORKER_TOKEN>
 ```
 
-## 2. Provision the WhatsApp connection in Tia
+The waker does not contain clinic Meta credentials. It only wakes Tia's native state machine.
 
-Get the **Phone Number ID** from Meta WhatsApp API Setup. This is an internal numeric Meta ID, not the visible `+20...` phone number.
+## Clinic setup
 
-Run from `backend/`:
+Each clinic supplies its own Meta App / WhatsApp configuration through Tia's guided setup. Tia stores provider secrets encrypted and never returns the raw App Secret or System User Access Token after save.
 
-```powershell
-python scripts/provision_whatsapp_channel.py --workspace-id YOUR_WORKSPACE_ID --phone-number-id YOUR_META_PHONE_NUMBER_ID --display-name "Tia WhatsApp" --waba-id YOUR_WABA_ID --business-phone "+20XXXXXXXXXX"
-```
-
-The command prints:
+The connection-specific webhook is:
 
 ```text
-connection_id=...
-adapter_token=tia_ch_...
+GET/POST /api/v1/channels/whatsapp/webhook/{connection_id}
 ```
 
-Store the `adapter_token` immediately. Tia stores only its hash and cannot show the same token again.
+The POST webhook is verified with `X-Hub-Signature-256` before inbound payloads are accepted.
 
-## 3. Create the Tia Header Auth credential in n8n
+## n8n responsibility
 
-In n8n create an **HTTP Header Auth** credential:
+Oracle n8n remains useful for the Tia automation scheduler and clinic-sync wake-up. It does **not** need:
+
+- a WhatsApp Trigger credential;
+- a WhatsApp Business Cloud send credential;
+- a per-clinic `X-Channel-Token` for the normal production WhatsApp path.
+
+The production Oracle workflow that should stay active is:
 
 ```text
-Name: Tia Channel Adapter
-Header Name: X-Channel-Token
-Header Value: tia_ch_...
+n8n/workflows/tia_automation_scheduler.json
 ```
 
-Use the token printed by the provisioning script.
+`n8n/workflows/tia_whatsapp_outbox_worker.json` is only an alternate/reference native-transport waker and should not be active while the Railway waker is running.
 
-## 4. Import the inbound/status workflow
+## Retired legacy bridge
 
-Import:
+Older deployments used n8n to receive WhatsApp, call a generic channel adapter, claim Tia outbox rows, send through n8n provider nodes, and report provider results. That bridge is retired.
 
-```text
-n8n/workflows/tia_whatsapp_inbound_status.json
-```
+If an old Oracle n8n workflow is still repeatedly calling a generic channel-adapter outbox endpoint and receiving `401 Unauthorized`, disable that workflow. Do not weaken Tia authentication or rotate an old channel token just to preserve the retired path.
 
-Then:
+## Delivery and retry ownership
 
-1. Open every Tia HTTP Request node and replace `https://YOUR_TIA_BACKEND_DOMAIN` with the public HTTPS URL of the FastAPI backend.
-2. Select the `Tia Channel Adapter` Header Auth credential on those HTTP nodes.
-3. Select your **WhatsApp OAuth** credential on `WhatsApp Trigger`.
-4. Publish the workflow.
+Tia owns:
 
-The normalization node currently accepts **text WhatsApp messages**. Media support is intentionally deferred to the media milestone instead of pretending a non-text message is text.
+- inbound idempotency;
+- outbound dispatch claiming;
+- provider-send retries;
+- permanent failure handling;
+- Meta message ID reconciliation;
+- sent/delivered/read/failed callbacks;
+- WhatsApp customer-service-window policy;
+- template selection/approval checks;
+- human handoff suppression/return-to-AI state.
 
-The same workflow also forwards WhatsApp `sent`, `delivered`, `read`, and `failed` callbacks to Tia.
+This keeps provider behavior and business state in one deterministic state machine instead of splitting them between Tia and n8n.
 
-## 5. Import the outbox worker
+## End-to-end verification
 
-Import:
-
-```text
-n8n/workflows/tia_whatsapp_outbox_worker.json
-```
-
-Then:
-
-1. Replace `https://YOUR_TIA_BACKEND_DOMAIN` in all Tia HTTP Request nodes.
-2. Select the `Tia Channel Adapter` Header Auth credential on those HTTP nodes.
-3. Select the **WhatsApp Business Cloud API** credential on `WhatsApp Business Cloud`.
-4. Publish the workflow.
-
-The worker runs every 5 seconds, claims queued Tia dispatches, sends them through WhatsApp, and reports either `sent` or a retryable failure back to Tia.
-
-The Phone Number ID used for sending comes from each Tia channel connection (`external_account_id`), so the workflow does not hard-code one clinic's number.
-
-## Delivery callback race protection
-
-WhatsApp can report `sent`/`delivered` very quickly. A callback can theoretically arrive before n8n reports the provider message ID back to the outbox row.
-
-Tia therefore stores callbacks in `channel_delivery_events` even when a matching dispatch is not known yet. When the outbound result later supplies the provider message ID, pending callbacks are reconciled automatically.
-
-This prevents losing fast delivery/read receipts.
-
-## Webhook testing note
-
-Do not keep switching a live WhatsApp app between n8n's test and production trigger URLs. Use the production/published n8n workflow for staging traffic once the Meta app is subscribed.
-
-## Security rules
-
-- Never commit Meta access tokens or Tia adapter tokens to Git.
-- Keep Meta credentials inside n8n's credential store.
-- Keep the Tia adapter token in n8n Header Auth credentials.
-- Use HTTPS for the public Tia backend and n8n webhook endpoints.
-- Rotate the Tia adapter token if it is exposed by rerunning `provision_whatsapp_channel.py` for the same Phone Number ID.
-- Production and staging should use separate Meta/n8n/Tia connections.
-
-## End-to-end path to test later
+Use a phone number you control for live provider testing:
 
 ```text
 Customer sends WhatsApp text
-→ n8n receives it
-→ Tia creates/resolves patient identity
-→ Tia stores inbound message
-→ Tia AI processes it
+→ Meta calls Tia webhook
+→ Tia resolves/stores inbound conversation
+→ Tia AI processes the message
 → Tia queues outbound reply
-→ n8n sends reply to WhatsApp
-→ Meta returns message ID
-→ Tia marks sent
-→ WhatsApp delivery callback arrives
-→ Tia marks delivered/read
+→ Railway transport waker wakes Tia
+→ Tia sends to Meta
+→ Meta returns provider message ID
+→ Tia records sent/delivered/read state
 ```
 
-Human handoff uses the same outbound pipeline: a staff reply from Team Inbox is queued into `message_dispatches`, then the same n8n worker delivers it to WhatsApp.
+For current operational details, see `n8n/AUTOMATIONS_SETUP.md` and `n8n/REAL_RUNTIME_SETUP.md`.

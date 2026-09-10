@@ -13,40 +13,35 @@ def load(name: str) -> dict:
 
 
 def main() -> int:
-    names = (
-        "tia_whatsapp_inbound_status.json",
-        "tia_whatsapp_outbox_worker.json",
-        "tia_automation_scheduler.json",
-        "tia_gmail_outbox_worker.json",
-    )
-    for name in names:
-        workflow = load(name)
-        assert workflow.get("nodes"), name
-        raw = json.dumps(workflow, ensure_ascii=False)
-        assert "YOUR_TIA_BACKEND_DOMAIN" in raw, name
-        assert "adapter_token" not in raw.lower(), name
-        assert "worker_token" not in raw.lower(), name
-        assert "access_token" not in raw.lower(), name
-        assert "api_key" not in raw.lower(), name
-        print(f"[PASS] workflow contract: {name}")
-
-    gmail = load("tia_gmail_outbox_worker.json")
-    gmail_nodes = {node["name"]: node for node in gmail["nodes"]}
-    assert gmail_nodes["Gmail Send Message"]["type"] == "n8n-nodes-base.gmail"
-    assert gmail_nodes["Gmail Send Message"]["typeVersion"] >= 2.2
-    assert gmail_nodes["Gmail Send Message"]["retryOnFail"] is True
-    print("[PASS] Gmail send/retry contract")
-
-    whatsapp = load("tia_whatsapp_inbound_status.json")
-    assert any(node["type"] == "n8n-nodes-base.whatsAppTrigger" for node in whatsapp["nodes"])
-    print("[PASS] WhatsApp trigger contract")
-
     scheduler = load("tia_automation_scheduler.json")
-    assert any(
-        node["name"] == "Every Minute" and node["type"] == "n8n-nodes-base.scheduleTrigger"
-        for node in scheduler["nodes"]
-    )
-    print("[PASS] Automation scheduler contract")
+    scheduler_raw = json.dumps(scheduler, ensure_ascii=False)
+    assert scheduler.get("nodes")
+    assert "$env.TIA_API_BASE_URL" in scheduler_raw
+    assert "/api/v1/automations/adapter/" in scheduler_raw
+    assert "/api/v1/automations/adapter/clinic-sync/tick" in scheduler_raw
+    assert "/adapter/outbox/claim" not in scheduler_raw
+    assert "n8n-nodes-base.whatsApp" not in scheduler_raw
+    print("[PASS] Oracle scheduler contract")
+
+    transport_waker = load("tia_whatsapp_outbox_worker.json")
+    waker_raw = json.dumps(transport_waker, ensure_ascii=False)
+    assert transport_waker.get("nodes")
+    assert "/api/v1/channels/whatsapp/transport/tick" in waker_raw
+    assert "/adapter/outbox/claim" not in waker_raw
+    assert "/adapter/outbox/provider-status" not in waker_raw
+    assert "n8n-nodes-base.whatsApp" not in waker_raw
+    assert "graph.facebook.com" not in waker_raw
+    print("[PASS] Native WhatsApp waker contract")
+
+    assert not (WORKFLOWS / "tia_whatsapp_inbound_status.json").exists()
+    assert not (WORKFLOWS / "tia_gmail_outbox_worker.json").exists()
+    print("[PASS] Retired inbound/Gmail workflows absent")
+
+    docs = (PROJECT_DIR / "n8n" / "REAL_RUNTIME_SETUP.md").read_text(encoding="utf-8")
+    assert "tia-whatsapp-transport-waker" in docs
+    assert "tia_automation_scheduler.json" in docs
+    assert "n8n WhatsApp Trigger" not in docs
+    print("[PASS] Runtime documentation matches native transport")
     return 0
 
 

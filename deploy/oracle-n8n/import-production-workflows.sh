@@ -5,19 +5,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 repo_root="$(cd ../.. && pwd)"
 workflow_dir="${repo_root}/n8n/workflows"
+source_name="tia_automation_scheduler.json"
+source_path="${workflow_dir}/${source_name}"
 
-required_files=(
-  "tia_automation_scheduler.json"
-  "tia_whatsapp_outbox_worker.json"
-  "tia_whatsapp_inbound_status.json"
-)
-
-for file in "${required_files[@]}"; do
-  if [[ ! -f "${workflow_dir}/${file}" ]]; then
-    echo "Missing workflow template: ${workflow_dir}/${file}" >&2
-    exit 1
-  fi
-done
+if [[ ! -f "$source_path" ]]; then
+  echo "Missing workflow template: $source_path" >&2
+  exit 1
+fi
 
 owner_id="$(
   docker compose exec -T n8n_db \
@@ -30,41 +24,32 @@ if [[ -z "$owner_id" ]]; then
   exit 1
 fi
 
-import_workflow() {
-  local source_name="$1"
-  local workflow_id="$2"
-  local container_name="$3"
-  local source_path="${workflow_dir}/${source_name}"
-  local prepared_path="/tmp/${container_name}"
+workflow_id="tiaAutoSched0001"
+container_name="tia_automation_scheduler.import.json"
+prepared_path="/tmp/${container_name}"
 
-  awk -v workflow_id="$workflow_id" '
-    NR == 1 {
-      print
-      print "  \"id\": \"" workflow_id "\","
-      next
-    }
-    { print }
-  ' "$source_path" > "$prepared_path"
+awk -v workflow_id="$workflow_id" '
+  NR == 1 {
+    print
+    print "  \"id\": \"" workflow_id "\","
+    next
+  }
+  { print }
+' "$source_path" > "$prepared_path"
 
-  docker compose cp "$prepared_path" "n8n:/tmp/${container_name}"
-  docker compose exec -T --user node n8n \
-    n8n import:workflow \
-      --input="/tmp/${container_name}" \
-      --userId="$owner_id"
+docker compose cp "$prepared_path" "n8n:/tmp/${container_name}"
+docker compose exec -T --user node n8n \
+  n8n import:workflow \
+    --input="/tmp/${container_name}" \
+    --userId="$owner_id"
 
-  rm -f "$prepared_path"
-}
-
-# n8n CLI imports expect workflow-level IDs. These stable IDs make repeat deploys
-# update the same workflows instead of creating duplicates.
-import_workflow "tia_automation_scheduler.json" "tiaAutoSched0001" "tia_automation_scheduler.import.json"
-import_workflow "tia_whatsapp_outbox_worker.json" "tiaWAOutbox00001" "tia_whatsapp_outbox_worker.import.json"
-import_workflow "tia_whatsapp_inbound_status.json" "tiaWAInbound0001" "tia_whatsapp_inbound_status.import.json"
-
+rm -f "$prepared_path"
 docker compose restart n8n >/dev/null
 
 echo
-echo "Imported production workflows (left inactive until credentials are configured):"
+echo "Imported Tia production scheduler only."
+echo "WhatsApp inbound/outbox legacy workflows are intentionally not imported;"
+echo "WhatsApp transport is owned by Tia and the Railway transport waker."
 docker compose exec -T n8n_db \
   psql -U n8n -d n8n \
-  -c 'SELECT id, name, active FROM workflow_entity ORDER BY name;'
+  -c "SELECT id, name, active FROM workflow_entity WHERE id = '${workflow_id}';"
