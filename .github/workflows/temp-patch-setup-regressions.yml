@@ -1,0 +1,32 @@
+name: Temp patch setup regressions
+
+on:
+  push:
+    branches:
+      - feat/clinic-knowledge-settings
+    paths:
+      - backend/scripts/patch_setup_regression_tests.py
+      - .github/workflows/temp-patch-setup-regressions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clinic-knowledge-settings
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python backend/scripts/patch_setup_regression_tests.py
+      - name: Commit regression update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/tests/test_clinic_settings_rebuild_v0490.py
+          git diff --cached --quiet && exit 0
+          git commit -m "test(setup): align regressions with refocused settings"
+          git push
