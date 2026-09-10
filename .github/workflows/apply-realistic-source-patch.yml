@@ -1,4 +1,4 @@
-name: Cancellation Exact-Context Trace
+name: Cancellation First-Turn State Trace
 
 on:
   push:
@@ -52,5 +52,5 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Trace exact cancellation follow-up context
+      - name: Trace first cancellation turn state only
         run: python -m scripts.trace_cancellation_semantics
