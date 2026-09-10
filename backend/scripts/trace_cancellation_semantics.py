@@ -5,12 +5,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.turn_interpreter import interpret_customer_turn
-from app.core.database import engine
+from app.core.config import settings
 from app.models.workspace import Workspace
 from app.services.agent_chat import _with_current_patient_appointments
 from scripts.run_realistic_system_journeys import (
@@ -24,6 +24,7 @@ from scripts.run_realistic_system_journeys import (
 
 
 def main() -> None:
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
     connection = engine.connect()
     outer = connection.begin()
     db = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
@@ -94,6 +95,7 @@ def main() -> None:
         if outer.is_active:
             outer.rollback()
         connection.close()
+        engine.dispose()
 
 
 if __name__ == "__main__":
