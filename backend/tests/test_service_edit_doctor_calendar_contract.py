@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from app.api.routes.doctor_admin import DoctorAdminCreate
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -33,17 +35,23 @@ def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
     actions = (ROOT / "frontend/src/app/(dashboard)/doctors/actions.ts").read_text(encoding="utf-8")
     panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-management.tsx").read_text(encoding="utf-8")
     page = (ROOT / "frontend/src/app/(dashboard)/doctors/page.tsx").read_text(encoding="utf-8")
+    router = (ROOT / "backend/app/api/router.py").read_text(encoding="utf-8")
 
     assert "get_workspace_admin" in route
     assert '"/doctor-admin/{doctor_id}/working-hours"' in route
+    assert "branch_id" not in DoctorAdminCreate.model_fields
     assert "branch_id" not in actions
     assert "الفرع" not in panel
     assert 'ctx.workspace.role === "admin"' in page
     assert "DoctorManagementPanel" in page
+    assert "doctor_admin_read_router" in router
 
 
-def test_doctor_delete_is_soft_and_preserves_history() -> None:
+def test_doctor_delete_is_soft_and_blocks_doctors_with_upcoming_visits() -> None:
     route = (ROOT / "backend/app/api/routes/doctor_admin.py").read_text(encoding="utf-8")
+    assert "Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES)" in route
+    assert "Appointment.start_at >= datetime.now(UTC)" in route
+    assert "upcoming appointments" in route
     assert "doctor.is_active = False" in route
     assert "doctor.booking_enabled = False" in route
     assert 'action="clinic.doctor_archived"' in route
