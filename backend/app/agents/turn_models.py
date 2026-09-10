@@ -157,11 +157,10 @@ class SemanticEntityHints(BaseModel):
 
     @model_validator(mode="after")
     def bind_selected_laser_device(self) -> SemanticEntityHints:
-        # ContextVar is request/task-local. This gives the deterministic clinic
-        # adapter access to the structured semantic choice without parsing text
-        # and without adding keyword routing to the booking orchestrator.
-        if self.laser_device_key is not None:
-            set_laser_device_key(self.laser_device_key)
+        # ContextVar is request/task-local. Every structured turn must replace the
+        # previous value, including clearing it for non-laser turns, so a device
+        # selection can never leak across customer turns handled by the same task.
+        set_laser_device_key(self.laser_device_key)
         return self
 
 
