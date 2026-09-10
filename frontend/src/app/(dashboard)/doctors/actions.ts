@@ -73,10 +73,9 @@ export async function createDoctorAction(
   try {
     const firstName = clean(formData.get("first_name"));
     const lastName = clean(formData.get("last_name"));
-    const branchId = clean(formData.get("branch_id"));
     const selectedServices = serviceIds(formData);
-    if (!firstName || !lastName || !branchId) {
-      return { notice: null, error: "الاسم والفرع بيانات مطلوبة." };
+    if (!firstName || !lastName) {
+      return { notice: null, error: "الاسم الأول واسم العائلة بيانات مطلوبة." };
     }
     if (!selectedServices.length) {
       return { notice: null, error: "اختار خدمة واحدة على الأقل للدكتور." };
@@ -89,7 +88,6 @@ export async function createDoctorAction(
         email: clean(formData.get("email")),
         phone: clean(formData.get("phone")),
         specialization: clean(formData.get("specialization")),
-        branch_id: branchId,
         service_ids: selectedServices,
         booking_enabled: true,
         working_hours: { intervals: parseIntervals(formData) },
@@ -142,14 +140,13 @@ export async function updateDoctorScheduleAction(
 ): Promise<DoctorAdminState> {
   try {
     const doctorId = clean(formData.get("doctor_id"));
-    const branchId = clean(formData.get("branch_id"));
-    if (!doctorId || !branchId) return { notice: null, error: "بيانات الدكتور أو الفرع غير مكتملة." };
-    await tiaRequest(`/clinic/doctors/${doctorId}/branches/${branchId}/working-hours`, {
+    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور." };
+    await tiaRequest(`/clinic/doctor-admin/${doctorId}/working-hours`, {
       method: "PUT",
       body: JSON.stringify({ intervals: parseIntervals(formData) }),
     });
     refreshDoctorViews();
-    return { notice: "تم تحديث مواعيد العمل لهذا الفرع.", error: null };
+    return { notice: "تم تحديث مواعيد عمل الدكتور.", error: null };
   } catch (error) {
     return stateFromError(error);
   }
