@@ -1,4 +1,4 @@
-name: Finalize Timestamp Fix And Realistic Regression
+name: Verify Compound Item Laser Device Isolation
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: finalize-realistic-regression
+  group: verify-compound-device-isolation
   cancel-in-progress: true
 
 env:
@@ -21,8 +21,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_realistic_regression_unused
-  SUPABASE_SECRET_KEY: sb_secret_realistic_regression_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_compound_fix_unused
+  SUPABASE_SECRET_KEY: sb_secret_compound_fix_unused
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   LLM_PROVIDER: openai
   OPENAI_MODEL: gpt-5.6-luna
@@ -36,9 +36,9 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  finalize:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     environment: staging
     defaults:
       run:
@@ -60,149 +60,110 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Apply minimal timestamp fix
+      - name: Apply deterministic compound device grounding
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('app/services/agent_chat.py')
+          path = Path('app/services/compound_customer_requests.py')
           text = path.read_text(encoding='utf-8')
 
-          inbound_old = '''    inbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="patient",\n        direction="inbound",\n'''
-          inbound_new = '''    inbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="patient",\n        direction="inbound",\n        created_at=activity_now,\n'''
-          if 'direction="inbound",\n        created_at=activity_now,' not in text:
-              if inbound_old not in text:
-                  raise RuntimeError('inbound timestamp anchor not found')
-              text = text.replace(inbound_old, inbound_new, 1)
+          helper_sentinel = 'def _catalog_service_laser_policy('
+          if helper_sentinel not in text:
+              anchor = '''    return None\n\n\ndef ground_compound_requested_items(\n'''
+              helper = '''    return None\n\n\ndef _catalog_service_laser_policy(\n    catalog: dict[str, object],\n    service_id: str | None,\n) -> tuple[bool | None, set[str]]:\n    \"\"\"Return canonical laser requirements for one grounded service.\n\n    None means the catalog row does not expose laser metadata, so grounding\n    leaves the item unchanged rather than guessing.\n    \"\"\"\n    if not service_id:\n        return None, set()\n    rows = catalog.get(\"services\")\n    if not isinstance(rows, list):\n        return None, set()\n    for row in rows:\n        if not isinstance(row, dict) or str(row.get(\"id\") or \"\") != str(service_id):\n            continue\n        if \"requires_laser_device\" not in row:\n            return None, set()\n        requires_laser_device = bool(row.get(\"requires_laser_device\"))\n        raw_devices = row.get(\"laser_devices\")\n        allowed_devices: set[str] = set()\n        if isinstance(raw_devices, list):\n            for device in raw_devices:\n                if not isinstance(device, dict):\n                    continue\n                device_key = device.get(\"device_key\")\n                if device_key:\n                    allowed_devices.add(str(device_key))\n        return requires_laser_device, allowed_devices\n    return None, set()\n\n\ndef ground_compound_requested_items(\n'''
+              if anchor not in text:
+                  raise RuntimeError('compound helper insertion anchor not found')
+              text = text.replace(anchor, helper, 1)
 
-          outbound_old = '''    outbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="ai",\n        direction="outbound",\n'''
-          outbound_new = '''    outbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="ai",\n        direction="outbound",\n        created_at=outbound_now,\n'''
-          if 'direction="outbound",\n        created_at=outbound_now,' not in text:
-              if outbound_old not in text:
-                  raise RuntimeError('outbound timestamp anchor not found')
-              text = text.replace(outbound_old, outbound_new, 1)
+          grounding_sentinel = 'requires_laser_device, allowed_laser_devices = _catalog_service_laser_policy('
+          if grounding_sentinel not in text:
+              anchor = '''        grounded.append(\n            item.model_copy(\n                update={\n                    \"service_id\": service_id,\n                    \"service_candidate_ids\": service_candidates,\n                    \"doctor_id\": doctor_id,\n                    \"doctor_candidate_ids\": doctor_candidates,\n                }\n            )\n        )\n'''
+              replacement = '''        laser_device_key = item.laser_device_key\n        if service_id:\n            requires_laser_device, allowed_laser_devices = _catalog_service_laser_policy(\n                catalog,\n                service_id,\n            )\n            if requires_laser_device is False:\n                laser_device_key = None\n            elif (\n                requires_laser_device is True\n                and laser_device_key\n                and allowed_laser_devices\n                and str(laser_device_key) not in allowed_laser_devices\n            ):\n                laser_device_key = None\n\n        grounded.append(\n            item.model_copy(\n                update={\n                    \"service_id\": service_id,\n                    \"service_candidate_ids\": service_candidates,\n                    \"doctor_id\": doctor_id,\n                    \"doctor_candidate_ids\": doctor_candidates,\n                    \"laser_device_key\": laser_device_key,\n                }\n            )\n        )\n'''
+              if anchor not in text:
+                  raise RuntimeError('compound grounding anchor not found')
+              text = text.replace(anchor, replacement, 1)
 
           path.write_text(text, encoding='utf-8')
           PY
 
-      - name: Commit fix locally
+      - name: Add focused regression tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_compound_customer_requests.py')
+          text = path.read_text(encoding='utf-8')
+          sentinel = 'def test_grounding_strips_laser_device_from_non_laser_item()'
+          if sentinel not in text:
+              text += '''\n\ndef test_grounding_strips_laser_device_from_non_laser_item() -> None:\n    service_id = uuid4()\n    contaminated = _appointment(service_id, day=\"2026-09-12\", time=\"10:00\").model_copy(\n        update={\"laser_device_key\": \"candela_gentle\"}\n    )\n    catalog = {\n        \"services\": [\n            {\n                \"id\": str(service_id),\n                \"name\": \"Hydrafacial\",\n                \"requires_laser_device\": False,\n                \"laser_devices\": [],\n            }\n        ],\n        \"doctors\": [],\n    }\n\n    grounded = compound.ground_compound_requested_items([contaminated], catalog)\n    decision = compound.appointment_decision_from_item(_decision(grounded), grounded[0])\n    state = compound.appointment_item_state(\n        grounded[0],\n        remaining=[],\n        total=1,\n        completed=0,\n        catalog=catalog,\n    )\n\n    assert grounded[0].laser_device_key is None\n    assert decision.entity_hints.laser_device_key is None\n    assert \"laser_device_key\" not in state\n\n\ndef test_grounding_keeps_only_device_configured_for_laser_service() -> None:\n    service_id = uuid4()\n    catalog = {\n        \"services\": [\n            {\n                \"id\": str(service_id),\n                \"name\": \"Underarm Laser\",\n                \"requires_laser_device\": True,\n                \"laser_devices\": [{\"device_key\": \"prime_lase\"}],\n            }\n        ],\n        \"doctors\": [],\n    }\n    valid = _appointment(service_id, day=\"2026-09-12\", time=\"10:00\").model_copy(\n        update={\"laser_device_key\": \"prime_lase\"}\n    )\n    invalid = valid.model_copy(update={\"laser_device_key\": \"candela_gentle\"})\n\n    grounded_valid = compound.ground_compound_requested_items([valid], catalog)[0]\n    grounded_invalid = compound.ground_compound_requested_items([invalid], catalog)[0]\n\n    assert grounded_valid.laser_device_key == \"prime_lase\"\n    assert grounded_invalid.laser_device_key is None\n'''
+              path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit candidate locally
         run: |
           git config user.name "Tia CI"
           git config user.email "tia-ci@users.noreply.github.com"
-          git add app/services/agent_chat.py
-          if git diff --cached --quiet; then
-            echo "Timestamp fix already committed."
-          else
-            git commit -m "Use explicit timestamps for agent messages"
-          fi
+          git add app/services/compound_customer_requests.py tests/test_compound_customer_requests.py
+          git commit -m "Keep laser devices local to compound items"
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Focused regression before push
+      - name: Focused tests
         run: |
           python -m pytest \
-            tests/test_conversation_ownership_hardening.py \
-            tests/test_handoff_resume_guard.py \
-            tests/test_verified_cancellation_execution.py \
-            tests/test_unified_turn_interpreter.py \
+            tests/test_compound_customer_requests.py \
             tests/test_clinic_grounding_compatibility.py -q
-          python -m compileall -q app/services/agent_chat.py
+          python -m compileall -q app/services/compound_customer_requests.py
 
       - name: Apply staging migrations
         run: alembic upgrade head
 
-      - name: Targeted cancellation and ownership gate
+      - name: Run compound realistic journey
         run: |
           mkdir -p artifacts
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
-            --report artifacts/timestamp-source-gate.json \
-            --scenario ambiguous_cancel_two_appointments \
-            --scenario human_takeover_and_return
+            --report artifacts/compound-device-isolation.json \
+            --scenario compound_two_services
 
-      - name: Verify targeted DB behavior
+      - name: Verify compound DB behavior
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
-          report = json.loads(Path('artifacts/timestamp-source-gate.json').read_text(encoding='utf-8'))
-          rows = {row['scenario']: row for row in report['scenarios']}
+          report = json.loads(Path('artifacts/compound-device-isolation.json').read_text(encoding='utf-8'))
+          row = report['scenarios'][0]
+          appointments = row['after']['appointments']
+          booking_actions = [a for a in row['agent_actions'] if a['tool'] == 'book_appointment' and a['status'] == 'success']
+          discovery_errors = [a for a in row['agent_actions'] if a['tool'] == 'get_booking_options' and a['status'] == 'error']
 
-          cancel = rows['ambiguous_cancel_two_appointments']
-          cancel_after = {row['service']: row['status'] for row in cancel['after']['appointments']}
-          cancel_actions = [row for row in cancel['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
-          assert cancel_after['هيدرافيشل'] == 'cancelled', cancel_after
-          assert cancel_after['ليزر إزالة الشعر - إبط'] == 'confirmed', cancel_after
-          assert len(cancel_actions) == 1, cancel_actions
-
-          ownership = rows['human_takeover_and_return']
-          turns = ownership['turns']
-          bookings = [row for row in ownership['agent_actions'] if row['tool'] == 'book_appointment' and row['status'] == 'success']
-          assert turns[1]['agent_paused'] is True, turns[1]
-          assert turns[1]['tokens']['model_calls'] == 0, turns[1]['tokens']
-          assert ownership['conversation']['owner_type'] == 'ai', ownership['conversation']
-          assert ownership['conversation']['status'] == 'open', ownership['conversation']
-          assert len(ownership['after']['appointments']) == 1, ownership['after']['appointments']
-          assert ownership['after']['appointments'][0]['service'] == 'هيدرافيشل', ownership['after']['appointments']
-          assert len(bookings) == 1, bookings
+          assert row['execution_error'] is None, row['execution_error']
+          assert len(appointments) == 2, appointments
+          assert {a['service'] for a in appointments} == {'ليزر إزالة الشعر - إبط', 'هيدرافيشل'}, appointments
+          hydra = next(a for a in appointments if a['service'] == 'هيدرافيشل')
+          laser = next(a for a in appointments if a['service'] == 'ليزر إزالة الشعر - إبط')
+          assert hydra['device'] is None, hydra
+          assert laser['device'] == 'Candela Gentle', laser
+          assert len(booking_actions) == 2, booking_actions
+          assert discovery_errors == [], discovery_errors
 
           print(json.dumps({
               'source_commit': '${{ env.SOURCE_COMMIT }}',
-              'cancellation_tokens': cancel['tokens']['total_tokens'],
-              'ownership_tokens': ownership['tokens']['total_tokens'],
-              'targeted_total_tokens': report['totals']['total_tokens'],
+              'assistant': row['turns'][-1]['assistant'],
+              'appointments': appointments,
+              'tokens': row['tokens']['total_tokens'],
           }, ensure_ascii=False, indent=2))
           PY
 
       - name: Push verified source commit
         run: git push origin HEAD:test/realistic-system-journeys-v1
 
-      - name: Run final realistic regression
-        run: |
-          python -m scripts.run_realistic_system_journeys \
-            --workspace-slug tia \
-            --report artifacts/final-realistic-system-journeys.json \
-            --scenario exact_time_then_verified_alternative \
-            --scenario package_purchase_and_first_session \
-            --scenario existing_package_separate_session \
-            --scenario package_holder_other_service \
-            --scenario paid_reschedule_no_double_charge \
-            --scenario ambiguous_cancel_two_appointments \
-            --scenario refund_quote_after_one_used \
-            --scenario partial_payment_status \
-            --scenario compound_two_services \
-            --scenario medical_suitability_handoff \
-            --scenario privacy_other_patient \
-            --scenario human_takeover_and_return
-
-      - name: Print regression totals
-        if: always()
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path('artifacts/final-realistic-system-journeys.json')
-          if not path.exists():
-              print('final report missing')
-          else:
-              report = json.loads(path.read_text(encoding='utf-8'))
-              print(json.dumps({
-                  'source_commit': '${{ env.SOURCE_COMMIT }}',
-                  'totals': report.get('totals'),
-                  'scenario_tokens': {
-                      row['scenario']: row.get('tokens', {}).get('total_tokens')
-                      for row in report.get('scenarios', [])
-                  },
-              }, ensure_ascii=False, indent=2))
-          PY
-
-      - name: Upload regression reports
+      - name: Upload compound report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: final-realistic-system-journeys
-          path: |
-            backend/artifacts/timestamp-source-gate.json
-            backend/artifacts/final-realistic-system-journeys.json
+          name: compound-device-isolation
+          path: backend/artifacts/compound-device-isolation.json
           if-no-files-found: warn
           retention-days: 7
