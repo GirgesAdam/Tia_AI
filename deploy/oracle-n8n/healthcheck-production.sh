@@ -24,6 +24,21 @@ recover_stack() {
   RECOVERED=1
 }
 
+workflow_counts() {
+  docker compose exec -T n8n_db psql -U n8n -d n8n -Atc "
+    SELECT
+      (SELECT count(*) FROM workflow_entity WHERE id = 'tiaAutoSched0001' AND active IS TRUE),
+      (SELECT count(*) FROM workflow_entity
+         WHERE active IS TRUE
+           AND (
+             id IN ('tiaWAInbound0001','tiaWAOutbox00001')
+             OR CAST(nodes AS text) LIKE '%/adapter/outbox/claim%'
+             OR CAST(nodes AS text) LIKE '%/adapter/outbox/provider-status%'
+             OR CAST(nodes AS text) LIKE '%/channels/adapter/inbound%'
+           ));
+  " | tr -d '\r'
+}
+
 if ! service_running n8n_db || ! service_running n8n || ! service_running caddy; then
   recover_stack
 fi
@@ -40,9 +55,21 @@ if ! docker compose exec -T n8n_db pg_isready -U n8n -d n8n >/dev/null 2>&1; the
   exit 1
 fi
 
-ACTIVE_TIA_COUNT="$(docker compose exec -T n8n_db psql -U n8n -d n8n -Atc "SELECT count(*) FROM workflow_entity WHERE id IN ('tiaAutoSched0001','tiaWAInbound0001','tiaWAOutbox00001') AND active = true;")"
-if [[ "$ACTIVE_TIA_COUNT" -ne 3 ]]; then
-  echo "Expected 3 active Tia production workflows; found $ACTIVE_TIA_COUNT." >&2
+IFS='|' read -r SCHEDULER_ACTIVE_COUNT LEGACY_ACTIVE_COUNT <<< "$(workflow_counts)"
+if [[ "$SCHEDULER_ACTIVE_COUNT" -ne 1 || "$LEGACY_ACTIVE_COUNT" -ne 0 ]]; then
+  echo "Workflow state drift detected (scheduler=$SCHEDULER_ACTIVE_COUNT, retired_whatsapp=$LEGACY_ACTIVE_COUNT); applying scheduler-only guardrail..."
+  if bash ./publish-scheduler.sh >/dev/null; then
+    RECOVERED=1
+    IFS='|' read -r SCHEDULER_ACTIVE_COUNT LEGACY_ACTIVE_COUNT <<< "$(workflow_counts)"
+  fi
+fi
+
+if [[ "$SCHEDULER_ACTIVE_COUNT" -ne 1 ]]; then
+  echo "Expected the Tia automation scheduler to be active; found $SCHEDULER_ACTIVE_COUNT." >&2
+  exit 1
+fi
+if [[ "$LEGACY_ACTIVE_COUNT" -ne 0 ]]; then
+  echo "Retired Oracle WhatsApp adapter workflows are still active: $LEGACY_ACTIVE_COUNT." >&2
   exit 1
 fi
 
@@ -81,6 +108,7 @@ fi
 echo "PostgreSQL: ready"
 echo "n8n: ready"
 echo "Caddy: running"
-echo "Active Tia workflows: $ACTIVE_TIA_COUNT/3"
+echo "Tia scheduler active: $SCHEDULER_ACTIVE_COUNT/1"
+echo "Retired WhatsApp workflows active: $LEGACY_ACTIVE_COUNT"
 echo "Disk used: ${DISK_USED_PERCENT}%"
 echo "n8n readiness: $READY_URL OK"
