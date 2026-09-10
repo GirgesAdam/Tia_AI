@@ -56,6 +56,7 @@ def _validated_slot_for_existing_appointment(
     workspace: Workspace,
     appointment: Appointment,
     service_id: UUID,
+    doctor_id: UUID,
     laser_device_key: str | None,
 ) -> SlotCandidate:
     """Validate the existing start time against the newly selected service.
@@ -85,7 +86,7 @@ def _validated_slot_for_existing_appointment(
             branch_id=appointment.branch_id,
             service_id=service_id,
             booking_date=booking_date,
-            doctor_id=appointment.doctor_id,
+            doctor_id=doctor_id,
             exclude_appointment_id=appointment.id,
             now=validation_now,
             preloaded_branch=branch,
@@ -99,7 +100,7 @@ def _validated_slot_for_existing_appointment(
         if slot.start_at == requested_start:
             return slot
     raise StaffAppointmentEditError(
-        "The current appointment time is not available for the selected service/device with this doctor."
+        "The current appointment time is not available for the selected service/device with the selected doctor."
     )
 
 
@@ -109,6 +110,7 @@ def change_appointment_service(
     workspace: Workspace,
     appointment_id: UUID,
     service_id: UUID,
+    doctor_id: UUID | None = None,
     laser_device_key: str | None,
     changed_by_user_id: UUID | None,
     actor_type: ActivityActorType = "staff",
@@ -132,9 +134,11 @@ def change_appointment_service(
         )
 
     normalized_device = (laser_device_key or "").strip() or None
+    selected_doctor_id = doctor_id or appointment.doctor_id
     service_changed = service_id != appointment.service_id
+    doctor_changed = selected_doctor_id != appointment.doctor_id
     device_changed = normalized_device != (appointment.laser_device_key or None)
-    if not service_changed and not device_changed:
+    if not service_changed and not doctor_changed and not device_changed:
         return appointment
 
     slot = _validated_slot_for_existing_appointment(
@@ -142,10 +146,12 @@ def change_appointment_service(
         workspace=workspace,
         appointment=appointment,
         service_id=service_id,
+        doctor_id=selected_doctor_id,
         laser_device_key=normalized_device,
     )
 
     old_service_id = appointment.service_id
+    old_doctor_id = appointment.doctor_id
     old_device_key = appointment.laser_device_key
     old_price_minor = int(appointment.price_minor)
     old_billing_context = appointment.billing_context
@@ -197,6 +203,7 @@ def change_appointment_service(
         package_released = True
 
     appointment.service_id = slot.service_id
+    appointment.doctor_id = slot.doctor_id
     appointment.end_at = slot.end_at
     appointment.busy_start_at = slot.busy_start_at
     appointment.busy_end_at = slot.busy_end_at
@@ -224,6 +231,8 @@ def change_appointment_service(
         metadata={
             "old_service_id": old_service_id,
             "new_service_id": appointment.service_id,
+            "old_doctor_id": old_doctor_id,
+            "new_doctor_id": appointment.doctor_id,
             "old_device_key": old_device_key,
             "new_device_key": appointment.laser_device_key,
             "old_price_minor": old_price_minor,

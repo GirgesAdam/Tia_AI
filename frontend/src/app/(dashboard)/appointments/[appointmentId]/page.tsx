@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import type { AppointmentOperationsDetail, AppointmentPaymentSummary } from "@/lib/types";
+import type { AppointmentOperationsDetail, AppointmentPaymentSummary, Doctor, Staff } from "@/lib/types";
 import {
   addAppointmentProduct,
   cancelAppointment,
@@ -79,13 +79,15 @@ function minorInput(value: number) {
 
 export default async function AppointmentOperationsPage({ params }: { params: Promise<{ appointmentId: string }> }) {
   const { appointmentId } = await params;
-  const [detail, payments, products, productLines, services, devicePrices] = await Promise.all([
+  const [detail, payments, products, productLines, services, devicePrices, doctors, staff] = await Promise.all([
     tiaRequest<AppointmentOperationsDetail>(`/booking/appointments/${appointmentId}/operations`),
     tiaRequest<PaymentSummaryWithProducts>(`/payments/appointments/${appointmentId}`),
     tiaRequest<ClinicProduct[]>("/inventory/products").catch(() => []),
     tiaRequest<AppointmentProductLine[]>(`/inventory/appointments/${appointmentId}/products`).catch(() => []),
     tiaRequest<AppointmentServiceOption[]>("/clinic/services").catch(() => []),
     tiaRequest<AppointmentDevicePrice[]>("/inventory/laser-prices").catch(() => []),
+    tiaRequest<Doctor[]>("/clinic/doctors").catch(() => []),
+    tiaRequest<Staff[]>("/clinic/staff").catch(() => []),
   ]);
   const { appointment } = detail;
   const allowed = new Set(detail.allowed_actions);
@@ -99,6 +101,10 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
     appointment.patient_package_id || appointment.billing_context === "package_prepaid" || appointment.package_external_id,
   );
   const overpaidMinor = Math.max(payments.net_paid_minor - payments.price_minor, 0);
+  const staffMap = new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()]));
+  const doctorOptions = doctors
+    .filter((item) => item.is_active)
+    .map((item) => ({ id: item.id, name: staffMap.get(item.staff_id) || "دكتور" }));
 
   return (
     <>
@@ -178,9 +184,11 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
                   appointmentId={appointment.id}
                   patientId={appointment.patient_id}
                   currentServiceId={appointment.service_id}
+                  currentDoctorId={appointment.doctor_id}
                   currentDeviceKey={laserAppointment.laser_device_key || null}
                   packageBacked={packageBacked}
                   services={services}
+                  doctors={doctorOptions}
                   devicePrices={devicePrices}
                 />
               )}

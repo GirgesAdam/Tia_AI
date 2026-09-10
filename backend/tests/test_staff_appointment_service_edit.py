@@ -177,3 +177,50 @@ def test_completed_appointment_service_cannot_be_rewritten(monkeypatch) -> None:
             laser_device_key=None,
             changed_by_user_id=uuid4(),
         )
+
+
+def test_staff_service_change_can_use_explicit_compatible_doctor(monkeypatch) -> None:
+    old_service_id = uuid4()
+    new_service_id = uuid4()
+    new_doctor_id = uuid4()
+    appointment = _appointment(service_id=old_service_id, package_backed=False)
+    workspace = SimpleNamespace(id=appointment.workspace_id)
+    db = _Db()
+    new_slot = SlotCandidate(
+        branch_id=appointment.branch_id,
+        doctor_id=new_doctor_id,
+        service_id=new_service_id,
+        start_at=appointment.start_at,
+        end_at=appointment.start_at + timedelta(minutes=60),
+        busy_start_at=appointment.start_at,
+        busy_end_at=appointment.start_at + timedelta(minutes=60),
+        duration_minutes=60,
+        price_minor=100_000,
+        currency="EGP",
+        laser_device_key="candela_gentle",
+        laser_device_name="Candela Gentle",
+    )
+    validated: list[UUID] = []
+
+    monkeypatch.setattr(edits, "_locked_appointment", lambda *args, **kwargs: appointment)
+    monkeypatch.setattr(
+        edits,
+        "_validated_slot_for_existing_appointment",
+        lambda *args, **kwargs: (validated.append(kwargs["doctor_id"]) or new_slot),
+    )
+    monkeypatch.setattr(edits, "refresh_appointment_payment_snapshots", lambda *args, **kwargs: None)
+    monkeypatch.setattr(edits, "record_activity_event", lambda *args, **kwargs: None)
+
+    edits.change_appointment_service(
+        db,
+        workspace=workspace,
+        appointment_id=appointment.id,
+        service_id=new_service_id,
+        doctor_id=new_doctor_id,
+        laser_device_key="candela_gentle",
+        changed_by_user_id=uuid4(),
+    )
+
+    assert validated == [new_doctor_id]
+    assert appointment.doctor_id == new_doctor_id
+    assert appointment.service_id == new_service_id

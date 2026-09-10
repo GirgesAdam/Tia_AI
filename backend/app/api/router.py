@@ -14,6 +14,7 @@ from app.api.routes.clinic_setup_v2 import router as clinic_setup_v2_router
 from app.api.routes.crm import router as crm_router
 from app.api.routes.crm_task_executor import router as crm_task_executor_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.doctor_calendar import router as doctor_calendar_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.health import router as health_router
 from app.api.routes.inbox import router as inbox_router
@@ -33,6 +34,7 @@ api_router.include_router(analytics_views_router, prefix="/analytics", tags=["an
 api_router.include_router(campaign_analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(automations_router, prefix="/automations", tags=["automations"])
 api_router.include_router(booking_router, prefix="/booking", tags=["booking"])
+api_router.include_router(doctor_calendar_router, prefix="/booking", tags=["booking"])
 api_router.include_router(appointment_edits_router, prefix="/booking", tags=["booking"])
 api_router.include_router(package_offers_router, prefix="/booking", tags=["booking"])
 api_router.include_router(channels_router, prefix="/channels", tags=["channels"])

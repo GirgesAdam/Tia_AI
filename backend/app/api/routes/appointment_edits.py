@@ -25,6 +25,7 @@ router = APIRouter()
 
 class AppointmentServiceUpdate(BaseModel):
     service_id: UUID
+    doctor_id: UUID | None = None
     laser_device_key: Literal["prime_lase", "candela_gentle"] | None = None
 
 
@@ -54,6 +55,7 @@ def update_appointment_service(
             workspace=access.workspace,
             appointment_id=appointment_id,
             service_id=payload.service_id,
+            doctor_id=payload.doctor_id,
             laser_device_key=payload.laser_device_key,
             changed_by_user_id=access.user.id,
         )
