@@ -57,6 +57,19 @@ from app.models.patient_package import PatientPackage
 from app.models.working_hours import BranchWorkingHour
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest, AgentChatResponse
+from app.services.compound_customer_requests import (
+    COMPOUND_CURRENT_SERVICE_KEY,
+    appointment_decision_from_item,
+    appointment_item_state,
+    appointment_items,
+    compound_progress,
+    compound_union_decision,
+    ground_compound_requested_items,
+    has_compound_request,
+    package_items,
+    purchase_compound_package_batch,
+    queue_from_flow_state,
+)
 from app.services.conversation_flows import (
     FlowStateConflictError,
     cancel_flow,
@@ -78,19 +91,6 @@ from app.services.conversation_ownership import (
 )
 from app.services.handoff_intelligence import build_handoff_context
 from app.services.handoffs import get_active_handoff
-from app.services.compound_customer_requests import (
-    COMPOUND_CURRENT_SERVICE_KEY,
-    appointment_decision_from_item,
-    appointment_item_state,
-    appointment_items,
-    compound_progress,
-    compound_union_decision,
-    ground_compound_requested_items,
-    has_compound_request,
-    package_items,
-    purchase_compound_package_batch,
-    queue_from_flow_state,
-)
 from app.services.package_offers import (
     PackageOfferError,
     list_package_offers,
@@ -2427,7 +2427,7 @@ def _structured_flow_write(
             )
             if continuation is not None:
                 booking_reply = f"{booking_reply}\n\n{continuation[0]}"
-            return (booking_reply, "flow-interpreter:verified-compound-booking")
+            return (booking_reply, "flow-interpreter:deterministic-compound-booking")
         return (booking_reply, "flow-interpreter:verified-booking")
     complete_flow(
         db,
@@ -2760,7 +2760,7 @@ def _run_after_inbound(
             if not batch_result.ok:
                 compound_direct = (
                     batch_result.reply,
-                    "deterministic:compound-package-validation",
+                    "flow-interpreter:deterministic-compound-package-validation",
                 )
             else:
                 compound_prefix_reply = batch_result.reply
@@ -2780,7 +2780,7 @@ def _run_after_inbound(
         elif compound_direct is None:
             compound_direct = (
                 compound_prefix_reply or "تم تنفيذ الطلب المركب الموثق.",
-                "deterministic:compound-package-purchase",
+                "flow-interpreter:deterministic-compound-package-purchase",
             )
     if flow is not None and str(semantic_decision.package_intent) == "purchase":
         cancel_flow(db, flow, run_id=run_id, reason="customer_switched_to_package_purchase")

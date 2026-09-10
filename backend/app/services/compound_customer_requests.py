@@ -336,7 +336,7 @@ def purchase_compound_package_batch(
     created: list[tuple[object, object]] = []
     try:
         for index, (_item, offer) in enumerate(resolved, start=1):
-            offer_id = UUID(str(getattr(offer, "id")))
+            offer_id = UUID(str(offer.id))
             package = purchase_package_offer(
                 db,
                 workspace_id=workspace.id,
