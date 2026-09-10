@@ -1,0 +1,109 @@
+name: Apply Realistic Source Patch
+
+on:
+  push:
+    branches:
+      - test/realistic-system-journeys-v1
+    paths:
+      - .github/workflows/apply-realistic-source-patch.yml
+
+permissions:
+  contents: write
+
+env:
+  ENVIRONMENT: staging
+  DEBUG: "false"
+  DOCS_ENABLED: "false"
+  DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+  MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+  SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_realistic_journey_unused
+  SUPABASE_SECRET_KEY: sb_secret_realistic_journey_unused
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  LLM_PROVIDER: openai
+  OPENAI_MODEL: gpt-5.6-luna
+  OPENAI_FALLBACK_MODEL: gpt-5-mini
+  OPENAI_REASONING_EFFORT: low
+  OPENAI_FALLBACK_REASONING_EFFORT: low
+  LLM_TIMEOUT_SECONDS: "60"
+  LLM_MAX_RETRIES: "2"
+  LLM_REALTIME_MAX_RETRIES: "0"
+  AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
+  CORS_ORIGINS: ""
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/realistic-system-journeys-v1
+      - name: Apply focused source patch
+        working-directory: .
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          interpreter = Path("backend/app/agents/turn_interpreter.py")
+          text = interpreter.read_text(encoding="utf-8")
+          old = '''        "refresh availability for them. For an active "\n        "reschedule flow, select_option is only for a replacement slot that the assistant already presented. "\n'''
+          new = '''        "refresh availability for them. FRESH RESCHEDULE AUTHORIZATION: on the first turn of a "\n        "reschedule request, when the latest customer turn clearly commands changing an existing appointment "\n        "now and supplies an exact replacement date/time, use action=modify with appointment_reschedule and "\n        "capture the exact requested_date/requested_start_time. This is customer write authorization only after "\n        "the backend verifies exactly one matching replacement slot; do not ask for a second confirmation. If "\n        "the customer is only asking whether a replacement time is possible, keep it exploratory and do not "\n        "treat it as write authorization. For an active reschedule flow, select_option is only for a replacement "\n        "slot that the assistant already presented. "\n'''
+          if old not in text:
+              raise SystemExit("Expected reschedule prompt anchor not found")
+          interpreter.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          workflow = Path(".github/workflows/realistic-system-journeys.yml")
+          workflow_text = workflow.read_text(encoding="utf-8")
+          anchor = "      - backend/app/agents/turn_models.py\n"
+          addition = anchor + "      - backend/app/agents/turn_interpreter.py\n"
+          if "      - backend/app/agents/turn_interpreter.py\n" not in workflow_text:
+              if anchor not in workflow_text:
+                  raise SystemExit("Expected workflow path anchor not found")
+              workflow.write_text(workflow_text.replace(anchor, addition, 1), encoding="utf-8")
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging secrets
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$DATABASE_URL"
+      - name: Apply staging migrations
+        run: alembic upgrade head
+      - name: Focused unit tests
+        run: python -m pytest tests/test_clinic_grounding_compatibility.py tests/test_unified_turn_interpreter.py -q
+      - name: Verify paid reschedule only
+        run: |
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/realistic-system-journeys.json \
+            --scenario paid_reschedule_no_double_charge
+      - name: Upload manual-review report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realistic-paid-reschedule-source-patch
+          path: backend/artifacts/realistic-system-journeys.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Commit verified source patch
+        if: success()
+        working-directory: .
+        run: |
+          git config user.name "Girges Ezzat"
+          git config user.email "girgesadam1@gmail.com"
+          git add backend/app/agents/turn_interpreter.py .github/workflows/realistic-system-journeys.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "Recognize explicit first-turn reschedule authorization"
+          git push origin HEAD:test/realistic-system-journeys-v1
