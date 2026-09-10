@@ -1,4 +1,4 @@
-name: Simplified Cancellation Turn Trace
+name: Verify Structured Cancellation Fallback
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_semantic_trace_unused
-  SUPABASE_SECRET_KEY: sb_secret_semantic_trace_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_cancel_fallback_unused
+  SUPABASE_SECRET_KEY: sb_secret_cancel_fallback_unused
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   LLM_PROVIDER: openai
   OPENAI_MODEL: gpt-5.6-luna
@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  trace:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -52,25 +52,99 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Apply semantic-input simplification in working tree
+      - name: Apply structured-query fallback in working tree
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('app/agents/turn_interpreter.py')
+          path = Path('app/services/agent_chat.py')
           text = path.read_text(encoding='utf-8')
-          old_catalog = '''    semantic_catalog = deepcopy(clinic_catalog)\n    semantic_catalog.pop("branches", None)\n\n    doctors = semantic_catalog.get("doctors")\n    if isinstance(doctors, list):\n        for doctor in doctors:\n            if not isinstance(doctor, dict):\n                continue\n            doctor.pop("branch_ids", None)\n            doctor.pop("scheduled_branch_ids", None)\n\n    return semantic_catalog\n'''
-          new_catalog = '''    semantic_catalog = deepcopy(clinic_catalog)\n    semantic_catalog.pop("branches", None)\n\n    services = semantic_catalog.get("services")\n    if isinstance(services, list):\n        for service in services:\n            if isinstance(service, dict):\n                service.pop("doctor_ids", None)\n\n    doctors = semantic_catalog.get("doctors")\n    if isinstance(doctors, list):\n        for doctor in doctors:\n            if not isinstance(doctor, dict):\n                continue\n            doctor.pop("branch_ids", None)\n            doctor.pop("scheduled_branch_ids", None)\n            doctor.pop("working_hours", None)\n\n    return semantic_catalog\n'''
-          if old_catalog not in text:
-              raise RuntimeError('semantic catalog anchor not found')
-          text = text.replace(old_catalog, new_catalog, 1)
+          old_import = 'from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools\n'
+          new_import = 'from app.agents.tools.clinic_tools import (\n    AgentToolContext,\n    _normalize_lookup_text,\n    build_clinic_tools,\n)\n'
+          if old_import not in text:
+              raise RuntimeError('clinic_tools import anchor not found')
+          text = text.replace(old_import, new_import, 1)
 
-          start = text.index('    semantic_catalog = _semantic_catalog_for_single_location(clinic_catalog)\n', text.index('def interpret_customer_turn('))
-          end = text.index('\n\n    primary_name =', start)
-          replacement = '''    semantic_catalog = _semantic_catalog_for_single_location(clinic_catalog)\n    context = HumanMessage(\n        content=(\n            "PostgreSQL clinic catalog (canonical IDs; do not invent IDs):\\n"\n            f"{json.dumps(semantic_catalog, ensure_ascii=False, default=str, separators=(',', ':'))}\\n\\n"\n            "Persisted workflow state:\\n"\n            f"{json.dumps(state_payload, ensure_ascii=False, default=str, separators=(',', ':'))}\\n\\n"\n            "Recent conversation for reference resolution only:\\n"\n            f"{_recent_conversation_excerpt(history)}\\n\\n"\n            "Latest-turn authority reminder: before inheriting any service, doctor, date, or time from "\n            "persisted workflow state, first ground every such entity explicitly stated in the latest "\n            "customer turn. Persisted values may fill only fields the latest turn leaves unchanged. In a "\n            "reschedule flow, appointment_id is the canonical existing appointment when one supplied appointment "\n            "is clearly identified; appointment_reference is its customer-facing description, while requested_date "\n            "and requested_start_time are the replacement target.\\n\\n"\n            "Latest-turn consistency reminder: if presented booking/reschedule options exist and "\n            "the latest customer turn explicitly chooses one option or exact clock time and authorizes "\n            "the action, capture that choice in selection_index/selection_time or requested_start_time "\n            "and include the matching write capability. Never infer a choice the customer did not state."\n        )\n    )\n    user = HumanMessage(content=_latest_customer_turn(history))\n'''
-          text = text[:start] + replacement + text[end:]
-          text = text.replace('messages=[system, user]', 'messages=[system, context, user]')
+          old_service = '''        if service_ids:\n            candidates = [\n                row for row in candidates if str(row.get("service_id") or "") in service_ids\n            ]\n            filters_applied += 1\n\n        doctor_ids: list[str] = []\n'''
+          new_service = '''        if service_ids:\n            candidates = [\n                row for row in candidates if str(row.get("service_id") or "") in service_ids\n            ]\n            filters_applied += 1\n        else:\n            service_query = str(getattr(hints, "service_query", None) or "").strip()\n            normalized_service_query = _normalize_lookup_text(service_query)\n            if normalized_service_query:\n                candidates = [\n                    row\n                    for row in candidates\n                    if _normalize_lookup_text(str(row.get("service_name") or ""))\n                    == normalized_service_query\n                ]\n                filters_applied += 1\n\n        doctor_ids: list[str] = []\n'''
+          if old_service not in text:
+              raise RuntimeError('service filter anchor not found')
+          text = text.replace(old_service, new_service, 1)
+
+          old_doctor = '''        if doctor_ids:\n            candidates = [\n                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids\n            ]\n            filters_applied += 1\n\n        requested_date = str(hints.requested_date or "").strip()\n'''
+          new_doctor = '''        if doctor_ids:\n            candidates = [\n                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids\n            ]\n            filters_applied += 1\n        else:\n            doctor_query = str(getattr(hints, "doctor_query", None) or "").strip()\n            normalized_doctor_query = _normalize_lookup_text(doctor_query)\n            if normalized_doctor_query:\n                candidates = [\n                    row\n                    for row in candidates\n                    if _normalize_lookup_text(str(row.get("doctor_name") or ""))\n                    == normalized_doctor_query\n                ]\n                filters_applied += 1\n\n        requested_date = str(hints.requested_date or "").strip()\n'''
+          if old_doctor not in text:
+              raise RuntimeError('doctor filter anchor not found')
+          text = text.replace(old_doctor, new_doctor, 1)
           path.write_text(text, encoding='utf-8')
           PY
-      - name: Trace only the cancellation follow-up
-        run: python -m scripts.trace_cancellation_semantics
+      - name: Add focused worktree tests
+        run: |
+          cat >> tests/test_verified_cancellation_execution.py <<'PY'
+
+          def test_unique_structured_service_query_resolves_without_raw_customer_text(monkeypatch):
+              calls = _capture(monkeypatch)
+              result = agent_chat._verified_cancellation_action(
+                  tool_context=object(),
+                  policy=_policy(),
+                  decision=_decision(service_query="هيدرافيشل"),
+                  clinic_catalog=_catalog(),
+              )
+              assert result is not None
+              assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"
+              assert len(calls) == 1
+
+
+          def test_structured_service_query_stays_ambiguous_for_two_matching_appointments(monkeypatch):
+              calls = _capture(monkeypatch)
+              result = agent_chat._verified_cancellation_action(
+                  tool_context=object(),
+                  policy=_policy(),
+                  decision=_decision(service_query="هيدرافيشل"),
+                  clinic_catalog=_catalog(duplicate_hydra=True),
+              )
+              assert result is None
+              assert calls == []
+
+
+          def test_unknown_structured_service_query_never_writes(monkeypatch):
+              calls = _capture(monkeypatch)
+              result = agent_chat._verified_cancellation_action(
+                  tool_context=object(),
+                  policy=_policy(),
+                  decision=_decision(service_query="خدمة غير موجودة"),
+                  clinic_catalog=_catalog(),
+              )
+              assert result is None
+              assert calls == []
+          PY
+      - name: Focused tests without model calls
+        run: |
+          python -m pytest tests/test_verified_cancellation_execution.py -q
+          python -m compileall -q app/services/agent_chat.py
+      - name: Run real cancellation journey once
+        run: |
+          mkdir -p artifacts
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/cancellation-query-fallback.json \
+            --scenario ambiguous_cancel_two_appointments
+      - name: Require exact DB behavior
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/cancellation-query-fallback.json').read_text(encoding='utf-8'))
+          scenario = report['scenarios'][0]
+          after = {row['service']: row['status'] for row in scenario['after']['appointments']}
+          cancel_actions = [row for row in scenario['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
+          assert after['هيدرافيشل'] == 'cancelled', after
+          assert after['ليزر إزالة الشعر - إبط'] == 'confirmed', after
+          assert len(cancel_actions) == 1, cancel_actions
+          print(json.dumps({
+              'assistant': scenario['turns'][-1]['assistant'],
+              'after': after,
+              'cancel_actions': len(cancel_actions),
+              'tokens': scenario['tokens'],
+          }, ensure_ascii=False, indent=2))
+          PY
