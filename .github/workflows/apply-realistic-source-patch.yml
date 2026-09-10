@@ -1,4 +1,4 @@
-name: Verify Production Ownership Journey
+name: Verify Isolated Ownership Handback
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_ownership_journey_unused
-  SUPABASE_SECRET_KEY: sb_secret_ownership_journey_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_ownership_isolated_unused
+  SUPABASE_SECRET_KEY: sb_secret_ownership_isolated_unused
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   LLM_PROVIDER: openai
   OPENAI_MODEL: gpt-5.6-luna
@@ -52,30 +52,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Use production ownership functions in runner
+      - name: Isolate handback from cross-owner context recall
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('scripts/run_realistic_system_journeys.py')
           text = path.read_text(encoding='utf-8')
-          old_import = 'from app.services.agent_chat import run_agent_chat\n'
-          new_import = 'from app.services.agent_chat import run_agent_chat\nfrom app.services.conversation_ownership import return_to_ai, transfer_to_human\n'
-          if old_import not in text:
-              raise RuntimeError('agent_chat import anchor not found')
-          text = text.replace(old_import, new_import, 1)
-
-          old_takeover = '''                conversation.owner_type = "human"\n                conversation.ownership_changed_at = datetime.now(UTC)\n                db.flush()\n'''
-          new_takeover = '''                transfer_to_human(conversation)\n                db.flush()\n'''
-          if old_takeover not in text:
-              raise RuntimeError('takeover block anchor not found')
-          text = text.replace(old_takeover, new_takeover, 1)
-
-          old_return = '''                conversation.owner_type = "ai"\n                conversation.assigned_user_id = None\n                conversation.ownership_changed_at = datetime.now(UTC)\n                db.flush()\n'''
-          new_return = '''                return_to_ai(conversation)\n                db.flush()\n'''
-          if old_return not in text:
-              raise RuntimeError('return block anchor not found')
-          text = text.replace(old_return, new_return, 1)
-          path.write_text(text, encoding='utf-8')
+          old = 'f"رجعت تاني، لو نفس الميعاد {slot.date_text} الساعة {slot.time_text} لسه متاح احجزهولي.",'
+          new = 'f"رجعت تاني، عايز أحجز هيدرافيشل مع {slot.doctor_name} يوم {slot.date_text} الساعة {slot.time_text}.",'
+          if old not in text:
+              raise RuntimeError('handback message anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Ownership regression tests without model calls
         run: |
@@ -84,43 +71,50 @@ jobs:
             tests/test_conversation_ownership_core.py \
             tests/test_conversation_ownership_hardening.py -q
           python -m compileall -q scripts/run_realistic_system_journeys.py
-      - name: Run human takeover journey
+      - name: Run isolated human takeover journey
         run: |
           mkdir -p artifacts
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
-            --report artifacts/human-takeover-production.json \
+            --report artifacts/human-takeover-isolated.json \
             --scenario human_takeover_and_return
-      - name: Verify ownership behavior
+      - name: Verify silence and fresh-inbound booking
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path('artifacts/human-takeover-production.json').read_text(encoding='utf-8'))
+          report = json.loads(Path('artifacts/human-takeover-isolated.json').read_text(encoding='utf-8'))
           scenario = report['scenarios'][0]
           turns = scenario['turns']
-          assert scenario['execution_error'] is None, scenario['execution_error']
-          assert len(turns) == 3, turns
-          assert turns[1]['agent_paused'] is True, turns[1]
-          assert turns[1]['tokens']['model_calls'] == 0, turns[1]['tokens']
-          assert scenario['conversation']['owner_type'] == 'ai', scenario['conversation']
-          assert scenario['conversation']['status'] == 'open', scenario['conversation']
+          appointments = scenario['after']['appointments']
+          bookings = [a for a in scenario['agent_actions'] if a['tool'] == 'book_appointment' and a['status'] == 'success']
+          assert scenario['execution_error'] is None
+          assert turns[1]['agent_paused'] is True
+          assert turns[1]['tokens']['model_calls'] == 0
+          assert turns[1]['assistant'] is None
+          assert scenario['conversation']['owner_type'] == 'ai'
+          assert scenario['conversation']['status'] == 'open'
+          assert len(appointments) == 1, appointments
+          assert appointments[0]['service'] == 'هيدرافيشل', appointments
+          assert appointments[0]['status'] == 'confirmed', appointments
+          assert len(bookings) == 1, bookings
           print(json.dumps({
               'turns': [{
                   'turn': row['turn'],
                   'assistant': row['assistant'],
-                  'agent_paused': row['agent_paused'],
+                  'paused': row['agent_paused'],
                   'tokens': row['tokens']['total_tokens'],
               } for row in turns],
-              'conversation': scenario['conversation'],
+              'after': appointments,
+              'bookings': len(bookings),
               'total_tokens': scenario['tokens']['total_tokens'],
           }, ensure_ascii=False, indent=2))
           PY
-      - name: Commit verified runner correction
+      - name: Commit verified scenario isolation
         run: |
           git config user.name "Tia CI"
           git config user.email "tia-ci@users.noreply.github.com"
           git add scripts/run_realistic_system_journeys.py
           git diff --cached --quiet && exit 0
-          git commit -m "Use production ownership transitions in realistic runner"
+          git commit -m "Isolate handback behavior in realistic ownership journey"
           git push origin HEAD:test/realistic-system-journeys-v1
