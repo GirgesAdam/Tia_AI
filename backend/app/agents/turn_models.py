@@ -128,7 +128,14 @@ class SemanticEntityHints(BaseModel):
     )
     appointment_id: str | None = Field(
         default=None,
-        description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",
+        description=(
+            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "
+            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "
+            "appointment, copy that appointment exact ID here. A direct answer to the assistant immediately preceding question about "
+            "which appointment to act on is a selection when it uniquely identifies one appointment. An appointment explicitly said "
+            "to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "
+            "appointment genuinely still fits."
+        ),
     )
     requested_date: str | None = Field(default=None, description="Desired appointment date YYYY-MM-DD from the latest customer turn.")
     requested_start_time: str | None = Field(
