@@ -1,12 +1,14 @@
 # Oracle n8n production runtime
 
-This package runs only the external automation runtime on an Oracle VM:
+This package runs the external automation scheduler on an Oracle VM:
 
 - n8n
 - a private PostgreSQL database used only by n8n
 - Caddy for public HTTPS
 
-The Tia FastAPI backend stays on Railway. Tia/PostgreSQL remains the source of truth for automation eligibility, timing, retries, booking state, CRM state, and financial logic. n8n only wakes Tia and executes external WhatsApp transport.
+The Tia FastAPI backend stays on Railway. Tia/PostgreSQL remains the source of truth for automation eligibility, timing, retries, booking state, CRM state, clinic-sync checkpoints, and financial logic.
+
+WhatsApp transport is **not** owned by Oracle n8n anymore. Meta webhooks go directly to Tia, and Tia sends directly to Meta using encrypted per-clinic credentials. The Railway service `tia-whatsapp-transport-waker` wakes that native transport.
 
 ## Before you start
 
@@ -27,28 +29,20 @@ cd deploy/oracle-n8n
 cp .env.example .env
 ```
 
-Edit `.env` and set the real n8n hostname. Generate two independent random values:
+Edit `.env` and set the real n8n hostname. Generate two independent random values for the local n8n database password and encryption key:
 
 ```bash
 openssl rand -hex 32
 openssl rand -hex 32
 ```
 
-Use one for `N8N_DB_PASSWORD` and the other for `N8N_ENCRYPTION_KEY`. Never commit `.env`.
+Never commit `.env`.
 
-The production Tia API origin is already documented in `.env.example`:
-
-```text
-https://tia-api-production-54c5.up.railway.app
-```
-
-Before starting, run the committed validation script. It refuses to start if required values are missing or still use example placeholders:
+Start the stack:
 
 ```bash
 bash ./start-production.sh
 ```
-
-The script validates the Compose file, pulls the pinned images, starts the stack, and prints container status.
 
 Manual equivalent:
 
@@ -59,54 +53,79 @@ docker compose up -d
 docker compose ps
 ```
 
-Check logs:
+## Active Tia workflow on Oracle
 
-```bash
-docker compose logs --tail=100 n8n
-docker compose logs --tail=100 caddy
-```
-
-Once DNS is resolving, Caddy obtains and renews the HTTPS certificate automatically.
-
-## Tia runtime configuration
-
-The package sets:
+Only this workflow should be active for the current production architecture:
 
 ```text
-TIA_API_BASE_URL=https://tia-api-production-54c5.up.railway.app
-N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+n8n/workflows/tia_automation_scheduler.json
 ```
 
-The env-access setting is required because the committed Tia workflows read `TIA_API_BASE_URL` through `$env`. Keep this n8n instance dedicated to Tia and do not let untrusted users author workflows on it.
+It wakes Tia once per minute for:
 
-Import these workflow JSON files from `n8n/workflows/`:
+- reminder / CRM automation planning and execution;
+- connector-driven clinic-sync ticks.
 
-- `tia_automation_scheduler.json`
-- `tia_whatsapp_outbox_worker.json`
-- `tia_whatsapp_inbound_status.json`
+It does not receive patient WhatsApp webhooks and does not send provider messages.
 
-Do not publish them until the production adapter and worker credentials have been created.
+Use an n8n HTTP Header Auth credential containing the one-time Tia automation worker token:
 
-## Credentials that stay only in n8n
+```text
+Header: X-Automation-Token
+Value: <worker_token>
+```
 
-Create credentials in the n8n UI for:
+Never put that token in Git, workflow JSON, screenshots, or chat logs.
 
-- Meta WhatsApp Business Cloud API
-- `X-Channel-Token` returned by Tia channel provisioning
-- `X-Automation-Token` returned by Tia worker provisioning
+## WhatsApp is native to Tia
 
-Never put those values in Git, `.env.example`, screenshots, or chat messages.
+Current production path:
 
-## First activation order
+```text
+Customer WhatsApp
+→ Meta webhook
+→ Tia /api/v1/channels/whatsapp/webhook/{connection_id}
+→ CRM / AI / Booking / Handoff
+→ Tia message_dispatches
+→ Tia native Meta transport
+→ Meta Graph API
+→ Meta delivery/status webhook
+→ Tia channel_delivery_events
+```
 
-1. Keep the Tia WhatsApp connection and old worker paused.
-2. Create a new production automation worker/token.
-3. Configure the worker credential in n8n and publish only the scheduler.
-4. Confirm the worker heartbeat becomes fresh in Tia.
-5. Configure the WhatsApp credential and channel token.
-6. Publish inbound/status and outbox workflows.
-7. Send the first provider test only to a WhatsApp number you control.
-8. Confirm `sent`, `delivered`, and inbound reply handling before enabling patient-facing optional automations.
+The Railway service `tia-whatsapp-transport-waker` calls:
+
+```text
+POST /api/v1/channels/whatsapp/transport/tick
+```
+
+using the platform transport token. Clinic Meta credentials stay encrypted in Tia and are never stored in Oracle n8n.
+
+`n8n/workflows/tia_whatsapp_outbox_worker.json` remains only a compatible alternate/reference waker for development or recovery. Do not activate it in production while the Railway waker is active.
+
+## Retired Oracle WhatsApp workflows
+
+Any previously imported Oracle workflow that does one of the following must remain disabled:
+
+- receives WhatsApp through an n8n WhatsApp Trigger;
+- posts inbound messages to the generic Tia channel adapter;
+- claims the generic Tia channel outbox;
+- sends through n8n WhatsApp provider nodes;
+- reports provider delivery state back through the old adapter.
+
+Do not repair old `X-Channel-Token` authentication to keep these workflows alive. They are superseded by Tia's native Meta transport.
+
+## Import / wire scheduler
+
+`import-production-workflows.sh` and `wire-tia-runtime.sh` now prepare only `tia_automation_scheduler.json`.
+
+Generate the scheduler token file with:
+
+```bash
+bash ./generate-runtime-tokens.sh
+```
+
+Then wire/import the scheduler and configure its `X-Automation-Token` credential without printing the raw token.
 
 ## Production update procedure
 
@@ -121,32 +140,25 @@ cd deploy/oracle-n8n
 bash ./start-production.sh
 ```
 
-This keeps the Oracle runtime aligned with the same production branch as the application source.
+After updating, verify that the scheduler is active and retired WhatsApp workflows remain inactive.
 
 ## Backups
 
-The n8n PostgreSQL database contains workflow state and encrypted credentials. The encryption key is required to decrypt those credentials, so protect both.
+The n8n PostgreSQL database contains workflow state and encrypted credentials. Protect both the database backup and `N8N_ENCRYPTION_KEY`.
 
-Example database backup:
+Example backup:
 
 ```bash
 mkdir -p backups
 docker compose exec -T n8n_db pg_dump -U n8n n8n > "backups/n8n-$(date +%F-%H%M).sql"
 ```
 
-Copy backups off the VM. Keep `N8N_ENCRYPTION_KEY` in a separate secure password manager or secret store; do not store it inside the database backup.
+Copy backups off the VM.
 
-## Updating n8n
+## Runtime verification
 
-The image is intentionally pinned rather than using `latest`. Review n8n release notes and security advisories before changing the version in `docker-compose.yml`, then:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-After updates, verify the three Tia workflows and run the n8n security audit:
-
-```bash
-docker compose exec n8n n8n audit
-```
+1. Confirm Oracle n8n and Caddy are healthy.
+2. Confirm `tia_automation_scheduler.json` has a fresh worker heartbeat in Tia.
+3. Confirm Railway `tia-whatsapp-transport-waker` logs return HTTP 200 from the native transport tick.
+4. Confirm no Oracle n8n workflow is repeatedly calling a retired generic channel-adapter outbox endpoint.
+5. Test real provider traffic only with a phone number you control.
