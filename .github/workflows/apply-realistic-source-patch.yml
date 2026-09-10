@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: test/realistic-system-journeys-v1
-      - name: Apply focused cancellation patch
+      - name: Apply canonical cancellation target patch
         working-directory: .
         run: |
           python - <<'PY'
@@ -51,42 +51,344 @@ jobs:
 
           agent_path = Path("backend/app/services/agent_chat.py")
           text = agent_path.read_text(encoding="utf-8")
+          old = '''def _verified_cancellation_action(
+              *,
+              tool_context: AgentToolContext,
+              policy: CapabilityPolicyDecision,
+              decision: SemanticCapabilityDecision,
+              clinic_catalog: dict[str, object],
+          ) -> tuple[str, str] | None:
+              """Execute only a semantically selected, current-patient appointment cancellation.
 
-          helper_anchor = '''def _flow_type_from_capabilities(capabilities: set[str]) -> str | None:\n'''
-          helper = '''def _verified_cancellation_action(\n    *,\n    tool_context: AgentToolContext,\n    policy: CapabilityPolicyDecision,\n    decision: SemanticCapabilityDecision,\n    clinic_catalog: dict[str, object],\n) -> tuple[str, str] | None:\n    """Execute only a semantically selected, current-patient appointment cancellation.\n\n    The interpreter selects a canonical appointment ID from the verified current-patient\n    catalog. Python never matches customer wording here: it only rechecks that exact ID\n    against the same verified appointment set before authorizing the write.\n    """\n    if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:\n        return None\n    appointment_id = str(decision.entity_hints.appointment_id or "").strip()\n    if not appointment_id:\n        return None\n    rows = clinic_catalog.get("appointments")\n    if not isinstance(rows, list):\n        return None\n    selected = next(\n        (\n            row\n            for row in rows\n            if isinstance(row, dict)\n            and str(row.get("appointment_id") or row.get("id") or "") == appointment_id\n        ),\n        None,\n    )\n    if selected is None:\n        return None\n\n    result = _invoke_authorized_tool(\n        tool_context=tool_context,\n        policy=policy,\n        tool_name="cancel_appointment",\n        arguments={\n            "appointment_id": appointment_id,\n            "reason": "Customer explicitly requested cancellation.",\n        },\n    )\n    if not result or result.get("ok") is not True:\n        return None\n\n    service_name = str(selected.get("service_name") or "الموعد").strip()\n    start_label = ""\n    raw_start = selected.get("start_local")\n    if raw_start:\n        try:\n            start = datetime.fromisoformat(str(raw_start))\n            start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"\n        except ValueError:\n            start_label = ""\n    return (\n        f"تمام، ألغيت موعد {service_name}{start_label}.",\n        "deterministic:verified-appointment-cancellation",\n    )\n\n\n'''
-          if helper_anchor not in text:
-              raise SystemExit("Cancellation helper anchor not found")
-          if "def _verified_cancellation_action(" not in text:
-              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+              The interpreter selects a canonical appointment ID from the verified current-patient
+              catalog. Python never matches customer wording here: it only rechecks that exact ID
+              against the same verified appointment set before authorizing the write.
+              """
+              if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:
+                  return None
+              appointment_id = str(decision.entity_hints.appointment_id or "").strip()
+              if not appointment_id:
+                  return None
+              rows = clinic_catalog.get("appointments")
+              if not isinstance(rows, list):
+                  return None
+              selected = next(
+                  (
+                      row
+                      for row in rows
+                      if isinstance(row, dict)
+                      and str(row.get("appointment_id") or row.get("id") or "") == appointment_id
+                  ),
+                  None,
+              )
+              if selected is None:
+                  return None
 
-          direct_anchor = '''        if (\n            prefetch_direct is None\n            and str(semantic_decision.package_intent) in {"purchase", "inquire"}\n        ):\n'''
-          direct_block = '''        if (\n            prefetch_direct is None\n            and grounded_mode\n            and "appointment_cancellation" in set(policy.capabilities)\n        ):\n            prefetch_direct = _verified_cancellation_action(\n                tool_context=tool_context,\n                policy=policy,\n                decision=semantic_decision,\n                clinic_catalog=clinic_catalog,\n            )\n\n'''
-          if direct_anchor not in text:
-              raise SystemExit("Cancellation direct-action anchor not found")
-          if "prefetch_direct = _verified_cancellation_action(" not in text:
-              text = text.replace(direct_anchor, direct_block + direct_anchor, 1)
+              result = _invoke_authorized_tool(
+                  tool_context=tool_context,
+                  policy=policy,
+                  tool_name="cancel_appointment",
+                  arguments={
+                      "appointment_id": appointment_id,
+                      "reason": "Customer explicitly requested cancellation.",
+                  },
+              )
+              if not result or result.get("ok") is not True:
+                  return None
 
-          allowed_anchor = '''            agent_allowed_tools = set(policy.allowed_tools) - prefetched_tool_names\n'''
-          allowed_block = allowed_anchor + '''            if grounded_mode and "appointment_cancellation" in set(policy.capabilities):\n                # Grounded cancellation writes are owned by the deterministic path above.\n                # The conversational fallback may explain or clarify, but cannot guess a target.\n                agent_allowed_tools.discard("cancel_appointment")\n'''
-          if allowed_anchor not in text:
-              raise SystemExit("Allowed-tools anchor not found")
-          if 'agent_allowed_tools.discard("cancel_appointment")' not in text:
-              text = text.replace(allowed_anchor, allowed_block, 1)
+              service_name = str(selected.get("service_name") or "الموعد").strip()
+              start_label = ""
+              raw_start = selected.get("start_local")
+              if raw_start:
+                  try:
+                      start = datetime.fromisoformat(str(raw_start))
+                      start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"
+                  except ValueError:
+                      start_label = ""
+              return (
+                  f"تمام، ألغيت موعد {service_name}{start_label}.",
+                  "deterministic:verified-appointment-cancellation",
+              )
+          '''
+          new = '''def _verified_cancellation_action(
+              *,
+              tool_context: AgentToolContext,
+              policy: CapabilityPolicyDecision,
+              decision: SemanticCapabilityDecision,
+              clinic_catalog: dict[str, object],
+          ) -> tuple[str, str] | None:
+              """Cancel one verified current-patient appointment selected by semantic entities.
 
-          agent_path.write_text(text, encoding="utf-8")
+              The semantic layer owns meaning. Python only intersects canonical IDs/date/time
+              fields with the verified current-patient appointment set, and writes only when the
+              intersection contains exactly one appointment. Customer wording is never parsed here.
+              """
+              if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:
+                  return None
+              rows = clinic_catalog.get("appointments")
+              if not isinstance(rows, list):
+                  return None
+              candidates = [row for row in rows if isinstance(row, dict)]
+              hints = decision.entity_hints
+              appointment_id = str(hints.appointment_id or "").strip()
+
+              if appointment_id:
+                  candidates = [
+                      row
+                      for row in candidates
+                      if str(row.get("appointment_id") or row.get("id") or "") == appointment_id
+                  ]
+              else:
+                  filters_applied = 0
+                  service_ids = []
+                  if hints.service_id:
+                      service_ids = [str(hints.service_id)]
+                  elif getattr(hints, "service_candidate_ids", None):
+                      service_ids = [str(value) for value in hints.service_candidate_ids]
+                  if service_ids:
+                      candidates = [
+                          row for row in candidates if str(row.get("service_id") or "") in service_ids
+                      ]
+                      filters_applied += 1
+
+                  doctor_ids = []
+                  if hints.doctor_id:
+                      doctor_ids = [str(hints.doctor_id)]
+                  elif getattr(hints, "doctor_candidate_ids", None):
+                      doctor_ids = [str(value) for value in hints.doctor_candidate_ids]
+                  if doctor_ids:
+                      candidates = [
+                          row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids
+                      ]
+                      filters_applied += 1
+
+                  requested_date = str(hints.requested_date or "").strip()
+                  if requested_date:
+                      candidates = [
+                          row
+                          for row in candidates
+                          if str(row.get("start_local") or "")[:10] == requested_date
+                      ]
+                      filters_applied += 1
+
+                  requested_time = str(hints.requested_start_time or "").strip()
+                  if requested_time:
+                      normalized_time = requested_time if len(requested_time) != 4 else f"0{requested_time}"
+                      matched: list[dict[str, object]] = []
+                      for row in candidates:
+                          try:
+                              row_time = datetime.fromisoformat(str(row.get("start_local") or "")).strftime("%H:%M")
+                          except ValueError:
+                              continue
+                          if row_time == normalized_time:
+                              matched.append(row)
+                      candidates = matched
+                      filters_applied += 1
+
+                  if filters_applied == 0:
+                      return None
+
+              if len(candidates) != 1:
+                  return None
+              selected = candidates[0]
+              appointment_id = str(selected.get("appointment_id") or selected.get("id") or "").strip()
+              if not appointment_id:
+                  return None
+
+              result = _invoke_authorized_tool(
+                  tool_context=tool_context,
+                  policy=policy,
+                  tool_name="cancel_appointment",
+                  arguments={
+                      "appointment_id": appointment_id,
+                      "reason": "Customer explicitly requested cancellation.",
+                  },
+              )
+              if not result or result.get("ok") is not True:
+                  return None
+
+              service_name = str(selected.get("service_name") or "الموعد").strip()
+              start_label = ""
+              raw_start = selected.get("start_local")
+              if raw_start:
+                  try:
+                      start = datetime.fromisoformat(str(raw_start))
+                      start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"
+                  except ValueError:
+                      start_label = ""
+              return (
+                  f"تمام، ألغيت موعد {service_name}{start_label}.",
+                  "deterministic:verified-appointment-cancellation",
+              )
+          '''
+          # Workflow YAML indentation adds ten spaces inside this block. Dedent both source templates.
+          import textwrap
+          old = textwrap.dedent(old)
+          new = textwrap.dedent(new)
+          if old not in text:
+              raise SystemExit("Current cancellation helper not found")
+          agent_path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           interpreter_path = Path("backend/app/agents/turn_interpreter.py")
           interpreter = interpreter_path.read_text(encoding="utf-8")
-          prompt_anchor = '        "EXISTING APPOINTMENT EDITS:'
-          cancellation_prompt = '''        "APPOINTMENT CANCELLATION: include appointment_cancellation when the latest turn requests cancellation, "\n        "including a direct clarification to the assistant's immediately preceding question about which appointment "\n        "to cancel. Select appointment_id only from supplied current-patient appointments and only when the latest "\n        "turn plus recent reference context identifies exactly one appointment. If more than one appointment still "\n        "fits, leave appointment_id null and preserve ambiguity; never guess. A clarification such as identifying the "\n        "service, doctor, date, or previously presented appointment can resolve the canonical appointment_id without "\n        "requiring the customer to repeat the cancellation request.\\n\\n"\n'''
-          if "APPOINTMENT CANCELLATION:" not in interpreter:
-              if prompt_anchor not in interpreter:
-                  raise SystemExit("Cancellation prompt anchor not found")
-              interpreter = interpreter.replace(prompt_anchor, cancellation_prompt + prompt_anchor, 1)
-          interpreter_path.write_text(interpreter, encoding="utf-8")
+          old_grounding = (
+              '        "When current-patient appointments are supplied and a reschedule turn clearly identifies one existing "\n'
+              '        "appointment from its displayed date/time/service/doctor, set appointment_id to that exact catalog ID; "\n'
+          )
+          new_grounding = (
+              '        "When current-patient appointments are supplied and a reschedule or cancellation turn clearly identifies one existing "\n'
+              '        "appointment from its displayed date/time/service/doctor, set appointment_id to that exact catalog ID; "\n'
+          )
+          if old_grounding not in interpreter:
+              raise SystemExit("Grounding wording anchor not found")
+          interpreter_path.write_text(interpreter.replace(old_grounding, new_grounding, 1), encoding="utf-8")
 
           test_path = Path("backend/tests/test_verified_cancellation_execution.py")
-          test_path.write_text('''from types import SimpleNamespace\n\nfrom app.services import agent_chat\n\n\ndef _policy():\n    return SimpleNamespace(capabilities={"appointment_cancellation"})\n\n\ndef _decision(appointment_id):\n    return SimpleNamespace(entity_hints=SimpleNamespace(appointment_id=appointment_id))\n\n\ndef _catalog():\n    return {\n        "appointments": [\n            {\n                "id": "appt-hydra",\n                "appointment_id": "appt-hydra",\n                "service_name": "هيدرافيشل",\n                "start_local": "2026-09-12T10:00:00+03:00",\n            },\n            {\n                "id": "appt-laser",\n                "appointment_id": "appt-laser",\n                "service_name": "ليزر إزالة الشعر - إبط",\n                "start_local": "2026-09-13T11:00:00+03:00",\n            },\n        ]\n    }\n\n\ndef test_verified_cancellation_requires_exact_current_patient_appointment(monkeypatch):\n    calls = []\n\n    def fake_invoke(**kwargs):\n        calls.append(kwargs)\n        return {"ok": True}\n\n    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke)\n\n    assert agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision(None),\n        clinic_catalog=_catalog(),\n    ) is None\n    assert agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision("not-a-current-appointment"),\n        clinic_catalog=_catalog(),\n    ) is None\n    assert calls == []\n\n\ndef test_verified_cancellation_executes_only_semantically_selected_id(monkeypatch):\n    calls = []\n\n    def fake_invoke(**kwargs):\n        calls.append(kwargs)\n        return {"ok": True}\n\n    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke)\n\n    result = agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision("appt-hydra"),\n        clinic_catalog=_catalog(),\n    )\n\n    assert result is not None\n    assert "هيدرافيشل" in result[0]\n    assert result[1] == "deterministic:verified-appointment-cancellation"\n    assert len(calls) == 1\n    assert calls[0]["tool_name"] == "cancel_appointment"\n    assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"\n''', encoding="utf-8")
+          test_path.write_text('''from types import SimpleNamespace
+
+from app.services import agent_chat
+
+
+HYDRA_SERVICE = "service-hydra"
+LASER_SERVICE = "service-laser"
+
+
+def _policy():
+    return SimpleNamespace(capabilities={"appointment_cancellation"})
+
+
+def _hints(**updates):
+    values = {
+        "appointment_id": None,
+        "service_id": None,
+        "service_candidate_ids": [],
+        "doctor_id": None,
+        "doctor_candidate_ids": [],
+        "requested_date": None,
+        "requested_start_time": None,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
+def _decision(**updates):
+    return SimpleNamespace(entity_hints=_hints(**updates))
+
+
+def _catalog(*, duplicate_hydra=False):
+    rows = [
+        {
+            "id": "appt-hydra",
+            "appointment_id": "appt-hydra",
+            "service_id": HYDRA_SERVICE,
+            "service_name": "هيدرافيشل",
+            "doctor_id": "doctor-hala",
+            "start_local": "2026-09-12T10:00:00+03:00",
+        },
+        {
+            "id": "appt-laser",
+            "appointment_id": "appt-laser",
+            "service_id": LASER_SERVICE,
+            "service_name": "ليزر إزالة الشعر - إبط",
+            "doctor_id": "doctor-ahmed",
+            "start_local": "2026-09-13T11:00:00+03:00",
+        },
+    ]
+    if duplicate_hydra:
+        rows.append(
+            {
+                "id": "appt-hydra-2",
+                "appointment_id": "appt-hydra-2",
+                "service_id": HYDRA_SERVICE,
+                "service_name": "هيدرافيشل",
+                "doctor_id": "doctor-hala",
+                "start_local": "2026-09-14T10:00:00+03:00",
+            }
+        )
+    return {"appointments": rows}
+
+
+def _capture(monkeypatch):
+    calls = []
+
+    def fake_invoke(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke)
+    return calls
+
+
+def test_cancellation_without_canonical_target_never_writes(monkeypatch):
+    calls = _capture(monkeypatch)
+    assert agent_chat._verified_cancellation_action(
+        tool_context=object(), policy=_policy(), decision=_decision(), clinic_catalog=_catalog()
+    ) is None
+    assert calls == []
+
+
+def test_unknown_explicit_appointment_id_never_writes(monkeypatch):
+    calls = _capture(monkeypatch)
+    assert agent_chat._verified_cancellation_action(
+        tool_context=object(),
+        policy=_policy(),
+        decision=_decision(appointment_id="not-current"),
+        clinic_catalog=_catalog(),
+    ) is None
+    assert calls == []
+
+
+def test_exact_semantic_appointment_id_executes_once(monkeypatch):
+    calls = _capture(monkeypatch)
+    result = agent_chat._verified_cancellation_action(
+        tool_context=object(),
+        policy=_policy(),
+        decision=_decision(appointment_id="appt-hydra"),
+        clinic_catalog=_catalog(),
+    )
+    assert result is not None
+    assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"
+    assert len(calls) == 1
+
+
+def test_unique_canonical_service_resolves_appointment_without_text_matching(monkeypatch):
+    calls = _capture(monkeypatch)
+    result = agent_chat._verified_cancellation_action(
+        tool_context=object(),
+        policy=_policy(),
+        decision=_decision(service_id=HYDRA_SERVICE),
+        clinic_catalog=_catalog(),
+    )
+    assert result is not None
+    assert "هيدرافيشل" in result[0]
+    assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"
+    assert len(calls) == 1
+
+
+def test_same_service_multiple_appointments_stays_ambiguous(monkeypatch):
+    calls = _capture(monkeypatch)
+    result = agent_chat._verified_cancellation_action(
+        tool_context=object(),
+        policy=_policy(),
+        decision=_decision(service_id=HYDRA_SERVICE),
+        clinic_catalog=_catalog(duplicate_hydra=True),
+    )
+    assert result is None
+    assert calls == []
+
+
+def test_structured_date_can_narrow_same_service_to_one(monkeypatch):
+    calls = _capture(monkeypatch)
+    result = agent_chat._verified_cancellation_action(
+        tool_context=object(),
+        policy=_policy(),
+        decision=_decision(service_id=HYDRA_SERVICE, requested_date="2026-09-14"),
+        clinic_catalog=_catalog(duplicate_hydra=True),
+    )
+    assert result is not None
+    assert calls[0]["arguments"]["appointment_id"] == "appt-hydra-2"
+    assert len(calls) == 1
+''', encoding="utf-8")
           PY
       - uses: actions/setup-python@v5
         with:
@@ -119,11 +421,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: realistic-cancellation-fix
+          name: realistic-cancellation-canonical-target
           path: backend/artifacts/realistic-system-journeys.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Commit verified cancellation patch
+      - name: Commit verified cancellation target patch
         if: success()
         working-directory: .
         run: |
@@ -131,5 +433,5 @@ jobs:
           git config user.email "girgesadam1@gmail.com"
           git add backend/app/services/agent_chat.py backend/app/agents/turn_interpreter.py backend/tests/test_verified_cancellation_execution.py
           git diff --cached --quiet && exit 0
-          git commit -m "Execute grounded appointment cancellations safely"
+          git commit -m "Resolve cancellation targets from canonical entities"
           git push origin HEAD:test/realistic-system-journeys-v1
