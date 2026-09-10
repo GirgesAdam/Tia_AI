@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
 from app.core.doctor_names import normalize_doctor_name_parts
 from app.database.session import get_db
+from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
@@ -79,12 +81,7 @@ def _active_service_ids(
 
 
 def _operational_branch(db: Session, workspace: Workspace) -> Branch:
-    """Resolve the hidden scheduling location for the branchless product UI.
-
-    The canonical booking schema still requires a branch row. Single-location clinics
-    should not have to manage that implementation detail, so prefer an active branch
-    named after the workspace and otherwise fall back deterministically.
-    """
+    """Resolve the hidden scheduling location used by the branchless product UI."""
     branch = db.scalar(
         select(Branch)
         .where(
@@ -404,6 +401,24 @@ def remove_doctor_from_admin(
     )
     if doctor is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+
+    future_appointment_id = db.scalar(
+        select(Appointment.id)
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.doctor_id == doctor.id,
+            Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            Appointment.start_at >= datetime.now(UTC),
+        )
+        .limit(1)
+    )
+    if future_appointment_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Doctor still has upcoming appointments. Reassign or cancel them before removing the doctor."
+            ),
+        )
 
     doctor.is_active = False
     doctor.booking_enabled = False
