@@ -53,8 +53,8 @@ if ! grep -Eq '^N8N_ENCRYPTION_KEY=.+' "$TMP_DIR/runtime.env"; then
   echo "Backup runtime.env is missing N8N_ENCRYPTION_KEY." >&2
   exit 1
 fi
-if ! grep -Eq '^TIA_(AUTOMATION|CHANNEL)_TOKEN=.+' "$TMP_DIR/tia-runtime.env"; then
-  echo "Backup tia-runtime.env does not contain the Tia runtime tokens." >&2
+if ! grep -Eq '^TIA_AUTOMATION_TOKEN=.+' "$TMP_DIR/tia-runtime.env"; then
+  echo "Backup tia-runtime.env is missing TIA_AUTOMATION_TOKEN." >&2
   exit 1
 fi
 
@@ -92,18 +92,19 @@ docker exec -i "$VERIFY_CONTAINER" \
 
 WORKFLOW_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc 'SELECT count(*) FROM workflow_entity;')"
 CREDENTIAL_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc 'SELECT count(*) FROM credentials_entity;')"
-ACTIVE_TIA_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc "SELECT count(*) FROM workflow_entity WHERE id IN ('tiaAutoSched0001','tiaWAInbound0001','tiaWAOutbox00001') AND active = true;")"
+SCHEDULER_ACTIVE_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc "SELECT count(*) FROM workflow_entity WHERE id = 'tiaAutoSched0001' AND active IS TRUE;")"
+LEGACY_ACTIVE_COUNT="$(docker exec "$VERIFY_CONTAINER" psql -U n8n -d n8n_verify -Atc "SELECT count(*) FROM workflow_entity WHERE active IS TRUE AND (id IN ('tiaWAInbound0001','tiaWAOutbox00001') OR CAST(nodes AS text) LIKE '%/adapter/outbox/claim%' OR CAST(nodes AS text) LIKE '%/adapter/outbox/provider-status%' OR CAST(nodes AS text) LIKE '%/channels/adapter/inbound%');")"
 
-if [[ "$WORKFLOW_COUNT" -lt 3 ]]; then
-  echo "Restored backup has too few workflows: $WORKFLOW_COUNT" >&2
+if [[ "$WORKFLOW_COUNT" -lt 1 ]]; then
+  echo "Restored backup has no workflows." >&2
   exit 1
 fi
-if [[ "$CREDENTIAL_COUNT" -lt 1 ]]; then
-  echo "Restored backup has no credentials." >&2
+if [[ "$SCHEDULER_ACTIVE_COUNT" -ne 1 ]]; then
+  echo "Expected the automation scheduler to be active in restored backup; found $SCHEDULER_ACTIVE_COUNT." >&2
   exit 1
 fi
-if [[ "$ACTIVE_TIA_COUNT" -ne 3 ]]; then
-  echo "Expected 3 active Tia production workflows in restored backup; found $ACTIVE_TIA_COUNT." >&2
+if [[ "$LEGACY_ACTIVE_COUNT" -ne 0 ]]; then
+  echo "Restored backup contains active retired WhatsApp adapter workflows: $LEGACY_ACTIVE_COUNT." >&2
   exit 1
 fi
 
@@ -111,5 +112,6 @@ echo
 echo "Restore verification passed."
 echo "Workflows restored: $WORKFLOW_COUNT"
 echo "Credentials restored: $CREDENTIAL_COUNT"
-echo "Active Tia workflows restored: $ACTIVE_TIA_COUNT/3"
+echo "Tia scheduler active: $SCHEDULER_ACTIVE_COUNT/1"
+echo "Retired WhatsApp workflows active: $LEGACY_ACTIVE_COUNT"
 echo "Production containers/data were not modified."

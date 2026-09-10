@@ -56,4 +56,4 @@ systemctl status tia-n8n-healthcheck.service --no-pager -l | tail -20
 
 echo
 echo "Schedule: 2 minutes after boot, then every 5 minutes."
-echo "Recovery scope: Docker containers only; production database contents are never reset."
+echo "Recovery scope: Docker containers plus Tia workflow publication drift. Production data is never reset."

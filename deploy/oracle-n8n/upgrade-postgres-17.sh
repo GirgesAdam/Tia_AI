@@ -83,8 +83,8 @@ echo "Owner users:"
 docker compose exec -T n8n_db psql -U n8n -d n8n -Atc 'select count(*) from "user" where email is not null;'
 
 echo
-echo "Tia workflows:"
-docker compose exec -T n8n_db psql -U n8n -d n8n -c "select id, name, active from workflow_entity where id in ('tiaAutoSched0001','tiaWAInbound0001','tiaWAOutbox00001') order by name;"
+echo "Tia-related workflows:"
+docker compose exec -T n8n_db psql -U n8n -d n8n -c "select id, name, active from workflow_entity where id = 'tiaAutoSched0001' or cast(nodes as text) like '%TIA_API_BASE_URL%' order by active desc, name;"
 
 echo
 echo "Runtime status:"
