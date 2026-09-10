@@ -157,9 +157,9 @@ class SemanticEntityHints(BaseModel):
 
     @model_validator(mode="after")
     def bind_selected_laser_device(self) -> SemanticEntityHints:
-        # ContextVar is request/task-local. Every structured turn must replace the
-        # previous value, including clearing it for non-laser turns, so a device
-        # selection can never leak across customer turns handled by the same task.
+        # Keep direct model validation safe as well, but SemanticCapabilityDecision
+        # is the authoritative per-turn boundary because provider adapters may
+        # return already-constructed nested models.
         set_laser_device_key(self.laser_device_key)
         return self
 
@@ -177,6 +177,14 @@ class SemanticCapabilityDecision(BaseModel):
     recommended_handoff_priority: Priority
     confidence: float
     reason: str
+
+    @model_validator(mode="after")
+    def bind_turn_laser_device_context(self) -> SemanticCapabilityDecision:
+        # as_semantic_decision() constructs this object on every Agent turn.
+        # Resetting here guarantees that a previous booking/reschedule slot cannot
+        # leak its device through ContextVar into a later non-laser tool call.
+        set_laser_device_key(self.entity_hints.laser_device_key)
+        return self
 
 
 class FlowTurnDecision(BaseModel):
