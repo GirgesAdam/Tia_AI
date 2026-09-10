@@ -43,19 +43,50 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: test/realistic-system-journeys-v1
-      - name: Apply focused execution patch
+      - name: Apply focused cancellation patch
         working-directory: .
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("backend/app/services/agent_chat.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''            flow = start_flow(\n                db,\n                workspace_id=workspace.id,\n                conversation_id=conversation.id,\n                patient_id=patient.id,\n                flow_type=flow_type,\n                capabilities=_persistent_flow_capabilities(flow_type, policy.capabilities),\n                entity_state=initial_entity_state,\n                missing_information=semantic_decision.missing_information,\n                last_decision=_decision_payload(semantic_decision),\n                run_id=run_id,\n            )\n'''
-          new = old + '''            # A fresh reschedule still belongs to this same interpreted customer turn.\n            # Preserve the structured write authorization so the verified exact-slot\n            # path can execute without forcing a redundant second confirmation.\n            if flow_type == "appointment_reschedule":\n                flow_turn = unified_turn.as_flow_turn_decision().model_copy(\n                    update={\n                        "capabilities": list(semantic_decision.capabilities),\n                        "package_intent": semantic_decision.package_intent,\n                        "entity_hints": semantic_decision.entity_hints,\n                    }\n                )\n                turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)\n'''
-          if old not in text:
-              raise SystemExit("Fresh-flow anchor not found")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          agent_path = Path("backend/app/services/agent_chat.py")
+          text = agent_path.read_text(encoding="utf-8")
+
+          helper_anchor = '''def _flow_type_from_capabilities(capabilities: set[str]) -> str | None:\n'''
+          helper = '''def _verified_cancellation_action(\n    *,\n    tool_context: AgentToolContext,\n    policy: CapabilityPolicyDecision,\n    decision: SemanticCapabilityDecision,\n    clinic_catalog: dict[str, object],\n) -> tuple[str, str] | None:\n    """Execute only a semantically selected, current-patient appointment cancellation.\n\n    The interpreter selects a canonical appointment ID from the verified current-patient\n    catalog. Python never matches customer wording here: it only rechecks that exact ID\n    against the same verified appointment set before authorizing the write.\n    """\n    if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:\n        return None\n    appointment_id = str(decision.entity_hints.appointment_id or "").strip()\n    if not appointment_id:\n        return None\n    rows = clinic_catalog.get("appointments")\n    if not isinstance(rows, list):\n        return None\n    selected = next(\n        (\n            row\n            for row in rows\n            if isinstance(row, dict)\n            and str(row.get("appointment_id") or row.get("id") or "") == appointment_id\n        ),\n        None,\n    )\n    if selected is None:\n        return None\n\n    result = _invoke_authorized_tool(\n        tool_context=tool_context,\n        policy=policy,\n        tool_name="cancel_appointment",\n        arguments={\n            "appointment_id": appointment_id,\n            "reason": "Customer explicitly requested cancellation.",\n        },\n    )\n    if not result or result.get("ok") is not True:\n        return None\n\n    service_name = str(selected.get("service_name") or "الموعد").strip()\n    start_label = ""\n    raw_start = selected.get("start_local")\n    if raw_start:\n        try:\n            start = datetime.fromisoformat(str(raw_start))\n            start_label = f" يوم {start.strftime('%d/%m/%Y')} الساعة {start.strftime('%H:%M')}"\n        except ValueError:\n            start_label = ""\n    return (\n        f"تمام، ألغيت موعد {service_name}{start_label}.",\n        "deterministic:verified-appointment-cancellation",\n    )\n\n\n'''
+          if helper_anchor not in text:
+              raise SystemExit("Cancellation helper anchor not found")
+          if "def _verified_cancellation_action(" not in text:
+              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          direct_anchor = '''        if (\n            prefetch_direct is None\n            and str(semantic_decision.package_intent) in {"purchase", "inquire"}\n        ):\n'''
+          direct_block = '''        if (\n            prefetch_direct is None\n            and grounded_mode\n            and "appointment_cancellation" in set(policy.capabilities)\n        ):\n            prefetch_direct = _verified_cancellation_action(\n                tool_context=tool_context,\n                policy=policy,\n                decision=semantic_decision,\n                clinic_catalog=clinic_catalog,\n            )\n\n'''
+          if direct_anchor not in text:
+              raise SystemExit("Cancellation direct-action anchor not found")
+          if "prefetch_direct = _verified_cancellation_action(" not in text:
+              text = text.replace(direct_anchor, direct_block + direct_anchor, 1)
+
+          allowed_anchor = '''            agent_allowed_tools = set(policy.allowed_tools) - prefetched_tool_names\n'''
+          allowed_block = allowed_anchor + '''            if grounded_mode and "appointment_cancellation" in set(policy.capabilities):\n                # Grounded cancellation writes are owned by the deterministic path above.\n                # The conversational fallback may explain or clarify, but cannot guess a target.\n                agent_allowed_tools.discard("cancel_appointment")\n'''
+          if allowed_anchor not in text:
+              raise SystemExit("Allowed-tools anchor not found")
+          if 'agent_allowed_tools.discard("cancel_appointment")' not in text:
+              text = text.replace(allowed_anchor, allowed_block, 1)
+
+          agent_path.write_text(text, encoding="utf-8")
+
+          interpreter_path = Path("backend/app/agents/turn_interpreter.py")
+          interpreter = interpreter_path.read_text(encoding="utf-8")
+          prompt_anchor = '''        "EXISTING APPOINTMENT EDITS: when the customer asks to change the service or laser device of an \\\n"\n'''
+          cancellation_prompt = '''        "APPOINTMENT CANCELLATION: include appointment_cancellation when the latest turn requests cancellation, "\n        "including a direct clarification to the assistant's immediately preceding question about which appointment "\n        "to cancel. Select appointment_id only from supplied current-patient appointments and only when the latest "\n        "turn plus recent reference context identifies exactly one appointment. If more than one appointment still "\n        "fits, leave appointment_id null and preserve ambiguity; never guess. A clarification such as identifying the "\n        "service, doctor, date, or previously presented appointment can resolve the canonical appointment_id without "\n        "requiring the customer to repeat the cancellation request.\\n\\n"\n'''
+          if "APPOINTMENT CANCELLATION:" not in interpreter:
+              if prompt_anchor not in interpreter:
+                  raise SystemExit("Cancellation prompt anchor not found")
+              interpreter = interpreter.replace(prompt_anchor, cancellation_prompt + prompt_anchor, 1)
+          interpreter_path.write_text(interpreter, encoding="utf-8")
+
+          test_path = Path("backend/tests/test_verified_cancellation_execution.py")
+          test_path.write_text('''from types import SimpleNamespace\n\nfrom app.services import agent_chat\n\n\ndef _policy():\n    return SimpleNamespace(capabilities={"appointment_cancellation"})\n\n\ndef _decision(appointment_id):\n    return SimpleNamespace(entity_hints=SimpleNamespace(appointment_id=appointment_id))\n\n\ndef _catalog():\n    return {\n        "appointments": [\n            {\n                "id": "appt-hydra",\n                "appointment_id": "appt-hydra",\n                "service_name": "هيدرافيشل",\n                "start_local": "2026-09-12T10:00:00+03:00",\n            },\n            {\n                "id": "appt-laser",\n                "appointment_id": "appt-laser",\n                "service_name": "ليزر إزالة الشعر - إبط",\n                "start_local": "2026-09-13T11:00:00+03:00",\n            },\n        ]\n    }\n\n\ndef test_verified_cancellation_requires_exact_current_patient_appointment(monkeypatch):\n    calls = []\n\n    def fake_invoke(**kwargs):\n        calls.append(kwargs)\n        return {"ok": True}\n\n    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke)\n\n    assert agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision(None),\n        clinic_catalog=_catalog(),\n    ) is None\n    assert agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision("not-a-current-appointment"),\n        clinic_catalog=_catalog(),\n    ) is None\n    assert calls == []\n\n\ndef test_verified_cancellation_executes_only_semantically_selected_id(monkeypatch):\n    calls = []\n\n    def fake_invoke(**kwargs):\n        calls.append(kwargs)\n        return {"ok": True}\n\n    monkeypatch.setattr(agent_chat, "_invoke_authorized_tool", fake_invoke)\n\n    result = agent_chat._verified_cancellation_action(\n        tool_context=object(),\n        policy=_policy(),\n        decision=_decision("appt-hydra"),\n        clinic_catalog=_catalog(),\n    )\n\n    assert result is not None\n    assert "هيدرافيشل" in result[0]\n    assert result[1] == "deterministic:verified-appointment-cancellation"\n    assert len(calls) == 1\n    assert calls[0]["tool_name"] == "cancel_appointment"\n    assert calls[0]["arguments"]["appointment_id"] == "appt-hydra"\n''', encoding="utf-8")
           PY
       - uses: actions/setup-python@v5
         with:
@@ -73,28 +104,32 @@ jobs:
       - name: Apply staging migrations
         run: alembic upgrade head
       - name: Focused unit tests
-        run: python -m pytest tests/test_clinic_grounding_compatibility.py tests/test_unified_turn_interpreter.py -q
-      - name: Verify paid reschedule only
+        run: |
+          python -m pytest \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_clinic_grounding_compatibility.py \
+            tests/test_unified_turn_interpreter.py -q
+      - name: Verify cancellation journey only
         run: |
           python -m scripts.run_realistic_system_journeys \
             --workspace-slug tia \
             --report artifacts/realistic-system-journeys.json \
-            --scenario paid_reschedule_no_double_charge
+            --scenario ambiguous_cancel_two_appointments
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: realistic-paid-reschedule-execution-fix
+          name: realistic-cancellation-fix
           path: backend/artifacts/realistic-system-journeys.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Commit verified execution patch
+      - name: Commit verified cancellation patch
         if: success()
         working-directory: .
         run: |
           git config user.name "Girges Ezzat"
           git config user.email "girgesadam1@gmail.com"
-          git add backend/app/services/agent_chat.py
+          git add backend/app/services/agent_chat.py backend/app/agents/turn_interpreter.py backend/tests/test_verified_cancellation_execution.py
           git diff --cached --quiet && exit 0
-          git commit -m "Execute authorized fresh reschedules after verification"
+          git commit -m "Execute grounded appointment cancellations safely"
           git push origin HEAD:test/realistic-system-journeys-v1
