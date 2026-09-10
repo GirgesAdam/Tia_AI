@@ -15,7 +15,11 @@ from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
-from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+from app.models.working_hours import (
+    BranchWorkingHour,
+    DoctorAvailabilityWindow,
+    DoctorWorkingHour,
+)
 from app.models.workspace import Workspace
 from app.services.inventory import InventoryOperationError, configured_device_price
 
@@ -342,9 +346,19 @@ def calculate_availability(
         doctor_hours = doctor_hours_by_doctor.get(doctor.id, [])
         dated_windows = windows_by_doctor.get(doctor.id, [])
         if doctor.doctor_type == "visiting":
-            availability_intervals = _window_intersections(branch_hours, dated_windows, booking_date, tz)
+            availability_intervals = _window_intersections(
+                branch_hours,
+                dated_windows,
+                booking_date,
+                tz,
+            )
         else:
-            availability_intervals = _interval_intersections(branch_hours, doctor_hours, booking_date, tz)
+            availability_intervals = _interval_intersections(
+                branch_hours,
+                doctor_hours,
+                booking_date,
+                tz,
+            )
             if dated_windows:
                 availability_intervals.extend(
                     _window_intersections(branch_hours, dated_windows, booking_date, tz)
@@ -371,15 +385,16 @@ def calculate_availability(
         duration = timedelta(minutes=duration_minutes)
         after = timedelta(minutes=service.buffer_after_minutes)
 
+        # Working-hours ranges describe when an appointment is allowed to START.
+        # A service may finish after the configured closing time; duration and
+        # buffers still participate fully in doctor/device conflict checks.
         for interval_start, interval_end in availability_intervals:
-            candidate = ceil_to_interval(interval_start + before, settings.slot_interval_minutes)
-            while True:
+            candidate = ceil_to_interval(interval_start, settings.slot_interval_minutes)
+            while candidate <= interval_end:
                 service_start = candidate
                 service_end = service_start + duration
                 busy_start = service_start - before
                 busy_end = service_end + after
-                if busy_end > interval_end:
-                    break
 
                 start_utc = service_start.astimezone(UTC)
                 end_utc = service_end.astimezone(UTC)
