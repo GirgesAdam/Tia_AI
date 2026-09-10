@@ -68,7 +68,7 @@ jobs:
       - name: Apply required staging migrations
         run: alembic upgrade head
       - name: Focused grounding regression tests
-        run: pytest tests/test_clinic_grounding_compatibility.py -q
+        run: python -m pytest tests/test_clinic_grounding_compatibility.py -q
       - name: Run paid reschedule journey
         run: |
           python -m scripts.run_realistic_system_journeys \
