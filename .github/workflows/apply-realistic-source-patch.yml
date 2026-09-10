@@ -1,4 +1,4 @@
-name: Verify Message Timestamp Ordering
+name: Verify Explicit Message Timestamps
 
 on:
   push:
@@ -17,14 +17,24 @@ env:
   DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
   SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
-  SUPABASE_PUBLISHABLE_KEY: sb_publishable_timestamp_audit_unused
-  SUPABASE_SECRET_KEY: sb_secret_timestamp_audit_unused
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_timestamp_fix_unused
+  SUPABASE_SECRET_KEY: sb_secret_timestamp_fix_unused
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  LLM_PROVIDER: openai
+  OPENAI_MODEL: gpt-5.6-luna
+  OPENAI_FALLBACK_MODEL: gpt-5-mini
+  OPENAI_REASONING_EFFORT: low
+  OPENAI_FALLBACK_REASONING_EFFORT: low
+  LLM_TIMEOUT_SECONDS: "60"
+  LLM_MAX_RETRIES: "2"
+  LLM_REALTIME_MAX_RETRIES: "0"
+  AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
   CORS_ORIGINS: ""
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: staging
     defaults:
       run:
@@ -42,44 +52,91 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Prove PostgreSQL transaction timestamp behavior
-        run: |
-          python - <<'PY'
-          import json
-          import time
-          from sqlalchemy import create_engine, text
-          from app.core.config import settings
-
-          engine = create_engine(settings.database_url, pool_pre_ping=True)
-          with engine.connect() as conn:
-              tx = conn.begin()
-              first = conn.execute(text("select now() as tx_now, clock_timestamp() as wall_now")).mappings().one()
-              time.sleep(0.25)
-              second = conn.execute(text("select now() as tx_now, clock_timestamp() as wall_now")).mappings().one()
-              print(json.dumps({
-                  "first_tx_now": first["tx_now"],
-                  "second_tx_now": second["tx_now"],
-                  "tx_now_equal": first["tx_now"] == second["tx_now"],
-                  "first_wall_now": first["wall_now"],
-                  "second_wall_now": second["wall_now"],
-                  "wall_now_equal": first["wall_now"] == second["wall_now"],
-              }, default=str, indent=2))
-              assert first["tx_now"] == second["tx_now"]
-              assert first["wall_now"] != second["wall_now"]
-              tx.rollback()
-          engine.dispose()
-          PY
-      - name: Verify agent message creation does not set created_at explicitly
+      - name: Apply explicit message timestamps in working tree
         run: |
           python - <<'PY'
           from pathlib import Path
+          path = Path('app/services/agent_chat.py')
+          text = path.read_text(encoding='utf-8')
+
+          inbound_anchor = '''    inbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="patient",\n        direction="inbound",\n'''
+          inbound_replacement = '''    inbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="patient",\n        direction="inbound",\n        created_at=activity_now,\n'''
+          if inbound_anchor not in text:
+              raise RuntimeError('inbound message anchor not found')
+          text = text.replace(inbound_anchor, inbound_replacement, 1)
+
+          outbound_anchor = '''    outbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="ai",\n        direction="outbound",\n'''
+          outbound_replacement = '''    outbound = Message(\n        workspace_id=workspace.id,\n        conversation_id=conversation.id,\n        channel_connection_id=conversation.channel_connection_id,\n        sender_type="ai",\n        direction="outbound",\n        created_at=outbound_now,\n'''
+          if outbound_anchor not in text:
+              raise RuntimeError('outbound message anchor not found')
+          text = text.replace(outbound_anchor, outbound_replacement, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Focused tests without model calls
+        run: |
+          python -m pytest \
+            tests/test_conversation_ownership_hardening.py \
+            tests/test_handoff_resume_guard.py \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_unified_turn_interpreter.py -q
+          python -m compileall -q app/services/agent_chat.py
+          python - <<'PY'
+          from pathlib import Path
           source = Path('app/services/agent_chat.py').read_text(encoding='utf-8')
-          inbound = source[source.index('    inbound = Message('):]
-          inbound = inbound[:inbound.index('    db.add(inbound)')]
-          outbound = source[source.index('    outbound = Message('):]
-          outbound = outbound[:outbound.index('    db.add(outbound)')]
-          print('inbound explicit created_at:', 'created_at=' in inbound)
-          print('outbound explicit created_at:', 'created_at=' in outbound)
-          assert 'created_at=' not in inbound
-          assert 'created_at=' not in outbound
+          assert 'direction="inbound",\n        created_at=activity_now,' in source
+          assert 'direction="outbound",\n        created_at=outbound_now,' in source
+          print('explicit message timestamp invariants: ok')
+          PY
+      - name: Run cancellation and ownership journeys
+        run: |
+          mkdir -p artifacts
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/timestamp-fix-journeys.json \
+            --scenario ambiguous_cancel_two_appointments \
+            --scenario human_takeover_and_return
+      - name: Verify exact DB behavior
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/timestamp-fix-journeys.json').read_text(encoding='utf-8'))
+          rows = {row['scenario']: row for row in report['scenarios']}
+
+          cancel = rows['ambiguous_cancel_two_appointments']
+          cancel_after = {row['service']: row['status'] for row in cancel['after']['appointments']}
+          cancel_actions = [row for row in cancel['agent_actions'] if row['tool'] == 'cancel_appointment' and row['status'] == 'success']
+          assert cancel_after['هيدرافيشل'] == 'cancelled', cancel_after
+          assert cancel_after['ليزر إزالة الشعر - إبط'] == 'confirmed', cancel_after
+          assert len(cancel_actions) == 1, cancel_actions
+
+          ownership = rows['human_takeover_and_return']
+          turns = ownership['turns']
+          bookings = [row for row in ownership['agent_actions'] if row['tool'] == 'book_appointment' and row['status'] == 'success']
+          assert turns[1]['agent_paused'] is True, turns[1]
+          assert turns[1]['tokens']['model_calls'] == 0, turns[1]['tokens']
+          assert ownership['conversation']['owner_type'] == 'ai', ownership['conversation']
+          assert ownership['conversation']['status'] == 'open', ownership['conversation']
+          assert len(ownership['after']['appointments']) == 1, ownership['after']['appointments']
+          assert ownership['after']['appointments'][0]['service'] == 'هيدرافيشل', ownership['after']['appointments']
+          assert len(bookings) == 1, bookings
+
+          print(json.dumps({
+              'cancellation': {
+                  'assistant': cancel['turns'][-1]['assistant'],
+                  'after': cancel_after,
+                  'tokens': cancel['tokens']['total_tokens'],
+              },
+              'ownership': {
+                  'turns': [{
+                      'turn': row['turn'],
+                      'assistant': row['assistant'],
+                      'paused': row['agent_paused'],
+                      'tokens': row['tokens']['total_tokens'],
+                  } for row in turns],
+                  'appointments': ownership['after']['appointments'],
+                  'tokens': ownership['tokens']['total_tokens'],
+              },
+              'total_tokens': report['totals']['total_tokens'],
+          }, ensure_ascii=False, indent=2))
           PY
