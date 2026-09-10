@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.core.doctor_names import normalize_doctor_name_parts
+from app.database.session import get_db
+from app.models.branch import Branch
+from app.models.doctor import Doctor
+from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_service import DoctorService
+from app.models.service import Service
+from app.models.staff import Staff
+from app.models.working_hours import DoctorWorkingHour
+from app.schemas.clinic import DoctorRead, WorkingHoursReplace
+from app.services.activity import record_activity_event
+
+router = APIRouter()
+
+
+class DoctorAdminCreate(BaseModel):
+    first_name: str = Field(min_length=1, max_length=120)
+    last_name: str = Field(min_length=1, max_length=120)
+    email: str | None = Field(default=None, max_length=320)
+    phone: str | None = Field(default=None, max_length=40)
+    specialization: str | None = Field(default=None, max_length=200)
+    branch_id: UUID
+    service_ids: list[UUID] = Field(min_length=1, max_length=200)
+    working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
+    booking_enabled: bool = True
+
+
+class DoctorAdminUpdate(BaseModel):
+    first_name: str = Field(min_length=1, max_length=120)
+    last_name: str = Field(min_length=1, max_length=120)
+    email: str | None = Field(default=None, max_length=320)
+    phone: str | None = Field(default=None, max_length=40)
+    specialization: str | None = Field(default=None, max_length=200)
+    service_ids: list[UUID] = Field(min_length=1, max_length=200)
+    booking_enabled: bool = True
+
+
+def _clean_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _active_service_ids(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    service_ids: list[UUID],
+) -> set[UUID]:
+    unique_ids = set(service_ids)
+    rows = set(
+        db.scalars(
+            select(Service.id).where(
+                Service.workspace_id == workspace_id,
+                Service.id.in_(unique_ids),
+                Service.is_active.is_(True),
+            )
+        )
+    )
+    if rows != unique_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="One or more selected services are missing or inactive.",
+        )
+    return rows
+
+
+def _commit_or_conflict(db: Session, detail: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+
+
+@router.post("/doctor-admin", response_model=DoctorRead, status_code=status.HTTP_201_CREATED)
+def create_doctor_from_admin(
+    payload: DoctorAdminCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Doctor:
+    workspace_id = access.workspace.id
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.workspace_id == workspace_id,
+            Branch.id == payload.branch_id,
+            Branch.is_active.is_(True),
+        )
+    )
+    if branch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found.")
+    service_ids = _active_service_ids(
+        db,
+        workspace_id=workspace_id,
+        service_ids=payload.service_ids,
+    )
+    first_name, last_name = normalize_doctor_name_parts(
+        payload.first_name.strip(), payload.last_name.strip()
+    )
+
+    staff = Staff(
+        workspace_id=workspace_id,
+        first_name=first_name,
+        last_name=last_name,
+        email=_clean_optional(payload.email),
+        phone=_clean_optional(payload.phone),
+        job_title="Doctor",
+    )
+    db.add(staff)
+    db.flush()
+
+    doctor = Doctor(
+        workspace_id=workspace_id,
+        staff_id=staff.id,
+        doctor_type="regular",
+        specialization=_clean_optional(payload.specialization),
+        booking_enabled=payload.booking_enabled,
+    )
+    db.add(doctor)
+    db.flush()
+
+    db.add(
+        DoctorBranch(
+            workspace_id=workspace_id,
+            doctor_id=doctor.id,
+            branch_id=branch.id,
+            is_primary=True,
+            is_active=True,
+        )
+    )
+    db.add_all(
+        [
+            DoctorService(
+                workspace_id=workspace_id,
+                doctor_id=doctor.id,
+                service_id=service_id,
+                is_active=True,
+            )
+            for service_id in sorted(service_ids, key=str)
+        ]
+    )
+    db.add_all(
+        [
+            DoctorWorkingHour(
+                workspace_id=workspace_id,
+                doctor_id=doctor.id,
+                branch_id=branch.id,
+                **interval.model_dump(),
+            )
+            for interval in payload.working_hours.intervals
+        ]
+    )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="clinic.doctor_created",
+        entity_type="doctor",
+        entity_id=doctor.id,
+        summary="Doctor created from doctors schedule page.",
+        metadata={
+            "branch_id": branch.id,
+            "service_ids": sorted(str(item) for item in service_ids),
+            "working_hour_intervals": len(payload.working_hours.intervals),
+        },
+        flush=False,
+    )
+    _commit_or_conflict(
+        db,
+        "Could not create doctor. Check that the staff email is not already used and the schedule is valid.",
+    )
+    db.refresh(doctor)
+    return doctor
+
+
+@router.patch("/doctor-admin/{doctor_id}", response_model=DoctorRead)
+def update_doctor_from_admin(
+    doctor_id: UUID,
+    payload: DoctorAdminUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Doctor:
+    workspace_id = access.workspace.id
+    row = db.execute(
+        select(Doctor, Staff)
+        .join(
+            Staff,
+            (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id),
+        )
+        .where(
+            Doctor.workspace_id == workspace_id,
+            Doctor.id == doctor_id,
+            Doctor.is_active.is_(True),
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+    doctor, staff = row
+    service_ids = _active_service_ids(
+        db,
+        workspace_id=workspace_id,
+        service_ids=payload.service_ids,
+    )
+    first_name, last_name = normalize_doctor_name_parts(
+        payload.first_name.strip(), payload.last_name.strip()
+    )
+    staff.first_name = first_name
+    staff.last_name = last_name
+    staff.email = _clean_optional(payload.email)
+    staff.phone = _clean_optional(payload.phone)
+    doctor.specialization = _clean_optional(payload.specialization)
+    doctor.booking_enabled = payload.booking_enabled
+
+    assignments = list(
+        db.scalars(
+            select(DoctorService).where(
+                DoctorService.workspace_id == workspace_id,
+                DoctorService.doctor_id == doctor.id,
+            )
+        )
+    )
+    by_service = {item.service_id: item for item in assignments}
+    for assignment in assignments:
+        assignment.is_active = assignment.service_id in service_ids
+    for service_id in service_ids:
+        if service_id not in by_service:
+            db.add(
+                DoctorService(
+                    workspace_id=workspace_id,
+                    doctor_id=doctor.id,
+                    service_id=service_id,
+                    is_active=True,
+                )
+            )
+
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="clinic.doctor_updated",
+        entity_type="doctor",
+        entity_id=doctor.id,
+        summary="Doctor updated from doctors schedule page.",
+        metadata={
+            "service_ids": sorted(str(item) for item in service_ids),
+            "booking_enabled": doctor.booking_enabled,
+        },
+        flush=False,
+    )
+    _commit_or_conflict(db, "Could not update doctor.")
+    db.refresh(doctor)
+    return doctor
+
+
+@router.delete("/doctor-admin/{doctor_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_doctor_from_admin(
+    doctor_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    workspace_id = access.workspace.id
+    doctor = db.scalar(
+        select(Doctor).where(
+            Doctor.workspace_id == workspace_id,
+            Doctor.id == doctor_id,
+            Doctor.is_active.is_(True),
+        )
+    )
+    if doctor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+
+    doctor.is_active = False
+    doctor.booking_enabled = False
+    for assignment in db.scalars(
+        select(DoctorBranch).where(
+            DoctorBranch.workspace_id == workspace_id,
+            DoctorBranch.doctor_id == doctor.id,
+        )
+    ):
+        assignment.is_active = False
+    for assignment in db.scalars(
+        select(DoctorService).where(
+            DoctorService.workspace_id == workspace_id,
+            DoctorService.doctor_id == doctor.id,
+        )
+    ):
+        assignment.is_active = False
+
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="clinic.doctor_archived",
+        entity_type="doctor",
+        entity_id=doctor.id,
+        summary="Doctor removed from active scheduling.",
+        metadata={"soft_delete": True},
+        flush=False,
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
