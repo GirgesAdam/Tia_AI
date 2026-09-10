@@ -1,4 +1,4 @@
-name: Verify Semantic Entity Contract
+name: Verify Appointment ID Contract
 
 on:
   push:
@@ -52,49 +52,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Apply schema-only clarification in working tree
+      - name: Clarify appointment ID schema description in working tree
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path('app/agents/turn_models.py')
           text = path.read_text(encoding='utf-8')
-          replacements = {
-              'service_id: str | None = Field(default=None, description="Canonical service UUID from the supplied clinic catalog.")': '''service_id: str | None = Field(
-        default=None,
-        description=(
-            "Canonical service UUID from the supplied clinic catalog. When the latest customer turn "
-            "clearly identifies exactly one catalog service, copy that service's exact UUID here. "
-            "Use null only when no service is identified uniquely; use service_candidate_ids only for genuine ambiguity."
-        ),
-    )''',
-              'doctor_id: str | None = Field(default=None, description="Canonical doctor UUID from the supplied clinic catalog.")': '''doctor_id: str | None = Field(
-        default=None,
-        description=(
-            "Canonical doctor UUID from the supplied clinic catalog. When the latest customer turn "
-            "clearly identifies exactly one catalog doctor, copy that doctor's exact UUID here. "
-            "Use doctor_candidate_ids only when genuine ambiguity remains."
-        ),
-    )''',
-              'description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",': '''description=(
-            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "
-            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "
-            "appointment, copy that appointment's exact ID here. A direct answer to the assistant's immediately preceding question "
-            "about which appointment to act on is a selection when it uniquely identifies one appointment; an appointment explicitly "
-            "said to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "
-            "appointment genuinely still fits."
-        ),''',
-              'description="Customer-facing reference identifying an existing appointment."': '''description=(
-            "Customer-facing reference identifying an existing appointment. Use the latest turn plus recent conversation to describe "
-            "the one current appointment being acted on when it is uniquely identified; this complements appointment_id and does not "
-            "replace canonical ID selection."
-        )''',
-          }
-          for old, new in replacements.items():
-              if old not in text:
-                  raise RuntimeError(f'anchor not found: {old[:80]}')
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding='utf-8')
+          old = 'description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",'
+          new = 'description=(\n            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "\n            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "\n            "appointment, copy that appointment exact ID here. A direct answer to the assistant immediately preceding question about "\n            "which appointment to act on is a selection when it uniquely identifies one appointment. An appointment explicitly said "\n            "to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "\n            "appointment genuinely still fits."\n        ),'
+          if old not in text:
+              raise RuntimeError('appointment_id description anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Focused tests without model calls
         run: |
@@ -121,10 +89,5 @@ jobs:
           assert after['هيدرافيشل'] == 'cancelled', after
           assert after['ليزر إزالة الشعر - إبط'] == 'confirmed', after
           assert len(cancel_actions) == 1, cancel_actions
-          print(json.dumps({
-              'assistant': scenario['turns'][-1]['assistant'],
-              'after': after,
-              'cancel_actions': len(cancel_actions),
-              'tokens': scenario['tokens'],
-          }, ensure_ascii=False, indent=2))
+          print(json.dumps({'assistant': scenario['turns'][-1]['assistant'], 'after': after, 'cancel_actions': len(cancel_actions), 'tokens': scenario['tokens']}, ensure_ascii=False, indent=2))
           PY
