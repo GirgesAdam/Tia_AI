@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.services.agent_chat as agent_chat_module
 from app.core.config import settings
-from app.models.conversation import Conversation
+from app.models.conversation_flow_state import ConversationFlowState
 from app.models.message import Message
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
@@ -45,74 +44,43 @@ def main() -> None:
         if workspace is None:
             raise RuntimeError("Workspace not found: tia")
 
-        patient = _new_patient(db, workspace, 9913)
+        patient = _new_patient(db, workspace, 9914)
         laser_slot = _find_slot(db, workspace, UNDERARM, laser_device_key="prime_lase")
-        laser = _seed_appointment(db, workspace, patient, laser_slot)
-        hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser.start_at, laser.end_at)])
-        hydra = _seed_appointment(db, workspace, patient, hydra_slot)
+        _seed_appointment(db, workspace, patient, laser_slot)
+        hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser_slot.start_at, laser_slot.end_at)])
+        _seed_appointment(db, workspace, patient, hydra_slot)
 
-        now = datetime.now(UTC)
-        conversation = Conversation(
-            workspace_id=workspace.id,
-            patient_id=patient.id,
-            channel="whatsapp",
-            status="open",
-            owner_type="ai",
-            unread_count=0,
-            ownership_changed_at=now,
-            started_at=now - timedelta(minutes=2),
-            last_message_at=now - timedelta(minutes=1),
-        )
-        db.add(conversation)
-        db.flush()
-
-        # Reproduce the exact shape of the real first-turn reply that preceded the
-        # failed follow-up. No extra flow or synthetic option numbering is added.
-        db.add_all(
-            [
-                Message(
-                    workspace_id=workspace.id,
-                    conversation_id=conversation.id,
-                    sender_type="patient",
-                    direction="inbound",
-                    content="عايز ألغي معاد عندي.",
-                    delivery_status="received",
-                    metadata_json={},
-                    created_at=now - timedelta(minutes=2),
-                ),
-                Message(
-                    workspace_id=workspace.id,
-                    conversation_id=conversation.id,
-                    sender_type="ai",
-                    direction="outbound",
-                    content=(
-                        "أكيد. تحب تلغي أنهي معاد؟\n\n"
-                        "- ليزر إزالة الشعر – إبط: الجمعة 11 سبتمبر الساعة 2:00 ظهرًا\n"
-                        "- هيدرافيشل: السبت 12 سبتمبر الساعة 10:00 صباحًا"
-                    ),
-                    delivery_status="sent",
-                    metadata_json={},
-                    created_at=now - timedelta(minutes=1),
-                ),
-            ]
-        )
-        db.flush()
-
-        before = {"laser": laser.status, "hydra": hydra.status}
         response = agent_chat_module.run_agent_chat(
             db=db,
             workspace=workspace,
             payload=AgentChatRequest(
                 patient_id=patient.id,
-                conversation_id=conversation.id,
                 channel="whatsapp",
-                message="قصدي معاد الهيدرافيشل، سيب معاد الليزر زي ما هو.",
+                message="عايز ألغي معاد عندي.",
             ),
         )
         db.flush()
-        db.refresh(laser)
-        db.refresh(hydra)
-        after = {"laser": laser.status, "hydra": hydra.status}
+
+        flows = list(
+            db.scalars(
+                select(ConversationFlowState)
+                .where(
+                    ConversationFlowState.workspace_id == workspace.id,
+                    ConversationFlowState.conversation_id == response.conversation_id,
+                )
+                .order_by(ConversationFlowState.created_at.asc())
+            )
+        )
+        messages = list(
+            db.scalars(
+                select(Message)
+                .where(
+                    Message.workspace_id == workspace.id,
+                    Message.conversation_id == response.conversation_id,
+                )
+                .order_by(Message.created_at.asc())
+            )
+        )
         usage = meter.since(mark)
 
         print(
@@ -121,9 +89,29 @@ def main() -> None:
                     "assistant": response.reply,
                     "model": response.model,
                     "semantic_decisions": semantic_decisions,
-                    "before": before,
-                    "after": after,
+                    "flows": [
+                        {
+                            "flow_type": flow.flow_type,
+                            "status": flow.status,
+                            "is_active": flow.is_active,
+                            "capabilities": flow.capabilities,
+                            "entity_state": flow.entity_state,
+                            "missing_information": flow.missing_information,
+                            "option_snapshot": flow.option_snapshot,
+                            "last_decision": flow.last_decision,
+                        }
+                        for flow in flows
+                    ],
                     "actions": _actions(db, workspace, patient),
+                    "messages": [
+                        {
+                            "sender_type": message.sender_type,
+                            "direction": message.direction,
+                            "content": message.content,
+                            "metadata": message.metadata_json,
+                        }
+                        for message in messages
+                    ],
                     "tokens": usage,
                 },
                 ensure_ascii=False,
