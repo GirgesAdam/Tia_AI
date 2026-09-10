@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  patch-and-trace:
+  patch-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
@@ -43,19 +43,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: test/realistic-system-journeys-v1
-      - name: Apply focused source patch
+      - name: Apply focused execution patch
         working-directory: .
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          interpreter = Path("backend/app/agents/turn_interpreter.py")
-          text = interpreter.read_text(encoding="utf-8")
-          old = '''        "refresh availability for them. For an active "\n        "reschedule flow, select_option is only for a replacement slot that the assistant already presented. "\n'''
-          new = '''        "refresh availability for them. FRESH RESCHEDULE AUTHORIZATION: on the first turn of a "\n        "reschedule request, when the latest customer turn clearly commands changing an existing appointment "\n        "now and supplies an exact replacement date/time, use action=modify with appointment_reschedule and "\n        "capture the exact requested_date/requested_start_time. This is customer write authorization only after "\n        "the backend verifies exactly one matching replacement slot; do not ask for a second confirmation. If "\n        "the customer is only asking whether a replacement time is possible, keep it exploratory and do not "\n        "treat it as write authorization. For an active reschedule flow, select_option is only for a replacement "\n        "slot that the assistant already presented. "\n'''
+          path = Path("backend/app/services/agent_chat.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''            flow = start_flow(\n                db,\n                workspace_id=workspace.id,\n                conversation_id=conversation.id,\n                patient_id=patient.id,\n                flow_type=flow_type,\n                capabilities=_persistent_flow_capabilities(flow_type, policy.capabilities),\n                entity_state=initial_entity_state,\n                missing_information=semantic_decision.missing_information,\n                last_decision=_decision_payload(semantic_decision),\n                run_id=run_id,\n            )\n'''
+          new = old + '''            # A fresh reschedule still belongs to this same interpreted customer turn.\n            # Preserve the structured write authorization so the verified exact-slot\n            # path can execute without forcing a redundant second confirmation.\n            if flow_type == "appointment_reschedule":\n                flow_turn = unified_turn.as_flow_turn_decision().model_copy(\n                    update={\n                        "capabilities": list(semantic_decision.capabilities),\n                        "package_intent": semantic_decision.package_intent,\n                        "entity_hints": semantic_decision.entity_hints,\n                    }\n                )\n                turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)\n'''
           if old not in text:
-              raise SystemExit("Expected reschedule prompt anchor not found")
-          interpreter.write_text(text.replace(old, new, 1), encoding="utf-8")
+              raise SystemExit("Fresh-flow anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
       - uses: actions/setup-python@v5
         with:
@@ -74,45 +74,27 @@ jobs:
         run: alembic upgrade head
       - name: Focused unit tests
         run: python -m pytest tests/test_clinic_grounding_compatibility.py tests/test_unified_turn_interpreter.py -q
-      - name: Trace paid reschedule semantic decision
+      - name: Verify paid reschedule only
         run: |
-          python - <<'PY'
-          import json
-          import sys
-          import app.services.agent_chat as agent_chat
-          from scripts import run_realistic_system_journeys as journeys
-
-          original = agent_chat.interpret_customer_turn
-
-          def traced(*args, **kwargs):
-              decision = original(*args, **kwargs)
-              print("TIA_SEMANTIC_DECISION=" + json.dumps(decision.model_dump(mode="json"), ensure_ascii=False, default=str))
-              return decision
-
-          agent_chat.interpret_customer_turn = traced
-          sys.argv = [
-              "run_realistic_system_journeys",
-              "--workspace-slug", "tia",
-              "--report", "artifacts/realistic-system-journeys.json",
-              "--scenario", "paid_reschedule_no_double_charge",
-          ]
-          raise SystemExit(journeys.main())
-          PY
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/realistic-system-journeys.json \
+            --scenario paid_reschedule_no_double_charge
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: realistic-paid-reschedule-trace
+          name: realistic-paid-reschedule-execution-fix
           path: backend/artifacts/realistic-system-journeys.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Commit semantic prompt patch
+      - name: Commit verified execution patch
         if: success()
         working-directory: .
         run: |
           git config user.name "Girges Ezzat"
           git config user.email "girgesadam1@gmail.com"
-          git add backend/app/agents/turn_interpreter.py
+          git add backend/app/services/agent_chat.py
           git diff --cached --quiet && exit 0
-          git commit -m "Recognize explicit first-turn reschedule authorization"
+          git commit -m "Execute authorized fresh reschedules after verification"
           git push origin HEAD:test/realistic-system-journeys-v1
