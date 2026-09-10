@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.services.agent_chat as agent_chat_module
 from app.core.config import settings
+from app.models.conversation import Conversation
+from app.models.message import Message
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
 from scripts.run_realistic_system_journeys import (
@@ -35,6 +38,7 @@ def _small(decision) -> dict[str, object]:
             for key in (
                 "service_query",
                 "service_id",
+                "service_candidate_ids",
                 "doctor_query",
                 "doctor_id",
                 "appointment_id",
@@ -62,41 +66,74 @@ def main() -> None:
 
     agent_chat_module.interpret_customer_turn = traced_interpreter
     meter.install()
+    mark = meter.mark()
     try:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
         if workspace is None:
             raise RuntimeError("Workspace not found: tia")
 
-        patient = _new_patient(db, workspace, 9915)
+        patient = _new_patient(db, workspace, 9921)
         laser_slot = _find_slot(db, workspace, UNDERARM, laser_device_key="prime_lase")
         laser = _seed_appointment(db, workspace, patient, laser_slot)
         hydra_slot = _find_slot(db, workspace, HYDRA, avoid=[(laser.start_at, laser.end_at)])
         hydra = _seed_appointment(db, workspace, patient, hydra_slot)
 
-        mark1 = meter.mark()
-        first = agent_chat_module.run_agent_chat(
-            db=db,
-            workspace=workspace,
-            payload=AgentChatRequest(
-                patient_id=patient.id,
-                channel="whatsapp",
-                message="عايز ألغي معاد عندي.",
-            ),
+        now = datetime.now(UTC)
+        conversation = Conversation(
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            channel="whatsapp",
+            status="open",
+            owner_type="ai",
+            unread_count=0,
+            ownership_changed_at=now,
+            started_at=now - timedelta(minutes=2),
+            last_message_at=now - timedelta(minutes=1),
         )
-        usage1 = meter.since(mark1)
+        db.add(conversation)
+        db.flush()
 
-        mark2 = meter.mark()
-        second = agent_chat_module.run_agent_chat(
+        db.add_all(
+            [
+                Message(
+                    workspace_id=workspace.id,
+                    conversation_id=conversation.id,
+                    sender_type="patient",
+                    direction="inbound",
+                    content="عايز ألغي معاد عندي.",
+                    delivery_status="received",
+                    metadata_json={},
+                    created_at=now - timedelta(minutes=2),
+                ),
+                Message(
+                    workspace_id=workspace.id,
+                    conversation_id=conversation.id,
+                    sender_type="ai",
+                    direction="outbound",
+                    content=(
+                        "عندك معادين مؤكدين:\n"
+                        "- النهارده 11 سبتمبر الساعة 2:00 ظهرًا: ليزر إزالة الشعر – إبط مع د. أحمد محمود\n"
+                        "- بكرة 12 سبتمبر من 10:00 لـ11:00 صباحًا: هيدرافيشل مع د. هالة مصطفى\n\n"
+                        "تحب تلغي أنهي واحد؟"
+                    ),
+                    delivery_status="sent",
+                    metadata_json={},
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        db.flush()
+
+        response = agent_chat_module.run_agent_chat(
             db=db,
             workspace=workspace,
             payload=AgentChatRequest(
                 patient_id=patient.id,
-                conversation_id=first.conversation_id,
+                conversation_id=conversation.id,
                 channel="whatsapp",
                 message="قصدي معاد الهيدرافيشل، سيب معاد الليزر زي ما هو.",
             ),
         )
-        usage2 = meter.since(mark2)
         db.flush()
         db.refresh(laser)
         db.refresh(hydra)
@@ -104,27 +141,20 @@ def main() -> None:
         print(
             json.dumps(
                 {
-                    "turn1": {
-                        "assistant": first.reply,
-                        "model": first.model,
-                        "semantic": semantic_decisions[0] if semantic_decisions else None,
-                        "tokens": usage1,
-                    },
-                    "turn2": {
-                        "assistant": second.reply,
-                        "model": second.model,
-                        "semantic": semantic_decisions[1] if len(semantic_decisions) > 1 else None,
-                        "tokens": usage2,
-                    },
+                    "assistant": response.reply,
+                    "model": response.model,
+                    "semantic": semantic_decisions[-1] if semantic_decisions else None,
                     "after": {"laser": laser.status, "hydra": hydra.status},
                     "actions": [
                         {
                             "tool": row.get("tool"),
                             "status": row.get("status"),
                             "appointment_id": row.get("appointment_id"),
+                            "input": row.get("input"),
                         }
                         for row in _actions(db, workspace, patient)
                     ],
+                    "tokens": meter.since(mark),
                 },
                 ensure_ascii=False,
                 indent=2,
