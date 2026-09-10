@@ -1,4 +1,4 @@
-name: Cancellation Semantic Trace
+name: Cancellation Real-Catalog Semantic Trace
 
 on:
   push:
@@ -52,7 +52,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify OpenAI secret
-        run: test -n "$OPENAI_API_KEY"
-      - name: Trace second cancellation turn only
+      - name: Verify trace secrets
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$DATABASE_URL"
+      - name: Trace second cancellation turn against real clinic catalog
         run: python -m scripts.trace_cancellation_semantics
