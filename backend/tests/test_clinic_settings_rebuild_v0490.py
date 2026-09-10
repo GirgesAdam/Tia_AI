@@ -420,17 +420,27 @@ def test_setup_excel_template_is_fixed_and_uploadable_without_mapping() -> None:
         wb.close()
 
 
-def test_setup_ui_uses_blank_review_draft_and_clear_next_step() -> None:
+def test_setup_ui_is_refocused_without_duplicate_service_or_doctor_management() -> None:
     page = (FRONTEND / "src/app/(dashboard)/setup/page.tsx").read_text(encoding="utf-8")
+    panel = (FRONTEND / "src/app/(dashboard)/setup/clinic-settings-panel.tsx").read_text(encoding="utf-8")
     importer = (FRONTEND / "src/app/(dashboard)/setup/setup-importer.tsx").read_text(encoding="utf-8")
     actions = (FRONTEND / "src/app/(dashboard)/setup/actions.ts").read_text(encoding="utf-8")
     route = (BACKEND / "app/api/routes/clinic_setup_v2.py").read_text(encoding="utf-8")
-    assert "ClinicSetupImporter" in page
+
+    assert "ClinicSettingsPanel" in page
+    assert "ClinicSetupImporter" not in page
+    assert 'href="/services"' in panel
+    assert 'href="/doctors"' in panel
+    assert 'href="/setup/integration"' in panel
+    assert "WhatsApp" not in page
+    assert "واتساب والـAutomation" not in page
+    assert "إدارة الخدمات والأسعار" in panel
+    assert "إدارة الدكاترة ومواعيدهم" in panel
+    assert "Knowledge Base الخاصة بـ Tia" in panel
+
+    # The legacy setup importer remains available in code for backwards-compatible
+    # import flows, but it is intentionally no longer rendered on Clinic Settings.
     assert 'accept=".xlsx"' in importer
-    assert "الخانات تبدأ فاضية" in importer
-    assert "قراءة الملف وتعبئة الخانات" in importer
-    assert "تحميل البيانات المحفوظة" in importer
-    assert "التالي: البيانات التاريخية" in importer
     assert "emptyDraft" in importer
     assert '"/clinic/setup-v2/preview"' in actions
     assert '"/clinic/setup-v2/apply-draft"' in actions
