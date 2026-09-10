@@ -95,3 +95,15 @@ def test_provider_send_retries_remain_in_tia_state_machine_not_n8n() -> None:
     assert "WhatsApp Send Text" not in worker
     assert "retry_after_seconds=30" in transport
     assert "record_dispatch_result(" in transport
+
+
+def test_real_runtime_docs_match_native_whatsapp_architecture() -> None:
+    docs = (_root() / "n8n/REAL_RUNTIME_SETUP.md").read_text(encoding="utf-8")
+
+    assert "tia_automation_scheduler.json" in docs
+    assert "tia-whatsapp-transport-waker" in docs
+    assert "/api/v1/channels/whatsapp/transport/tick" in docs
+    assert "tia_whatsapp_inbound_status.json" not in docs
+    assert "/adapter/outbox/claim" not in docs
+    assert "n8n WhatsApp Trigger" not in docs
+    assert "n8n WhatsApp Business Cloud API credential" not in docs
