@@ -77,7 +77,7 @@ jobs:
 
           interpreter_path = Path("backend/app/agents/turn_interpreter.py")
           interpreter = interpreter_path.read_text(encoding="utf-8")
-          prompt_anchor = '''        "EXISTING APPOINTMENT EDITS: when the customer asks to change the service or laser device of an \\\n"\n'''
+          prompt_anchor = '        "EXISTING APPOINTMENT EDITS:'
           cancellation_prompt = '''        "APPOINTMENT CANCELLATION: include appointment_cancellation when the latest turn requests cancellation, "\n        "including a direct clarification to the assistant's immediately preceding question about which appointment "\n        "to cancel. Select appointment_id only from supplied current-patient appointments and only when the latest "\n        "turn plus recent reference context identifies exactly one appointment. If more than one appointment still "\n        "fits, leave appointment_id null and preserve ambiguity; never guess. A clarification such as identifying the "\n        "service, doctor, date, or previously presented appointment can resolve the canonical appointment_id without "\n        "requiring the customer to repeat the cancellation request.\\n\\n"\n'''
           if "APPOINTMENT CANCELLATION:" not in interpreter:
               if prompt_anchor not in interpreter:
