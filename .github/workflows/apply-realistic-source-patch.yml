@@ -1,4 +1,4 @@
-name: Cancellation Two-Turn Semantic Trace
+name: Verify Minimal Cancellation Semantic Fix
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
       - .github/workflows/apply-realistic-source-patch.yml
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ENVIRONMENT: staging
@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  trace:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -52,5 +52,73 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Trace both cancellation semantic decisions
-        run: python -m scripts.trace_cancellation_semantics
+      - name: Apply one-sentence semantic contract fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/agents/turn_interpreter.py')
+          text = path.read_text(encoding='utf-8')
+          old = (
+              '        "turn plus recent reference context identifies exactly one appointment. If more than one appointment still "\n'
+          )
+          new = (
+              '        "turn plus recent reference context identifies exactly one appointment. If the latest turn clearly names one "\n'
+              '        "appointment as the cancellation target and clearly says another current appointment should be kept unchanged, "\n'
+              '        "treat the kept appointment as excluded, not as unresolved ambiguity. If more than one appointment still "\n'
+          )
+          if old not in text:
+              raise RuntimeError('Cancellation contract anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_unified_turn_interpreter.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          test_name = 'test_cancellation_contract_treats_kept_appointment_as_excluded'
+          if test_name not in test_text:
+              test_text += '''\n\ndef test_cancellation_contract_treats_kept_appointment_as_excluded() -> None:\n    prompt = _interpreter_system_prompt(\n        timezone_name="Africa/Cairo",\n        local_now=datetime(2026, 9, 11, 12, 0),\n        active_flow=False,\n    )\n\n    assert "treat the kept appointment as excluded, not as unresolved ambiguity" in prompt\n'''
+              test_path.write_text(test_text, encoding='utf-8')
+          PY
+      - name: Focused tests without model calls
+        run: |
+          python -m pytest \
+            tests/test_unified_turn_interpreter.py \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_clinic_grounding_compatibility.py -q
+      - name: Run real cancellation journey once
+        run: |
+          python -m scripts.run_realistic_system_journeys \
+            --workspace-slug tia \
+            --report artifacts/cancellation-minimal-fix.json \
+            --scenario ambiguous_cancel_two_appointments
+      - name: Require exact DB behavior
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path('artifacts/cancellation-minimal-fix.json').read_text(encoding='utf-8'))
+          scenario = report['scenarios'][0]
+          after = {row['service']: row['status'] for row in scenario['after']['appointments']}
+          cancel_actions = [
+              row for row in scenario['agent_actions']
+              if row['tool'] == 'cancel_appointment' and row['status'] == 'success'
+          ]
+          assert after['هيدرافيشل'] == 'cancelled', after
+          assert after['ليزر إزالة الشعر - إبط'] == 'confirmed', after
+          assert len(cancel_actions) == 1, cancel_actions
+          print(json.dumps({
+              'assistant': scenario['turns'][-1]['assistant'],
+              'after': after,
+              'cancel_actions': len(cancel_actions),
+              'tokens': scenario['tokens'],
+          }, ensure_ascii=False, indent=2))
+          PY
+      - name: Commit only the verified minimal fix
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/agents/turn_interpreter.py backend/tests/test_unified_turn_interpreter.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Clarify cancellation target exclusions"
+          git push origin HEAD:test/realistic-system-journeys-v1
