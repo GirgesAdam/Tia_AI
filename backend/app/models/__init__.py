@@ -28,6 +28,7 @@ from app.models.clinic_inventory import (
     InventoryUsage,
     ServiceDevicePrice,
 )
+from app.models.clinic_knowledge_entry import ClinicKnowledgeEntry
 from app.models.conversation import Conversation
 from app.models.conversation_flow_event import ConversationFlowEvent
 from app.models.conversation_flow_state import ConversationFlowState
@@ -89,6 +90,7 @@ __all__ = [
     "ClinicIntegrationSyncFailure",
     "ClinicIntegrationSyncRun",
     "ClinicIntegrationSyncSchedule",
+    "ClinicKnowledgeEntry",
     "ClinicProduct",
     "Conversation",
     "ConversationFlowEvent",
