@@ -163,6 +163,8 @@ def _with_current_patient_appointments(
                 "status": appointment.status,
                 "start_local": appointment.start_at.astimezone(clinic_tz).isoformat(),
                 "end_local": appointment.end_at.astimezone(clinic_tz).isoformat(),
+                "laser_device_key": appointment.laser_device_key,
+                "laser_device_name": appointment.laser_device_name,
             }
         )
     catalog["appointments"] = appointments
@@ -2654,13 +2656,15 @@ def _run_after_inbound(
     grounded_mode = True
     catalog_started = perf_counter()
     clinic_catalog = build_clinic_catalog(db, workspace)
-    if flow is not None and flow.is_active and flow.flow_type == "appointment_reschedule":
-        clinic_catalog = _with_current_patient_appointments(
-            db=db,
-            workspace=workspace,
-            patient=patient,
-            clinic_catalog=clinic_catalog,
-        )
+    # Existing-appointment edits can begin from a fresh customer turn. Supply only this
+    # patient's upcoming appointments (max 10) so the semantic layer can ground the exact
+    # appointment before the reschedule/write path; other customers are never exposed.
+    clinic_catalog = _with_current_patient_appointments(
+        db=db,
+        workspace=workspace,
+        patient=patient,
+        clinic_catalog=clinic_catalog,
+    )
     logger.info(
         "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
         run_id,

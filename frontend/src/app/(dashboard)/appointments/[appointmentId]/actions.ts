@@ -3,11 +3,12 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { tiaRequest } from "@/lib/tia/api";
+import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment } from "@/lib/types";
 
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
+  revalidatePath("/doctors");
   revalidatePath(`/appointments/${appointmentId}`);
   if (patientId) revalidatePath(`/patients/${patientId}`);
   revalidatePath("/dashboard");
@@ -35,20 +36,49 @@ export async function updateAppointmentStatus(formData: FormData) {
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 
-export async function changeAppointmentService(formData: FormData) {
+export type AppointmentServiceChangeState = { ok: boolean; error: string | null };
+
+function serviceChangeError(error: unknown) {
+  if (!(error instanceof TiaApiError)) return "تعذر تعديل الخدمة. حاول مرة أخرى.";
+  const detail = error.technicalMessage || "";
+  if (detail.includes("not available for the selected service/device with the selected doctor")) {
+    return "الخدمة أو الجهاز الجديد مش متاحين في نفس الميعاد مع الدكتور المختار. اختار دكتور تاني أو غيّر الموعد.";
+  }
+  if (detail.includes("not assigned") || detail.includes("does not provide")) {
+    return "الدكتور المختار غير متاح لتنفيذ الخدمة دي. اختار دكتور تاني للخدمة.";
+  }
+  if (detail.includes("device") && detail.includes("price")) {
+    return "سعر جهاز الليزر المختار غير مفعّل للخدمة دي.";
+  }
+  return error.message;
+}
+
+export async function changeAppointmentService(
+  _previous: AppointmentServiceChangeState,
+  formData: FormData,
+): Promise<AppointmentServiceChangeState> {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");
   const serviceId = String(formData.get("service_id") || "");
+  const doctorId = String(formData.get("doctor_id") || "").trim();
   const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
-  if (!appointmentId || !serviceId) return;
-  await tiaRequest(`/booking/appointments/${appointmentId}/service`, {
-    method: "POST",
-    body: JSON.stringify({
-      service_id: serviceId,
-      laser_device_key: laserDeviceKey || null,
-    }),
-  });
-  refreshAppointmentViews(appointmentId, patientId || undefined);
+  if (!appointmentId || !serviceId || !doctorId) {
+    return { ok: false, error: "اختار الخدمة والدكتور قبل الحفظ." };
+  }
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/service`, {
+      method: "POST",
+      body: JSON.stringify({
+        service_id: serviceId,
+        doctor_id: doctorId,
+        laser_device_key: laserDeviceKey || null,
+      }),
+    });
+    refreshAppointmentViews(appointmentId, patientId || undefined);
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: serviceChangeError(error) };
+  }
 }
 
 export async function cancelAppointment(formData: FormData) {

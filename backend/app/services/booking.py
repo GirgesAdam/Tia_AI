@@ -15,7 +15,11 @@ from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
-from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+from app.models.working_hours import (
+    BranchWorkingHour,
+    DoctorAvailabilityWindow,
+    DoctorWorkingHour,
+)
 from app.models.workspace import Workspace
 from app.services.inventory import InventoryOperationError, configured_device_price
 
@@ -269,18 +273,25 @@ def calculate_availability(
     if not assignments:
         return tz.key, []
 
+    duration_minutes = service_duration_minutes(service)
+    before = timedelta(minutes=service.buffer_before_minutes)
+    duration = timedelta(minutes=duration_minutes)
+    after = timedelta(minutes=service.buffer_after_minutes)
+
     doctor_ids = [doctor.id for _, _, doctor in assignments]
     day_start_local = datetime.combine(booking_date, time.min, tzinfo=tz)
     day_end_local = day_start_local + timedelta(days=1)
     day_start_utc = day_start_local.astimezone(UTC)
     day_end_utc = day_end_local.astimezone(UTC)
+    conflict_start_utc = (day_start_local - before).astimezone(UTC)
+    conflict_end_utc = (day_end_local + duration + after).astimezone(UTC)
 
     appointment_stmt = select(Appointment).where(
         Appointment.workspace_id == workspace.id,
         Appointment.doctor_id.in_(doctor_ids),
         Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
-        Appointment.busy_start_at < day_end_utc,
-        Appointment.busy_end_at > day_start_utc,
+        Appointment.busy_start_at < conflict_end_utc,
+        Appointment.busy_end_at > conflict_start_utc,
     )
     if exclude_appointment_id is not None:
         appointment_stmt = appointment_stmt.where(Appointment.id != exclude_appointment_id)
@@ -295,8 +306,8 @@ def calculate_availability(
             Appointment.workspace_id == workspace.id,
             Appointment.laser_device_key == laser_device_key,
             Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
-            Appointment.busy_start_at < day_end_utc,
-            Appointment.busy_end_at > day_start_utc,
+            Appointment.busy_start_at < conflict_end_utc,
+            Appointment.busy_end_at > conflict_start_utc,
         )
         if exclude_appointment_id is not None:
             device_stmt = device_stmt.where(Appointment.id != exclude_appointment_id)
@@ -342,9 +353,19 @@ def calculate_availability(
         doctor_hours = doctor_hours_by_doctor.get(doctor.id, [])
         dated_windows = windows_by_doctor.get(doctor.id, [])
         if doctor.doctor_type == "visiting":
-            availability_intervals = _window_intersections(branch_hours, dated_windows, booking_date, tz)
+            availability_intervals = _window_intersections(
+                branch_hours,
+                dated_windows,
+                booking_date,
+                tz,
+            )
         else:
-            availability_intervals = _interval_intersections(branch_hours, doctor_hours, booking_date, tz)
+            availability_intervals = _interval_intersections(
+                branch_hours,
+                doctor_hours,
+                booking_date,
+                tz,
+            )
             if dated_windows:
                 availability_intervals.extend(
                     _window_intersections(branch_hours, dated_windows, booking_date, tz)
@@ -352,7 +373,6 @@ def calculate_availability(
         if not availability_intervals:
             continue
 
-        duration_minutes = service_duration_minutes(service)
         if device_price is not None:
             price_minor = int(device_price.price_minor or 0)
             currency = device_price.currency
@@ -367,19 +387,17 @@ def calculate_availability(
             currency = service.currency or settings.default_currency
             device_key = None
             device_name = None
-        before = timedelta(minutes=service.buffer_before_minutes)
-        duration = timedelta(minutes=duration_minutes)
-        after = timedelta(minutes=service.buffer_after_minutes)
 
+        # Working-hours ranges describe when an appointment is allowed to START.
+        # A service may finish after the configured closing time; duration and
+        # buffers still participate fully in doctor/device conflict checks.
         for interval_start, interval_end in availability_intervals:
-            candidate = ceil_to_interval(interval_start + before, settings.slot_interval_minutes)
-            while True:
+            candidate = ceil_to_interval(interval_start, settings.slot_interval_minutes)
+            while candidate <= interval_end:
                 service_start = candidate
                 service_end = service_start + duration
                 busy_start = service_start - before
                 busy_end = service_end + after
-                if busy_end > interval_end:
-                    break
 
                 start_utc = service_start.astimezone(UTC)
                 end_utc = service_end.astimezone(UTC)
