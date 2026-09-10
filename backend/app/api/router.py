@@ -15,6 +15,7 @@ from app.api.routes.crm import router as crm_router
 from app.api.routes.crm_task_executor import router as crm_task_executor_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.doctor_admin import router as doctor_admin_router
+from app.api.routes.doctor_admin_read import router as doctor_admin_read_router
 from app.api.routes.doctor_calendar import router as doctor_calendar_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.health import router as health_router
@@ -46,6 +47,7 @@ api_router.include_router(
 )
 api_router.include_router(clinic_router, prefix="/clinic", tags=["clinic"])
 api_router.include_router(doctor_admin_router, prefix="/clinic", tags=["clinic"])
+api_router.include_router(doctor_admin_read_router, prefix="/clinic", tags=["clinic"])
 api_router.include_router(clinic_setup_v2_router, prefix="/clinic", tags=["clinic-setup"])
 api_router.include_router(crm_router, prefix="/crm", tags=["crm"])
 api_router.include_router(crm_task_executor_router, prefix="/crm", tags=["crm"])
