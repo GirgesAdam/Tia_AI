@@ -18,9 +18,10 @@ from app.services.package_offers import (
 from app.services.patient_packages import PackageOperationError
 
 MAX_COMPOUND_ITEMS = 6
-_COMPOUND_QUEUE_KEY = "compound_request_queue"
-_COMPOUND_TOTAL_KEY = "compound_request_total"
-_COMPOUND_COMPLETED_KEY = "compound_request_completed"
+COMPOUND_QUEUE_KEY = "compound_request_queue"
+COMPOUND_TOTAL_KEY = "compound_request_total"
+COMPOUND_COMPLETED_KEY = "compound_request_completed"
+COMPOUND_CURRENT_SERVICE_KEY = "compound_current_service_name"
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ def _catalog_doctor_service_ids(catalog: dict[str, object], doctor_id: str) -> s
     return set()
 
 
-def _catalog_service_name(catalog: dict[str, object], service_id: str | None) -> str | None:
+def catalog_service_name(catalog: dict[str, object], service_id: str | None) -> str | None:
     if not service_id:
         return None
     rows = catalog.get("services")
@@ -135,6 +136,27 @@ def appointment_items(items: list[CompoundRequestedItem]) -> list[CompoundReques
     return [item for item in items if item.kind == "appointment"]
 
 
+def compound_union_decision(
+    base: SemanticCapabilityDecision,
+    items: list[CompoundRequestedItem],
+) -> SemanticCapabilityDecision:
+    """Derive the smallest union capability set from structured compound items."""
+    capabilities = {str(value) for value in base.capabilities}
+    if package_items(items):
+        capabilities.update({"package_information", "package_purchase"})
+    if appointment_items(items):
+        capabilities.update({"availability_discovery", "appointment_creation"})
+    hints = base.entity_hints.model_copy(update={"requested_items": list(items)})
+    return base.model_copy(
+        update={
+            "capabilities": sorted(capabilities),
+            "flow_signal": "start_booking" if appointment_items(items) else "none",
+            "package_intent": "none",
+            "entity_hints": hints,
+        }
+    )
+
+
 def appointment_decision_from_item(
     base: SemanticCapabilityDecision,
     item: CompoundRequestedItem,
@@ -185,9 +207,9 @@ def appointment_item_state(
     state: dict[str, object] = {
         "service_candidate_ids": list(item.service_candidate_ids),
         "doctor_candidate_ids": list(item.doctor_candidate_ids),
-        _COMPOUND_QUEUE_KEY: [entry.model_dump(mode="json") for entry in remaining],
-        _COMPOUND_TOTAL_KEY: int(total),
-        _COMPOUND_COMPLETED_KEY: int(completed),
+        COMPOUND_QUEUE_KEY: [entry.model_dump(mode="json") for entry in remaining],
+        COMPOUND_TOTAL_KEY: int(total),
+        COMPOUND_COMPLETED_KEY: int(completed),
     }
     optional = {
         "service_query": item.service_query,
@@ -205,16 +227,16 @@ def appointment_item_state(
             state[key] = value
     if item.package_intent in {"use_existing", "avoid_existing"}:
         state["package_intent"] = item.package_intent
-    service_name = _catalog_service_name(catalog, item.service_id)
+    service_name = catalog_service_name(catalog, item.service_id)
     if service_name:
-        state["compound_current_service_name"] = service_name
+        state[COMPOUND_CURRENT_SERVICE_KEY] = service_name
     return state
 
 
 def queue_from_flow_state(state: dict[str, object] | None) -> list[CompoundRequestedItem]:
     if not isinstance(state, dict):
         return []
-    raw = state.get(_COMPOUND_QUEUE_KEY)
+    raw = state.get(COMPOUND_QUEUE_KEY)
     if not isinstance(raw, list):
         return []
     result: list[CompoundRequestedItem] = []
@@ -232,8 +254,8 @@ def compound_progress(state: dict[str, object] | None) -> tuple[int, int]:
     if not isinstance(state, dict):
         return 0, 0
     try:
-        total = int(state.get(_COMPOUND_TOTAL_KEY) or 0)
-        completed = int(state.get(_COMPOUND_COMPLETED_KEY) or 0)
+        total = int(state.get(COMPOUND_TOTAL_KEY) or 0)
+        completed = int(state.get(COMPOUND_COMPLETED_KEY) or 0)
     except (TypeError, ValueError):
         return 0, 0
     return max(0, completed), max(0, total)
