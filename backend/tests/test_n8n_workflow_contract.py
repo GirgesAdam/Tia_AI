@@ -130,3 +130,15 @@ def test_oracle_setup_can_only_import_and_wire_scheduler() -> None:
     assert "TIA_AUTOMATION_TOKEN" in token_generator
     assert "TIA_CHANNEL_TOKEN" not in token_generator
     assert "tia_ch_" not in token_generator
+
+
+def test_oracle_publish_guardrail_unpublishes_any_legacy_adapter_workflow() -> None:
+    script = (_root() / "deploy/oracle-n8n/publish-scheduler.sh").read_text(encoding="utf-8")
+
+    assert "publish:workflow --id=tiaAutoSched0001" in script
+    assert "unpublish:workflow --id=tiaWAInbound0001" in script
+    assert "unpublish:workflow --id=tiaWAOutbox00001" in script
+    assert "CAST(nodes AS text) LIKE '%/adapter/outbox/claim%'" in script
+    assert "CAST(nodes AS text) LIKE '%/adapter/outbox/provider-status%'" in script
+    assert "CAST(nodes AS text) LIKE '%/channels/adapter/inbound%'" in script
+    assert 'n8n unpublish:workflow --id="$workflow_id"' in script
