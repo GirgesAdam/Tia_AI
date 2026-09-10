@@ -32,7 +32,7 @@ env:
   CORS_ORIGINS: ""
 
 jobs:
-  patch-and-verify:
+  patch-and-trace:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
@@ -56,15 +56,6 @@ jobs:
           if old not in text:
               raise SystemExit("Expected reschedule prompt anchor not found")
           interpreter.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          workflow = Path(".github/workflows/realistic-system-journeys.yml")
-          workflow_text = workflow.read_text(encoding="utf-8")
-          anchor = "      - backend/app/agents/turn_models.py\n"
-          addition = anchor + "      - backend/app/agents/turn_interpreter.py\n"
-          if "      - backend/app/agents/turn_interpreter.py\n" not in workflow_text:
-              if anchor not in workflow_text:
-                  raise SystemExit("Expected workflow path anchor not found")
-              workflow.write_text(workflow_text.replace(anchor, addition, 1), encoding="utf-8")
           PY
       - uses: actions/setup-python@v5
         with:
@@ -83,27 +74,45 @@ jobs:
         run: alembic upgrade head
       - name: Focused unit tests
         run: python -m pytest tests/test_clinic_grounding_compatibility.py tests/test_unified_turn_interpreter.py -q
-      - name: Verify paid reschedule only
+      - name: Trace paid reschedule semantic decision
         run: |
-          python -m scripts.run_realistic_system_journeys \
-            --workspace-slug tia \
-            --report artifacts/realistic-system-journeys.json \
-            --scenario paid_reschedule_no_double_charge
+          python - <<'PY'
+          import json
+          import sys
+          import app.services.agent_chat as agent_chat
+          from scripts import run_realistic_system_journeys as journeys
+
+          original = agent_chat.interpret_customer_turn
+
+          def traced(*args, **kwargs):
+              decision = original(*args, **kwargs)
+              print("TIA_SEMANTIC_DECISION=" + json.dumps(decision.model_dump(mode="json"), ensure_ascii=False, default=str))
+              return decision
+
+          agent_chat.interpret_customer_turn = traced
+          sys.argv = [
+              "run_realistic_system_journeys",
+              "--workspace-slug", "tia",
+              "--report", "artifacts/realistic-system-journeys.json",
+              "--scenario", "paid_reschedule_no_double_charge",
+          ]
+          raise SystemExit(journeys.main())
+          PY
       - name: Upload manual-review report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: realistic-paid-reschedule-source-patch
+          name: realistic-paid-reschedule-trace
           path: backend/artifacts/realistic-system-journeys.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Commit verified source patch
+      - name: Commit semantic prompt patch
         if: success()
         working-directory: .
         run: |
           git config user.name "Girges Ezzat"
           git config user.email "girgesadam1@gmail.com"
-          git add backend/app/agents/turn_interpreter.py .github/workflows/realistic-system-journeys.yml
+          git add backend/app/agents/turn_interpreter.py
           git diff --cached --quiet && exit 0
           git commit -m "Recognize explicit first-turn reschedule authorization"
           git push origin HEAD:test/realistic-system-journeys-v1
