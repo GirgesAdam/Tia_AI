@@ -66,6 +66,8 @@ def main() -> None:
         db.add(conversation)
         db.flush()
 
+        # Reproduce the exact shape of the real first-turn reply that preceded the
+        # failed follow-up. No extra flow or synthetic option numbering is added.
         db.add_all(
             [
                 Message(
@@ -84,11 +86,9 @@ def main() -> None:
                     sender_type="ai",
                     direction="outbound",
                     content=(
-                        "عندك معادين مؤكدين، تحب تلغي أنهي واحد؟\n\n"
-                        f"1. {UNDERARM} مع د. {laser_slot.doctor_name}، "
-                        f"{laser_slot.date_text} الساعة {laser_slot.time_text}\n"
-                        f"2. {HYDRA} مع د. {hydra_slot.doctor_name}، "
-                        f"{hydra_slot.date_text} الساعة {hydra_slot.time_text}"
+                        "أكيد. تحب تلغي أنهي معاد؟\n\n"
+                        "- ليزر إزالة الشعر – إبط: الجمعة 11 سبتمبر الساعة 2:00 ظهرًا\n"
+                        "- هيدرافيشل: السبت 12 سبتمبر الساعة 10:00 صباحًا"
                     ),
                     delivery_status="sent",
                     metadata_json={},
