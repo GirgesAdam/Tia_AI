@@ -39,6 +39,7 @@ from app.models.service_package_offer import ServicePackageOffer
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
 from app.services.agent_chat import run_agent_chat
+from app.services.conversation_ownership import return_to_ai, transfer_to_human
 from app.services.patient_packages import (
     consume_package_usage,
     create_patient_package,
@@ -750,8 +751,7 @@ def _run_case(engine, workspace_slug: str, name: str, index: int, meter: TokenMe
                 )
                 if conversation is None:
                     raise RuntimeError("Conversation missing before human takeover")
-                conversation.owner_type = "human"
-                conversation.ownership_changed_at = datetime.now(UTC)
+                transfer_to_human(conversation)
                 db.flush()
             elif name == "human_takeover_and_return" and turn_index == 3:
                 conversation = db.scalar(
@@ -762,9 +762,7 @@ def _run_case(engine, workspace_slug: str, name: str, index: int, meter: TokenMe
                 )
                 if conversation is None:
                     raise RuntimeError("Conversation missing before AI handback")
-                conversation.owner_type = "ai"
-                conversation.assigned_user_id = None
-                conversation.ownership_changed_at = datetime.now(UTC)
+                return_to_ai(conversation)
                 db.flush()
 
             turn_mark = meter.mark()
