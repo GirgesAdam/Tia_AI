@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 from app.services import agent_chat
 
-
 HYDRA_SERVICE = "service-hydra"
 LASER_SERVICE = "service-laser"
 
