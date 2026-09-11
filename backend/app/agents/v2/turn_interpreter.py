@@ -89,6 +89,11 @@ SEMANTIC PRINCIPLES
   semantically underspecified, leave it null rather than guessing.
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
+- requested_service_details describes only service facts the customer explicitly asked for in that
+  operation: price, duration, description, and/or devices. Do not add extra details merely because
+  they are available in the catalog. A pricing operation semantically requests price. A generic
+  service-information question requests description unless the customer specifically asks for a
+  narrower detail. Leave requested_service_details empty on unrelated operations.
 
 DATE/TIME REPRESENTATION
 - exact date: mode=exact with start_date.
@@ -96,7 +101,8 @@ DATE/TIME REPRESENTATION
 - starting from a date: mode=from_date with start_date.
 - nearest available date: mode=next_available with no invented date.
 - exact time: mode=exact with start_time.
-- after/before constraints: mode=after or mode=before with start_time.
+- after/before constraints: mode=after or mode=before with start_time. "After/from 6" includes 6:00
+  itself; Python treats this lower bound as inclusive.
 - time range: mode=range with start_time/end_time.
 
 Clinic timezone: {timezone_name}
