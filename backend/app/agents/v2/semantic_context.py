@@ -111,8 +111,14 @@ def build_semantic_context(
     Free-form clinic/service explanation is deliberately excluded here; the semantic
     interpreter only needs names/relationships. Customer-facing explanation comes
     from the single saved "معلومات Tia" knowledge source after planning.
+
+    Raw task/choice dictionaries are intentionally never copied into model_input.
+    The keyword arguments remain accepted for compatibility but are model-invisible;
+    callers that need conversational task state must inject the sanitized ref-based
+    view with ``with_safe_task_context`` after this context has built its reference map.
     """
 
+    _ = active_task, pending_choice
     reference_map: dict[str, SemanticReferenceTarget] = {}
     model_services: list[dict[str, object]] = []
     model_doctors: list[dict[str, object]] = []
@@ -284,8 +290,8 @@ def build_semantic_context(
         "appointments": model_appointments,
         "packages": model_packages,
         "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
-        "active_task": dict(active_task or {}),
-        "pending_choice": dict(pending_choice or {}),
+        "active_task": {},
+        "pending_choice": {},
     }
     return SemanticContext(model_input=model_input, reference_map=reference_map)
 
