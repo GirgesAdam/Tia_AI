@@ -1,0 +1,261 @@
+name: Verify Lean Semantic Catalog Only
+
+on:
+  push:
+    branches:
+      - test/realistic-system-journeys-v1
+    paths:
+      - .github/workflows/optimize-semantic-catalog-only.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-lean-semantic-catalog-only
+  cancel-in-progress: true
+
+env:
+  ENVIRONMENT: staging
+  DEBUG: "false"
+  DOCS_ENABLED: "false"
+  DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+  MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+  SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_semantic_catalog_unused
+  SUPABASE_SECRET_KEY: sb_secret_semantic_catalog_unused
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  LLM_PROVIDER: openai
+  OPENAI_MODEL: gpt-5.6-luna
+  OPENAI_FALLBACK_MODEL: gpt-5-mini
+  OPENAI_REASONING_EFFORT: low
+  OPENAI_FALLBACK_REASONING_EFFORT: low
+  LLM_TIMEOUT_SECONDS: "60"
+  LLM_MAX_RETRIES: "2"
+  LLM_REALTIME_MAX_RETRIES: "0"
+  AGENT_UNIFIED_TURN_INTERPRETER_ENABLED: "true"
+  CORS_ORIGINS: ""
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/realistic-system-journeys-v1
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build lean semantic catalog
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/agents/turn_interpreter.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('def _semantic_catalog_for_single_location(')
+          end = text.index('\ndef _single_location_entity_state', start)
+          replacement = '''def _semantic_catalog_for_single_location(\n    clinic_catalog: dict[str, object],\n) -> dict[str, object]:\n    \"\"\"Return only facts required for semantic interpretation.\n\n    The full canonical catalog remains unchanged and authoritative for grounding,\n    pricing, availability, and execution. This copy removes duplicated and\n    operational fields before sending clinic context to the LLM.\n    \"\"\"\n    semantic: dict[str, object] = {\"services\": [], \"doctors\": []}\n\n    services = clinic_catalog.get(\"services\")\n    if isinstance(services, list):\n        semantic_services: list[dict[str, object]] = []\n        for row in services:\n            if not isinstance(row, dict):\n                continue\n            item: dict[str, object] = {}\n            for key in (\"id\", \"name\", \"category\", \"requires_laser_device\"):\n                value = row.get(key)\n                if value not in (None, \"\", []):\n                    item[key] = value\n            description = str(row.get(\"description\") or \"\").strip()\n            if description:\n                item[\"description\"] = description[:240]\n            raw_devices = row.get(\"laser_devices\")\n            if isinstance(raw_devices, list):\n                devices = [\n                    {\n                        key: device.get(key)\n                        for key in (\"device_key\", \"device_name\")\n                        if device.get(key) not in (None, \"\")\n                    }\n                    for device in raw_devices\n                    if isinstance(device, dict)\n                ]\n                devices = [device for device in devices if device]\n                if devices:\n                    item[\"laser_devices\"] = devices\n            if item:\n                semantic_services.append(item)\n        semantic[\"services\"] = semantic_services\n\n    doctors = clinic_catalog.get(\"doctors\")\n    if isinstance(doctors, list):\n        semantic_doctors: list[dict[str, object]] = []\n        for row in doctors:\n            if not isinstance(row, dict):\n                continue\n            item = {\n                key: row.get(key)\n                for key in (\"id\", \"name\", \"specialization\", \"service_ids\")\n                if row.get(key) not in (None, \"\", [])\n            }\n            if item:\n                semantic_doctors.append(item)\n        semantic[\"doctors\"] = semantic_doctors\n\n    appointments = clinic_catalog.get(\"appointments\")\n    if isinstance(appointments, list):\n        appointment_keys = (\n            \"id\", \"appointment_id\", \"service_id\", \"service_name\",\n            \"doctor_id\", \"doctor_name\", \"status\", \"start_local\",\n            \"laser_device_key\", \"laser_device_name\",\n        )\n        semantic[\"appointments\"] = [\n            {\n                key: row.get(key)\n                for key in appointment_keys\n                if row.get(key) not in (None, \"\", [])\n            }\n            for row in appointments\n            if isinstance(row, dict)\n        ]\n\n    return semantic\n\n'''
+          path.write_text(text[:start] + replacement + text[end + 1:], encoding='utf-8')
+          PY
+
+      - name: Update catalog regression tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_single_location_agent_semantics.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '    assert semantic["services"][0]["doctor_ids"] == ["doctor-1"]\n',
+              '    assert "doctor_ids" not in semantic["services"][0]\n',
+              1,
+          )
+          if 'def test_semantic_catalog_drops_operational_and_duplicate_fields()' not in text:
+              text += '''\n\ndef test_semantic_catalog_drops_operational_and_duplicate_fields() -> None:\n    catalog = {\n        "services": [\n            {\n                "id": "service-1", "name": "HydraFacial", "category": "Skin",\n                "description": "D" * 500, "duration_minutes": 60,\n                "price_minor": 180000, "currency": "EGP", "price": "1,800 EGP",\n                "requires_medical_review": False, "requires_laser_device": False,\n                "doctor_ids": ["doctor-1"],\n            },\n            {\n                "id": "service-2", "name": "Underarm Laser", "category": "Laser",\n                "requires_laser_device": True, "doctor_ids": ["doctor-1"],\n                "laser_devices": [{\n                    "device_key": "candela_gentle", "device_name": "Candela Gentle",\n                    "price_minor": 65000, "currency": "EGP", "configured": True,\n                }],\n            },\n        ],\n        "branches": [{"id": "branch-1", "working_hours": [{"weekday": 1}]}],\n        "doctors": [{\n            "id": "doctor-1", "name": "Ahmed", "specialization": "Dermatology",\n            "service_ids": ["service-1", "service-2"], "branch_ids": ["branch-1"],\n            "working_hours": [{"weekday": 1, "start": "10:00", "end": "20:00"}],\n        }],\n        "appointments": [{\n            "id": "appointment-1", "appointment_id": "appointment-1",\n            "service_id": "service-1", "service_name": "HydraFacial",\n            "doctor_id": "doctor-1", "doctor_name": "Ahmed", "status": "confirmed",\n            "start_local": "2026-09-12T10:00:00+03:00",\n            "end_local": "2026-09-12T11:00:00+03:00", "price_minor": 180000,\n            "payment_status": "paid",\n        }],\n    }\n    semantic = _semantic_catalog_for_single_location(catalog)\n    assert "branches" not in semantic\n    assert "doctor_ids" not in semantic["services"][0]\n    assert "price_minor" not in semantic["services"][0]\n    assert "duration_minutes" not in semantic["services"][0]\n    assert len(semantic["services"][0]["description"]) == 240\n    assert semantic["services"][1]["laser_devices"] == [\n        {"device_key": "candela_gentle", "device_name": "Candela Gentle"}\n    ]\n    assert "working_hours" not in semantic["doctors"][0]\n    assert "branch_ids" not in semantic["doctors"][0]\n    assert "end_local" not in semantic["appointments"][0]\n    assert "price_minor" not in semantic["appointments"][0]\n    assert "branches" in catalog\n    assert "working_hours" in catalog["doctors"][0]\n'''
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit candidate locally
+        run: |
+          git config user.name "Tia CI"
+          git config user.email "tia-ci@users.noreply.github.com"
+          git add app/agents/turn_interpreter.py tests/test_single_location_agent_semantics.py
+          git commit -m "Send a lean catalog to the semantic interpreter"
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Deterministic semantic regression
+        run: |
+          python -m pytest \
+            tests/test_single_location_agent_semantics.py \
+            tests/test_unified_turn_interpreter.py \
+            tests/test_contextual_time_followups.py \
+            tests/test_contextual_followup_regressions.py \
+            tests/test_clinic_grounding_compatibility.py \
+            tests/test_compound_customer_requests.py \
+            -q -k 'not live'
+          python -m compileall -q app/agents/turn_interpreter.py
+
+      - name: Audit real staging context size
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+          from app.agents.clinic_grounding import build_clinic_catalog
+          from app.agents.turn_interpreter import _interpreter_system_prompt, _semantic_catalog_for_single_location
+          from app.core.config import settings
+          from app.models.workspace import Workspace
+
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+              assert workspace is not None
+              full = build_clinic_catalog(db, workspace)
+              semantic = _semantic_catalog_for_single_location(full)
+          full_json = json.dumps(full, ensure_ascii=False, separators=(',', ':'))
+          semantic_json = json.dumps(semantic, ensure_ascii=False, separators=(',', ':'))
+          prompt = _interpreter_system_prompt(
+              timezone_name='Africa/Cairo',
+              local_now=datetime.fromisoformat('2026-09-11T02:00:00+03:00'),
+              active_flow=False,
+          )
+          ratio = len(semantic_json) / max(1, len(full_json))
+          audit = {
+              'full_catalog_chars': len(full_json),
+              'semantic_catalog_chars': len(semantic_json),
+              'catalog_ratio': round(ratio, 4),
+              'prompt_chars_unchanged': len(prompt),
+              'services': len(semantic.get('services', [])),
+              'doctors': len(semantic.get('doctors', [])),
+          }
+          print(json.dumps(audit, ensure_ascii=False, indent=2))
+          assert ratio < 0.62, ratio
+          assert 'branches' not in semantic
+          assert all('doctor_ids' not in row for row in semantic.get('services', []))
+          assert all('working_hours' not in row for row in semantic.get('doctors', []))
+          with open('artifacts/catalog-audit.json', 'w', encoding='utf-8') as handle:
+              json.dump(audit, handle, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Run two new semantic smoke cases
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          from langchain_core.messages import HumanMessage
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+
+          from app.agents.clinic_grounding import build_clinic_catalog
+          from app.agents.turn_interpreter import interpret_customer_turn
+          from app.core.config import settings
+          from app.models.workspace import Workspace
+          from scripts.run_realistic_system_journeys import TokenMeter
+
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+              assert workspace is not None
+              catalog = build_clinic_catalog(db, workspace)
+
+          services = [row for row in catalog.get('services', []) if isinstance(row, dict)]
+          doctors = [row for row in catalog.get('doctors', []) if isinstance(row, dict)]
+          hydra = next(row for row in services if row.get('name') == 'هيدرافيشل')
+          underarm = next(row for row in services if row.get('name') == 'ليزر إزالة الشعر - إبط')
+          doctor = next(row for row in doctors if str(underarm['id']) in {str(v) for v in row.get('service_ids', [])})
+          device = next(row for row in underarm.get('laser_devices', []) if row.get('device_key') == 'candela_gentle')
+
+          cases = [
+              {
+                  'name': 'new_service_info_combo',
+                  'message': 'الهيدرافيشل بكام وبتاخد قد إيه ومين الدكاترة اللي بيعملوها؟',
+                  'expect_service': str(hydra['id']),
+                  'caps': {'pricing', 'service_information', 'doctor_discovery'},
+              },
+              {
+                  'name': 'new_complete_laser_booking',
+                  'message': f"عايز أحجز {underarm['name']} بجهاز {device['device_name']} مع د. {doctor['name']} يوم 2026-09-12 الساعة 18:00",
+                  'expect_service': str(underarm['id']),
+                  'expect_doctor': str(doctor['id']),
+                  'caps': {'availability_discovery', 'appointment_creation'},
+              },
+          ]
+
+          meter = TokenMeter()
+          meter.install()
+          rows = []
+          error = None
+          try:
+              for case in cases:
+                  mark = meter.mark()
+                  decision = interpret_customer_turn(
+                      flow=None,
+                      history=[HumanMessage(content=case['message'])],
+                      timezone_name='Africa/Cairo',
+                      local_now=datetime.fromisoformat('2026-09-11T02:00:00+03:00'),
+                      clinic_catalog=catalog,
+                  )
+                  usage = meter.since(mark)
+                  row = {
+                      'name': case['name'],
+                      'message': case['message'],
+                      'capabilities': list(decision.capabilities),
+                      'service_id': decision.entity_hints.service_id,
+                      'doctor_id': decision.entity_hints.doctor_id,
+                      'laser_device_key': decision.entity_hints.laser_device_key,
+                      'requested_date': decision.entity_hints.requested_date,
+                      'requested_start_time': decision.entity_hints.requested_start_time,
+                      'tokens': usage,
+                  }
+                  rows.append(row)
+                  print(json.dumps(row, ensure_ascii=False, indent=2))
+                  assert decision.entity_hints.service_id == case['expect_service'], decision
+                  assert case['caps'].issubset(set(decision.capabilities)), decision.capabilities
+                  if case.get('expect_doctor'):
+                      assert decision.entity_hints.doctor_id == case['expect_doctor'], decision.entity_hints
+                      assert decision.entity_hints.laser_device_key == 'candela_gentle', decision.entity_hints
+                      assert decision.entity_hints.requested_date == '2026-09-12', decision.entity_hints
+                      assert decision.entity_hints.requested_start_time == '18:00', decision.entity_hints
+          except Exception as exc:
+              error = repr(exc)
+              raise
+          finally:
+              meter.uninstall()
+              report = {
+                  'cases': rows,
+                  'total_input_tokens': sum(row['tokens']['input_tokens'] for row in rows),
+                  'error': error,
+              }
+              with open('artifacts/lean-semantic-catalog.json', 'w', encoding='utf-8') as handle:
+                  json.dump(report, handle, ensure_ascii=False, indent=2)
+
+      - name: Push verified catalog candidate
+        run: git push origin HEAD:test/realistic-system-journeys-v1
+
+      - name: Upload audits
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-semantic-catalog
+          path: |
+            backend/artifacts/catalog-audit.json
+            backend/artifacts/lean-semantic-catalog.json
+          if-no-files-found: warn
+          retention-days: 7
