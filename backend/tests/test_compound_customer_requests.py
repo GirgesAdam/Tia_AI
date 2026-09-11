@@ -320,3 +320,60 @@ def test_mixed_package_and_service_keeps_appointment_after_package_batch(monkeyp
         "availability_discovery",
         "appointment_creation",
     ]
+
+
+def test_grounding_strips_laser_device_from_non_laser_item() -> None:
+    service_id = uuid4()
+    contaminated = _appointment(service_id, day="2026-09-12", time="10:00").model_copy(
+        update={"laser_device_key": "candela_gentle"}
+    )
+    catalog = {
+        "services": [
+            {
+                "id": str(service_id),
+                "name": "Hydrafacial",
+                "requires_laser_device": False,
+                "laser_devices": [],
+            }
+        ],
+        "doctors": [],
+    }
+
+    grounded = compound.ground_compound_requested_items([contaminated], catalog)
+    decision = compound.appointment_decision_from_item(_decision(grounded), grounded[0])
+    state = compound.appointment_item_state(
+        grounded[0],
+        remaining=[],
+        total=1,
+        completed=0,
+        catalog=catalog,
+    )
+
+    assert grounded[0].laser_device_key is None
+    assert decision.entity_hints.laser_device_key is None
+    assert "laser_device_key" not in state
+
+
+def test_grounding_keeps_only_device_configured_for_laser_service() -> None:
+    service_id = uuid4()
+    catalog = {
+        "services": [
+            {
+                "id": str(service_id),
+                "name": "Underarm Laser",
+                "requires_laser_device": True,
+                "laser_devices": [{"device_key": "prime_lase"}],
+            }
+        ],
+        "doctors": [],
+    }
+    valid = _appointment(service_id, day="2026-09-12", time="10:00").model_copy(
+        update={"laser_device_key": "prime_lase"}
+    )
+    invalid = valid.model_copy(update={"laser_device_key": "candela_gentle"})
+
+    grounded_valid = compound.ground_compound_requested_items([valid], catalog)[0]
+    grounded_invalid = compound.ground_compound_requested_items([invalid], catalog)[0]
+
+    assert grounded_valid.laser_device_key == "prime_lase"
+    assert grounded_invalid.laser_device_key is None

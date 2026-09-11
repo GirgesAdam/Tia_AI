@@ -70,6 +70,39 @@ def catalog_service_name(catalog: dict[str, object], service_id: str | None) -> 
     return None
 
 
+def _catalog_service_laser_policy(
+    catalog: dict[str, object],
+    service_id: str | None,
+) -> tuple[bool | None, set[str]]:
+    """Return canonical laser requirements for one grounded service.
+
+    None means the catalog row does not expose laser metadata, so grounding
+    leaves the item unchanged rather than guessing.
+    """
+    if not service_id:
+        return None, set()
+    rows = catalog.get("services")
+    if not isinstance(rows, list):
+        return None, set()
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("id") or "") != str(service_id):
+            continue
+        if "requires_laser_device" not in row:
+            return None, set()
+        requires_laser_device = bool(row.get("requires_laser_device"))
+        raw_devices = row.get("laser_devices")
+        allowed_devices: set[str] = set()
+        if isinstance(raw_devices, list):
+            for device in raw_devices:
+                if not isinstance(device, dict):
+                    continue
+                device_key = device.get("device_key")
+                if device_key:
+                    allowed_devices.add(str(device_key))
+        return requires_laser_device, allowed_devices
+    return None, set()
+
+
 def ground_compound_requested_items(
     items: list[CompoundRequestedItem],
     catalog: dict[str, object],
@@ -111,6 +144,22 @@ def ground_compound_requested_items(
                     value for value in service_candidates if value in compatible_services
                 ]
 
+        laser_device_key = item.laser_device_key
+        if service_id:
+            requires_laser_device, allowed_laser_devices = _catalog_service_laser_policy(
+                catalog,
+                service_id,
+            )
+            if requires_laser_device is False:
+                laser_device_key = None
+            elif (
+                requires_laser_device is True
+                and laser_device_key
+                and allowed_laser_devices
+                and str(laser_device_key) not in allowed_laser_devices
+            ):
+                laser_device_key = None
+
         grounded.append(
             item.model_copy(
                 update={
@@ -118,6 +167,7 @@ def ground_compound_requested_items(
                     "service_candidate_ids": service_candidates,
                     "doctor_id": doctor_id,
                     "doctor_candidate_ids": doctor_candidates,
+                    "laser_device_key": laser_device_key,
                 }
             )
         )

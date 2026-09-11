@@ -239,12 +239,12 @@ def _filter_candidates_for_selected_doctor(
 
 
 def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
-    """Validate canonical IDs and doctor/service/branch compatibility.
+    """Validate canonical IDs and cross-entity compatibility.
 
-    The model may only return IDs from the supplied catalog. When it identifies
-    one doctor, deterministic catalog relationships further prevent an
-    incompatible service or branch from reaching booking logic. Candidate sets
-    are narrowed only by canonical IDs; customer wording is never inspected.
+    The model may only return IDs from the supplied catalog. Canonical catalog
+    relationships are also authoritative for resource requirements: once a
+    selected service is known not to use a laser device, irrelevant model or
+    conversation device state is discarded without inspecting customer wording.
     """
     service_ids = _catalog_ids(catalog, "services")
     branch_ids = _catalog_ids(catalog, "branches")
@@ -292,6 +292,15 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
             allow_promotion=not bool(raw_branch_id),
         )
 
+    laser_device_key = getattr(entity_hints, "laser_device_key", None)
+    selected_service = _catalog_row_by_id(catalog, "services", service_id)
+    if (
+        selected_service is not None
+        and "requires_laser_device" in selected_service
+        and not bool(selected_service.get("requires_laser_device"))
+    ):
+        laser_device_key = None
+
     return entity_hints.model_copy(
         update={
             "service_id": service_id,
@@ -301,6 +310,7 @@ def validate_grounded_entity_ids(entity_hints: Any, catalog: dict[str, Any]):
             "doctor_id": doctor_id,
             "doctor_candidate_ids": doctor_candidate_ids,
             "appointment_id": appointment_id,
+            "laser_device_key": laser_device_key,
         }
     )
 
@@ -333,8 +343,7 @@ def grounded_catalog_facts(
     """Select verified catalog rows using only LLM-returned canonical IDs.
 
     No customer text is inspected or matched here. The LLM chooses canonical IDs
-    from the catalog and
-    this function merely materializes those exact PostgreSQL rows.
+    from the catalog and this function merely materializes those exact rows.
     """
     capability_set = set(capabilities)
     payload: dict[str, Any] = {
@@ -349,10 +358,6 @@ def grounded_catalog_facts(
     selected_doctor_id = getattr(entity_hints, "doctor_id", None)
     doctor_candidate_ids = list(getattr(entity_hints, "doctor_candidate_ids", []) or [])
 
-    # service_relationship_doctor_discovery: the semantic interpreter decides that
-    # the customer is asking for doctors and grounds the service. Python then
-    # materializes the canonical service -> doctor relationship from the catalog;
-    # no customer wording is inspected and no lexical intent rule exists here.
     if (
         "doctor_discovery" in capability_set
         and "availability_discovery" not in capability_set

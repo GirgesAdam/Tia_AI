@@ -128,7 +128,14 @@ class SemanticEntityHints(BaseModel):
     )
     appointment_id: str | None = Field(
         default=None,
-        description="Canonical ID of the EXISTING appointment being acted on, selected only from current-patient appointments.",
+        description=(
+            "Canonical ID of the EXISTING appointment being acted on, selected only from supplied current-patient appointments. "
+            "For cancellation or reschedule, when the latest turn plus recent conversation clearly singles out exactly one current "
+            "appointment, copy that appointment exact ID here. A direct answer to the assistant immediately preceding question about "
+            "which appointment to act on is a selection when it uniquely identifies one appointment. An appointment explicitly said "
+            "to stay unchanged is excluded rather than kept as an ambiguity candidate. Use null only when more than one current "
+            "appointment genuinely still fits."
+        ),
     )
     requested_date: str | None = Field(default=None, description="Desired appointment date YYYY-MM-DD from the latest customer turn.")
     requested_start_time: str | None = Field(
@@ -157,11 +164,10 @@ class SemanticEntityHints(BaseModel):
 
     @model_validator(mode="after")
     def bind_selected_laser_device(self) -> SemanticEntityHints:
-        # ContextVar is request/task-local. This gives the deterministic clinic
-        # adapter access to the structured semantic choice without parsing text
-        # and without adding keyword routing to the booking orchestrator.
-        if self.laser_device_key is not None:
-            set_laser_device_key(self.laser_device_key)
+        # Keep direct model validation safe as well, but SemanticCapabilityDecision
+        # is the authoritative per-turn boundary because provider adapters may
+        # return already-constructed nested models.
+        set_laser_device_key(self.laser_device_key)
         return self
 
 
@@ -178,6 +184,14 @@ class SemanticCapabilityDecision(BaseModel):
     recommended_handoff_priority: Priority
     confidence: float
     reason: str
+
+    @model_validator(mode="after")
+    def bind_turn_laser_device_context(self) -> SemanticCapabilityDecision:
+        # as_semantic_decision() constructs this object on every Agent turn.
+        # Resetting here guarantees that a previous booking/reschedule slot cannot
+        # leak its device through ContextVar into a later non-laser tool call.
+        set_laser_device_key(self.entity_hints.laser_device_key)
+        return self
 
 
 class FlowTurnDecision(BaseModel):

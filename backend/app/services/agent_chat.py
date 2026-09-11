@@ -1962,6 +1962,122 @@ def _flow_turn_as_capability_decision(
         reason=turn.reason,
     )
 
+def _verified_cancellation_action(
+    *,
+    tool_context: AgentToolContext,
+    policy: CapabilityPolicyDecision,
+    decision: SemanticCapabilityDecision,
+    clinic_catalog: dict[str, object],
+) -> tuple[str, str] | None:
+    """Cancel one verified current-patient appointment selected by semantic entities.
+
+    The semantic layer owns meaning. Python only intersects canonical IDs/date/time
+    fields with the verified current-patient appointment set, and writes only when the
+    intersection contains exactly one appointment. Customer wording is never parsed here.
+    """
+    if "appointment_cancellation" not in {str(item) for item in policy.capabilities}:
+        return None
+    rows = clinic_catalog.get("appointments")
+    if not isinstance(rows, list):
+        return None
+    candidates = [row for row in rows if isinstance(row, dict)]
+    hints = decision.entity_hints
+    appointment_id = str(hints.appointment_id or "").strip()
+
+    if appointment_id:
+        candidates = [
+            row
+            for row in candidates
+            if str(row.get("appointment_id") or row.get("id") or "") == appointment_id
+        ]
+    else:
+        filters_applied = 0
+        service_ids: list[str] = []
+        if hints.service_id:
+            service_ids = [str(hints.service_id)]
+        elif hints.service_candidate_ids:
+            service_ids = [str(value) for value in hints.service_candidate_ids]
+        if service_ids:
+            candidates = [
+                row for row in candidates if str(row.get("service_id") or "") in service_ids
+            ]
+            filters_applied += 1
+
+        doctor_ids: list[str] = []
+        if hints.doctor_id:
+            doctor_ids = [str(hints.doctor_id)]
+        elif hints.doctor_candidate_ids:
+            doctor_ids = [str(value) for value in hints.doctor_candidate_ids]
+        if doctor_ids:
+            candidates = [
+                row for row in candidates if str(row.get("doctor_id") or "") in doctor_ids
+            ]
+            filters_applied += 1
+
+        requested_date = str(hints.requested_date or "").strip()
+        if requested_date:
+            candidates = [
+                row
+                for row in candidates
+                if str(row.get("start_local") or "")[:10] == requested_date
+            ]
+            filters_applied += 1
+
+        requested_time = str(hints.requested_start_time or "").strip()
+        if requested_time:
+            normalized_time = requested_time
+            if len(normalized_time) == 4 and normalized_time[1] == ":":
+                normalized_time = "0" + normalized_time
+            matched: list[dict[str, object]] = []
+            for row in candidates:
+                try:
+                    row_time = datetime.fromisoformat(
+                        str(row.get("start_local") or "")
+                    ).strftime("%H:%M")
+                except ValueError:
+                    continue
+                if row_time == normalized_time:
+                    matched.append(row)
+            candidates = matched
+            filters_applied += 1
+
+        if filters_applied == 0:
+            return None
+
+    if len(candidates) != 1:
+        return None
+    selected = candidates[0]
+    appointment_id = str(selected.get("appointment_id") or selected.get("id") or "").strip()
+    if not appointment_id:
+        return None
+
+    result = _invoke_authorized_tool(
+        tool_context=tool_context,
+        policy=policy,
+        tool_name="cancel_appointment",
+        arguments={
+            "appointment_id": appointment_id,
+            "reason": "Customer explicitly requested cancellation.",
+        },
+    )
+    if not result or result.get("ok") is not True:
+        return None
+
+    service_name = str(selected.get("service_name") or "الموعد").strip()
+    start_label = ""
+    raw_start = selected.get("start_local")
+    if raw_start:
+        try:
+            start_at = datetime.fromisoformat(str(raw_start))
+            start_label = f" يوم {start_at.strftime('%d/%m/%Y')} الساعة {start_at.strftime('%H:%M')}"
+        except ValueError:
+            start_label = ""
+    return (
+        f"تمام، ألغيت موعد {service_name}{start_label}.",
+        "deterministic:verified-appointment-cancellation",
+    )
+
+
 def _flow_type_from_capabilities(capabilities: set[str]) -> str | None:
     if "appointment_reschedule" in capabilities:
         return "appointment_reschedule"
@@ -2824,6 +2940,18 @@ def _run_after_inbound(
                 last_decision=_decision_payload(semantic_decision),
                 run_id=run_id,
             )
+            # A fresh reschedule still belongs to this same interpreted customer turn.
+            # Preserve the structured write authorization so the verified exact-slot
+            # path can execute without forcing a redundant second confirmation.
+            if flow_type == "appointment_reschedule":
+                flow_turn = unified_turn.as_flow_turn_decision().model_copy(
+                    update={
+                        "capabilities": list(semantic_decision.capabilities),
+                        "package_intent": semantic_decision.package_intent,
+                        "entity_hints": semantic_decision.entity_hints,
+                    }
+                )
+                turn_local_side_read = _turn_is_local_side_read(flow, flow_turn)
     elif (
         flow_turn is not None
         and flow_turn.action in {"continue", "modify"}
@@ -3117,6 +3245,18 @@ def _run_after_inbound(
 
         if (
             prefetch_direct is None
+            and grounded_mode
+            and "appointment_cancellation" in set(policy.capabilities)
+        ):
+            prefetch_direct = _verified_cancellation_action(
+                tool_context=tool_context,
+                policy=policy,
+                decision=semantic_decision,
+                clinic_catalog=clinic_catalog,
+            )
+
+        if (
+            prefetch_direct is None
             and str(semantic_decision.package_intent) in {"purchase", "inquire"}
         ):
             offer_payload = prefetched_results.get("package_offers")
@@ -3257,6 +3397,10 @@ def _run_after_inbound(
                     : settings.agent_operational_context_max_chars
                 ]
             agent_allowed_tools = set(policy.allowed_tools) - prefetched_tool_names
+            if grounded_mode and "appointment_cancellation" in set(policy.capabilities):
+                # Grounded cancellation writes are owned by the deterministic path above.
+                # The conversational fallback may explain or clarify, but cannot guess a target.
+                agent_allowed_tools.discard("cancel_appointment")
             if grounded_mode:
                 # In the grounded runtime, customer language has already been mapped
                 # to canonical PostgreSQL IDs by the unified interpreter. Do not let
@@ -3350,6 +3494,7 @@ def _run_after_inbound(
         channel_connection_id=conversation.channel_connection_id,
         sender_type="ai",
         direction="outbound",
+        created_at=outbound_now,
         message_type="text",
         content=reply,
         delivery_status=outbound_delivery_status,
@@ -3422,6 +3567,7 @@ def run_agent_chat(
         channel_connection_id=conversation.channel_connection_id,
         sender_type="patient",
         direction="inbound",
+        created_at=activity_now,
         message_type="text",
         content=payload.message,
         delivery_status="received",

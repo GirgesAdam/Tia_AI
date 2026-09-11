@@ -21,6 +21,7 @@ def _hints(**updates: object) -> SemanticEntityHints:
         "not_before_time": None,
         "not_after_time": None,
         "appointment_reference": None,
+        "laser_device_key": None,
     }
     payload.update(updates)
     return SemanticEntityHints.model_validate(payload)
@@ -103,3 +104,29 @@ def test_selected_doctor_resolves_one_compatible_branch_candidate() -> None:
 
     assert result.branch_id == "branch-compatible"
     assert result.branch_candidate_ids == []
+
+
+def test_non_laser_service_discards_irrelevant_device_key() -> None:
+    catalog = _catalog()
+    catalog["services"][0]["requires_laser_device"] = False
+
+    result = validate_grounded_entity_ids(
+        _hints(service_id="service-compatible", laser_device_key="prime_lase"),
+        catalog,
+    )
+
+    assert result.service_id == "service-compatible"
+    assert result.laser_device_key is None
+
+
+def test_laser_service_preserves_device_key() -> None:
+    catalog = _catalog()
+    catalog["services"][0]["requires_laser_device"] = True
+
+    result = validate_grounded_entity_ids(
+        _hints(service_id="service-compatible", laser_device_key="prime_lase"),
+        catalog,
+    )
+
+    assert result.service_id == "service-compatible"
+    assert result.laser_device_key == "prime_lase"
