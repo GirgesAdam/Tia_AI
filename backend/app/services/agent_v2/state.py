@@ -31,7 +31,7 @@ class WriteAuthorization(StrictStateModel):
     granted_at: datetime | None = None
 
     @model_validator(mode="after")
-    def validate_grant(self) -> "WriteAuthorization":
+    def validate_grant(self) -> WriteAuthorization:
         if self.authorized and self.granted_at is None:
             raise ValueError("authorized write state requires granted_at.")
         return self
@@ -74,7 +74,7 @@ class OptionSnapshot(StrictStateModel):
     options: list[OptionChoice] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_snapshot(self) -> "OptionSnapshot":
+    def validate_snapshot(self) -> OptionSnapshot:
         if self.task_version < 1:
             raise ValueError("task_version must be positive.")
         if self.expires_at <= self.created_at:
@@ -97,7 +97,7 @@ class BookingTaskState(StrictStateModel):
     version: int = 1
 
     @model_validator(mode="after")
-    def validate_version(self) -> "BookingTaskState":
+    def validate_version(self) -> BookingTaskState:
         if self.version < 1:
             raise ValueError("task version must be positive.")
         if self.write_authorization.operation != "booking":
@@ -133,7 +133,7 @@ class RescheduleTaskState(StrictStateModel):
     version: int = 1
 
     @model_validator(mode="after")
-    def validate_version(self) -> "RescheduleTaskState":
+    def validate_version(self) -> RescheduleTaskState:
         if self.version < 1:
             raise ValueError("task version must be positive.")
         if self.write_authorization.operation != "reschedule":
