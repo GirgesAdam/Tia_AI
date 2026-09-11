@@ -12,11 +12,7 @@ from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
-from app.services.agent_v2.planner import (
-    PlannerContext,
-    advance_step_after_verification,
-    plan_turn,
-)
+from app.services.agent_v2.planner import PlannerContext, plan_turn
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.test_harness import (
     DEFAULT_CATALOG,
@@ -25,6 +21,7 @@ from app.services.agent_v2.test_harness import (
     V2HarnessStepTrace,
     execute_fixture_reads,
 )
+from app.services.agent_v2.write_policy import advance_step_with_write_policies
 
 TZ = "Africa/Cairo"
 NOW = datetime(2026, 9, 11, 21, 30, tzinfo=ZoneInfo(TZ))
@@ -97,7 +94,7 @@ CONVERSATIONS = (
         ),
     ),
     ConversationCase(
-        "عرض موعد هيدرافيشل ثم إلغاؤه",
+        "عرض موعد هيدرافيشل مدفوع ثم طلب إلغائه",
         (
             "عندي ميعاد هيدرافيشل امتى؟",
             "الغيه",
@@ -160,6 +157,14 @@ def _test_environment() -> V2FixtureEnvironment:
     for service in catalog.get("services", []):
         if isinstance(service, dict):
             service.pop("description", None)
+    for appointment in catalog.get("appointments", []):
+        if not isinstance(appointment, dict):
+            continue
+        if appointment.get("service_id") == "svc-hydrafacial":
+            appointment["payment_status"] = "paid"
+            appointment["amount_paid_minor"] = 120_000
+            appointment["payment_method"] = "card"
+            appointment["billing_context"] = "standard"
     catalog["branches"] = [
         {
             "id": "single-location",
@@ -249,11 +254,7 @@ def _run_turn(*, history: list[BaseMessage], env: V2FixtureEnvironment) -> V2Har
     for step in plan.steps:
         raw_bundle = execute_fixture_reads(step, env) if step.reads else ReadExecutionBundle()
         bundle = _ground_explanatory_reads(raw_bundle, operation_type=step.operation_type)
-        advanced = (
-            advance_step_after_verification(step, bundle.verification)
-            if step.write_intent is not None and step.reads
-            else step
-        )
+        advanced = advance_step_with_write_policies(step, bundle)
         simulated_write = None
         action_result = None
         if advanced.disposition == "write_ready":
