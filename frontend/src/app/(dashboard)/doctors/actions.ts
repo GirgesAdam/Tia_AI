@@ -7,9 +7,16 @@ import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 export type DoctorAdminState = {
   notice: string | null;
   error: string | null;
+  saved?: {
+    doctor_id: string;
+    name: string;
+    specialization: string | null;
+    phone: string | null;
+    booking_enabled: boolean;
+  } | null;
 };
 
-export const initialDoctorAdminState: DoctorAdminState = { notice: null, error: null };
+export const initialDoctorAdminState: DoctorAdminState = { notice: null, error: null, saved: null };
 
 type WorkingHourInterval = {
   weekday: number;
@@ -53,17 +60,21 @@ function parseIntervals(formData: FormData): WorkingHourInterval[] {
 
 function stateFromError(error: unknown): DoctorAdminState {
   if (error instanceof TiaApiError) {
-    return { notice: null, error: error.technicalMessage || error.message };
+    return { notice: null, error: error.technicalMessage || error.message, saved: null };
   }
-  if (error instanceof Error) return { notice: null, error: error.message };
-  return { notice: null, error: "تعذر تنفيذ التعديل. حاول مرة أخرى." };
+  if (error instanceof Error) return { notice: null, error: error.message, saved: null };
+  return { notice: null, error: "تعذر تنفيذ التعديل. حاول مرة أخرى.", saved: null };
+}
+
+function refreshDoctorRelatedViews() {
+  revalidatePath("/appointments");
+  revalidatePath("/dashboard");
+  revalidatePath("/knowledge");
 }
 
 function refreshDoctorViews() {
   revalidatePath("/doctors");
-  revalidatePath("/appointments");
-  revalidatePath("/dashboard");
-  revalidatePath("/knowledge");
+  refreshDoctorRelatedViews();
 }
 
 export async function createDoctorAction(
@@ -71,30 +82,19 @@ export async function createDoctorAction(
   formData: FormData,
 ): Promise<DoctorAdminState> {
   try {
-    const firstName = clean(formData.get("first_name"));
-    const lastName = clean(formData.get("last_name"));
-    const selectedServices = serviceIds(formData);
-    if (!firstName || !lastName) {
-      return { notice: null, error: "الاسم الأول واسم العائلة بيانات مطلوبة." };
-    }
-    if (!selectedServices.length) {
-      return { notice: null, error: "اختار خدمة واحدة على الأقل للدكتور." };
-    }
     await tiaRequest("/clinic/doctor-admin", {
       method: "POST",
       body: JSON.stringify({
-        first_name: firstName,
-        last_name: lastName,
-        email: clean(formData.get("email")),
+        name: clean(formData.get("name")),
         phone: clean(formData.get("phone")),
         specialization: clean(formData.get("specialization")),
-        service_ids: selectedServices,
+        service_ids: serviceIds(formData),
         booking_enabled: true,
         working_hours: { intervals: parseIntervals(formData) },
       }),
     });
     refreshDoctorViews();
-    return { notice: "تمت إضافة الدكتور ومواعيد عمله بنجاح.", error: null };
+    return { notice: "تمت إضافة الدكتور ومواعيد عمله بنجاح.", error: null, saved: null };
   } catch (error) {
     return stateFromError(error);
   }
@@ -106,29 +106,38 @@ export async function updateDoctorAction(
 ): Promise<DoctorAdminState> {
   try {
     const doctorId = clean(formData.get("doctor_id"));
-    const firstName = clean(formData.get("first_name"));
-    const lastName = clean(formData.get("last_name"));
-    const selectedServices = serviceIds(formData);
-    if (!doctorId || !firstName || !lastName) {
-      return { notice: null, error: "بيانات الدكتور غير مكتملة." };
-    }
-    if (!selectedServices.length) {
-      return { notice: null, error: "اختار خدمة واحدة على الأقل للدكتور." };
-    }
+    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور.", saved: null };
+
+    const name = clean(formData.get("name"));
+    const phone = clean(formData.get("phone"));
+    const specialization = clean(formData.get("specialization"));
+    const bookingEnabled = formData.get("booking_enabled") === "on";
+
     await tiaRequest(`/clinic/doctor-admin/${doctorId}`, {
       method: "PATCH",
       body: JSON.stringify({
-        first_name: firstName,
-        last_name: lastName,
-        email: clean(formData.get("email")),
-        phone: clean(formData.get("phone")),
-        specialization: clean(formData.get("specialization")),
-        service_ids: selectedServices,
-        booking_enabled: formData.get("booking_enabled") === "on",
+        name,
+        phone,
+        specialization,
+        service_ids: serviceIds(formData),
+        booking_enabled: bookingEnabled,
       }),
     });
-    refreshDoctorViews();
-    return { notice: "تم تحديث بيانات الدكتور والخدمات المتاحة له.", error: null };
+    // Do not revalidate /doctors here: replacing the server-rendered management
+    // subtree remounts the open editor. The submitted values are already the
+    // committed values; related server views can still be invalidated safely.
+    refreshDoctorRelatedViews();
+    return {
+      notice: "تم تحديث بيانات الدكتور والخدمات المتاحة له.",
+      error: null,
+      saved: {
+        doctor_id: doctorId,
+        name: name || "",
+        specialization,
+        phone,
+        booking_enabled: bookingEnabled,
+      },
+    };
   } catch (error) {
     return stateFromError(error);
   }
@@ -140,13 +149,13 @@ export async function updateDoctorScheduleAction(
 ): Promise<DoctorAdminState> {
   try {
     const doctorId = clean(formData.get("doctor_id"));
-    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور." };
+    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور.", saved: null };
     await tiaRequest(`/clinic/doctor-admin/${doctorId}/working-hours`, {
       method: "PUT",
       body: JSON.stringify({ intervals: parseIntervals(formData) }),
     });
-    refreshDoctorViews();
-    return { notice: "تم تحديث مواعيد عمل الدكتور.", error: null };
+    refreshDoctorRelatedViews();
+    return { notice: "تم تحديث مواعيد عمل الدكتور.", error: null, saved: null };
   } catch (error) {
     return stateFromError(error);
   }
@@ -158,10 +167,10 @@ export async function removeDoctorAction(
 ): Promise<DoctorAdminState> {
   try {
     const doctorId = clean(formData.get("doctor_id"));
-    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور." };
+    if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور.", saved: null };
     await tiaRequest(`/clinic/doctor-admin/${doctorId}`, { method: "DELETE" });
     refreshDoctorViews();
-    return { notice: "تمت إزالة الدكتور من الحجز النشط مع الاحتفاظ بالسجل التاريخي.", error: null };
+    return { notice: "تمت إزالة الدكتور من الحجز النشط مع الاحتفاظ بالسجل التاريخي.", error: null, saved: null };
   } catch (error) {
     return stateFromError(error);
   }

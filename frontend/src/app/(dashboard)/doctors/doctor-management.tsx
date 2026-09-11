@@ -20,11 +20,8 @@ export type DoctorAdminItem = {
   id: string;
   staff_id: string;
   name: string;
-  first_name: string;
-  last_name: string;
   specialization: string | null;
   phone: string | null;
-  email: string | null;
   booking_enabled: boolean;
   is_active: boolean;
   services: Array<{ id: string; name: string }>;
@@ -138,11 +135,9 @@ function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
       <summary className="flex cursor-pointer items-center gap-2 font-black text-teal-950"><UserPlus size={17} /> إضافة دكتور</summary>
       <form action={action} className="mt-5 space-y-5">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <label className="text-xs font-bold text-slate-700">الاسم الأول<input name="first_name" required maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
-          <label className="text-xs font-bold text-slate-700">اسم العائلة<input name="last_name" required maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
+          <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
           <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
           <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
-          <label className="text-xs font-bold text-slate-700">البريد الإلكتروني<input name="email" type="email" maxLength={320} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
         </div>
         <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div><ServiceChecklist services={services} /></div>
         <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
@@ -159,14 +154,16 @@ function DoctorProfileForm({ doctor, services }: { doctor: DoctorAdminItem; serv
     <form action={action} className="space-y-4">
       <input type="hidden" name="doctor_id" value={doctor.id} />
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <label className="text-xs font-bold text-slate-700">الاسم الأول<input name="first_name" required defaultValue={doctor.first_name} className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">اسم العائلة<input name="last_name" required defaultValue={doctor.last_name} className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" defaultValue={doctor.specialization || ""} className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" defaultValue={doctor.phone || ""} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">البريد الإلكتروني<input name="email" type="email" defaultValue={doctor.email || ""} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
+        <label className="text-xs font-bold text-slate-700">الاسم<input name="name" defaultValue={doctor.name} maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
+        <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" defaultValue={doctor.specialization || ""} maxLength={200} className="form-control mt-1.5 h-10 min-h-10" /></label>
+        <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" defaultValue={doctor.phone || ""} maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
         <label className="flex items-center gap-2 self-end rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700"><input type="checkbox" name="booking_enabled" defaultChecked={doctor.booking_enabled} /> متاح للحجز</label>
       </div>
-      <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات</div><ServiceChecklist services={services} selectedIds={doctor.services.map((service) => service.id)} /></div>
+      <div>
+        <div className="mb-2 text-xs font-black text-slate-700">الخدمات</div>
+        <ServiceChecklist services={services} selectedIds={doctor.services.map((service) => service.id)} />
+        <div className="mt-1 text-[11px] font-semibold text-slate-500">ممكن تسيب الخدمات كلها من غير اختيار.</div>
+      </div>
       <ActionState state={state} />
       <Button type="submit" size="sm" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} حفظ البيانات</Button>
     </form>
@@ -189,7 +186,7 @@ function DoctorScheduleForm({ doctor }: { doctor: DoctorAdminItem }) {
 function RemoveDoctorForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(removeDoctorAction, initialDoctorAdminState);
   return (
-    <form action={action} onSubmit={(event) => { if (!window.confirm(`إزالة ${doctor.name} من الحجز النشط؟ المواعيد التاريخية ستظل محفوظة.`)) event.preventDefault(); }} className="space-y-2 border-t border-red-100 pt-4">
+    <form action={action} onSubmit={(event) => { if (!window.confirm(`إزالة ${doctor.name || "الدكتور"} من الحجز النشط؟ المواعيد التاريخية ستظل محفوظة.`)) event.preventDefault(); }} className="space-y-2 border-t border-red-100 pt-4">
       <input type="hidden" name="doctor_id" value={doctor.id} />
       <ActionState state={state} />
       <Button type="submit" size="sm" variant="danger" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />} مسح الدكتور</Button>
@@ -209,7 +206,7 @@ function DoctorEditorCard({ doctor, services }: { doctor: DoctorAdminItem; servi
         className="w-full cursor-pointer text-start text-sm font-black text-slate-950"
         aria-expanded={open}
       >
-        {doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}
+        {doctor.name || "دكتور"}{doctor.specialization ? ` · ${doctor.specialization}` : ""}
       </button>
       {open && (
         <div className="mt-5 space-y-5">
@@ -230,7 +227,7 @@ export function DoctorManagementPanel({ doctors, services }: { doctors: DoctorAd
     <Card className="mb-5">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Stethoscope size={18} /> إدارة الدكاترة</CardTitle>
-        <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: أضف دكتور، عدّل بياناته وخدماته ومواعيد عمله، أو أزله من الحجز النشط.</p>
+        <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: كل بيانات الدكتور اختيارية. أضف أو عدّل الاسم، التخصص، الهاتف، الخدمات ومواعيد العمل حسب احتياج العيادة.</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <CreateDoctorForm services={activeServices} />
