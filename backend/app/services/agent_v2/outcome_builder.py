@@ -228,6 +228,37 @@ def _facts_from_reads(
     return facts
 
 
+def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dict[str, object]:
+    """Hide scheduling end-times after booking/reschedule completion.
+
+    End-times are useful when presenting availability ranges, but after an exact write they can make
+    a language model infer a session duration the customer never asked for. The completed action only
+    needs the verified start time, doctor/device, service, and other explicitly relevant facts.
+    """
+
+    if write_kind not in {"booking", "reschedule"}:
+        return facts
+    shaped = dict(facts)
+    availability = shaped.get("availability")
+    if not isinstance(availability, dict):
+        return shaped
+    visible_availability = dict(availability)
+    windows = visible_availability.get("availability_windows")
+    if isinstance(windows, list):
+        visible_availability["availability_windows"] = [
+            {
+                key: item
+                for key, item in window.items()
+                if key not in {"end_local", "end_time_24h"}
+            }
+            if isinstance(window, dict)
+            else window
+            for window in windows
+        ]
+    shaped["availability"] = visible_availability
+    return shaped
+
+
 def _model_rows(context: SemanticContext, collection: str) -> list[dict[str, object]]:
     rows = context.model_input.get(collection)
     if not isinstance(rows, list):
@@ -489,10 +520,11 @@ def build_step_outcome(
                 action_result=_visible_dict(action_result),
                 active_task_summary=active_summary,
             )
+        assert step.write_intent is not None
         return TurnOutcome(
             status="completed",
             response_goal=_completed_write_goal(step),
-            facts=base_facts,
+            facts=_facts_for_completed_write(base_facts, step.write_intent.kind),
             action_result=_visible_dict(action_result),
             active_task_summary=active_summary,
         )
