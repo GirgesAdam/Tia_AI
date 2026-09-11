@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+
+from app.agents.llm_runtime import invoke_with_model_chain
+from app.agents.model_provider import (
+    build_realtime_interpreter_fallback_model,
+    build_realtime_interpreter_model,
+)
+from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
+from app.agents.v2.turn_contract import TiaTurnUnderstanding
+from app.core.config import settings
+
+
+def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
+    if not isinstance(message.content, str) or not message.content.strip():
+        return ""
+    text = " ".join(message.content.strip().split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _latest_customer_index(history: list[BaseMessage]) -> int | None:
+    for index in range(len(history) - 1, -1, -1):
+        if isinstance(history[index], HumanMessage) and _message_text(history[index]):
+            return index
+    return None
+
+
+def _native_context_messages(
+    history: list[BaseMessage],
+    *,
+    latest_customer_index: int,
+    limit: int = 6,
+) -> list[BaseMessage]:
+    selected: list[BaseMessage] = []
+    for message in history[:latest_customer_index]:
+        if not isinstance(message, (HumanMessage, AIMessage)):
+            continue
+        text = _message_text(message, limit=900)
+        if not text:
+            continue
+        if isinstance(message, HumanMessage):
+            selected.append(HumanMessage(content=text))
+        else:
+            selected.append(AIMessage(content=text))
+    return selected[-limit:]
+
+
+def _interpreter_system_prompt(*, timezone_name: str, local_now: datetime) -> str:
+    return f"""You are Tia's V2 semantic turn interpreter for an aesthetic clinic.
+Return only the required structured schema. You understand customer meaning; you do not answer
+the customer, choose tools, perform writes, calculate money, or invent clinic facts.
+
+SEMANTIC PRINCIPLES
+- Interpret meaning from the latest customer turn, the native recent dialogue, the active task,
+  pending choice, and supplied semantic catalog references. Do not route by lexical triggers,
+  memorized keywords, or phrase matching.
+- Select only supplied entity references. If one entity is clearly intended, set ref. If multiple
+  supplied entities remain genuinely possible, leave ref null and use candidate_refs. Never invent
+  a reference.
+- Preserve multi-part requests as multiple operations in customer order when they are independently
+  meaningful. Alternatives are not multiple operations.
+- A read request never becomes a write request merely because the requested action could be
+  executed.
+- A harmless informational/social side turn must not be interpreted as cancelling an active task.
+- When a customer corrects or changes a requirement in an active task, represent the new semantic
+  value only. Python owns dependency invalidation and persisted-state changes.
+- Use select_active only when the latest customer turn semantically chooses from the supplied
+  pending/active options. Use continue_active for a requirement that continues the active task
+  without independently restating the task's primary operation.
+- cancel_active stops an unfinished conversational task. cancel_appointment concerns an already
+  existing appointment. Keep these meanings separate.
+- availability means asking what appointment possibilities exist without requesting creation of a
+  new appointment. book means requesting creation of a new appointment.
+- reschedule means changing an existing appointment. confirm_appointment confirms an existing
+  appointment.
+- package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
+  whether an appointment should consume an existing package, avoid an existing package, or leaves
+  that question unspecified.
+- customer_history covers the customer's own prior visits/services/payment facts. A discrepancy or
+  contested payment is additionally payment_dispute.
+- Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical
+  situations use urgent_medical. Explicit requests for a person use human_support.
+- Resolve clear relative dates/times against the clinic-local clock. If a date/time remains
+  semantically underspecified, leave it null rather than guessing.
+- follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
+  resolve a specific future follow-up time. Otherwise leave it null.
+
+DATE/TIME REPRESENTATION
+- exact date: mode=exact with start_date.
+- date range: mode=range with start_date/end_date.
+- starting from a date: mode=from_date with start_date.
+- nearest available date: mode=next_available with no invented date.
+- exact time: mode=exact with start_time.
+- after/before constraints: mode=after or mode=before with start_time.
+- time range: mode=range with start_time/end_time.
+
+Clinic timezone: {timezone_name}
+Clinic local time: {local_now.isoformat()}
+"""
+
+
+def _build_interpreter_messages(
+    *,
+    history: list[BaseMessage],
+    semantic_context: SemanticContext,
+    timezone_name: str,
+    local_now: datetime,
+) -> list[BaseMessage]:
+    latest_index = _latest_customer_index(history)
+    if latest_index is None:
+        raise ValueError("V2 turn interpretation requires a customer message.")
+
+    latest_text = _message_text(history[latest_index])
+    system = SystemMessage(
+        content=_interpreter_system_prompt(
+            timezone_name=timezone_name,
+            local_now=local_now,
+        )
+    )
+    context = SystemMessage(
+        content=(
+            "SEMANTIC_CONTEXT (ephemeral references only; Python resolves them to canonical data):\n"
+            + json.dumps(
+                semantic_context.model_input,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            )
+        )
+    )
+    recent = _native_context_messages(
+        history,
+        latest_customer_index=latest_index,
+    )
+    return [system, context, *recent, HumanMessage(content=latest_text)]
+
+
+def interpret_customer_turn_v2(
+    *,
+    history: list[BaseMessage],
+    semantic_context: SemanticContext,
+    timezone_name: str,
+    local_now: datetime,
+) -> TiaTurnUnderstanding:
+    """One semantic LLM call; no regex/keyword fallback and no production side effects."""
+
+    messages = _build_interpreter_messages(
+        history=history,
+        semantic_context=semantic_context,
+        timezone_name=timezone_name,
+        local_now=local_now,
+    )
+    primary_name = settings.openai_model
+    fallback_name = settings.openai_fallback_model
+    primary_model = build_realtime_interpreter_model()
+
+    def invoke_structured(model) -> TiaTurnUnderstanding:
+        try:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=TiaTurnUnderstanding,
+                messages=messages,
+            )
+        except StructuredOutputError:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=TiaTurnUnderstanding,
+                messages=messages,
+            )
+
+    def invoke_primary() -> TiaTurnUnderstanding:
+        return invoke_structured(primary_model)
+
+    def invoke_fallback() -> TiaTurnUnderstanding:
+        fallback_model = build_realtime_interpreter_fallback_model()
+        if fallback_model is None:
+            raise RuntimeError("V2 turn interpreter fallback model is not configured.")
+        return invoke_structured(fallback_model)
+
+    model_calls = [(primary_name, invoke_primary)]
+    if fallback_name and fallback_name != primary_name:
+        model_calls.append((fallback_name, invoke_fallback))
+
+    invocation = invoke_with_model_chain(
+        model_calls=model_calls,
+        operation="v2-turn-interpreter",
+        circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
+    )
+    return ground_turn_references(invocation.value, semantic_context)
