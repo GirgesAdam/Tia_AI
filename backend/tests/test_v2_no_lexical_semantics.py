@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 V2_SEMANTIC_FILES = (
     "app/agents/v2/turn_contract.py",
     "app/agents/v2/semantic_context.py",
