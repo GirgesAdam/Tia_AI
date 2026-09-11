@@ -5,8 +5,13 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.services.agent_v2.state import ActiveTaskState, BookingTaskState
+from app.services.agent_v2.state import (
+    ActiveTaskState,
+    BookingTaskState,
+    RescheduleTaskState,
+)
 from app.services.agent_v2.stateful_test_harness import run_v2_stateful_fixture_turn
+from app.services.agent_v2.test_harness import V2FixtureEnvironment
 
 TZ = "Africa/Cairo"
 NOW = datetime(2026, 9, 11, 20, 0, tzinfo=ZoneInfo(TZ))
@@ -52,12 +57,14 @@ def _turn(
     active_task: ActiveTaskState | None,
     message: str,
     turn_number: int,
+    env: V2FixtureEnvironment | None = None,
 ):
     history.append(HumanMessage(content=message))
     result = run_v2_stateful_fixture_turn(
         history=history,
         local_now=NOW,
         active_task=active_task,
+        env=env,
         simulate_writes=True,
         turn_id=f"live-stateful-{turn_number}",
     )
@@ -173,9 +180,63 @@ def _cancel_unfinished_booking() -> None:
     )
 
 
+def _progressive_reschedule() -> None:
+    print("\nSTATEFUL CONVERSATION C — verified target + replacement revalidation")
+    history: list[BaseMessage] = []
+    base_env = V2FixtureEnvironment()
+    env = V2FixtureEnvironment(
+        slots=[
+            *base_env.slots,
+            {
+                "branch_id": "single-location",
+                "service_id": "svc-underarm",
+                "doctor_id": "doc-maryam",
+                "doctor_name": "د. مريم",
+                "laser_device_key": "candela_gentle",
+                "laser_device_name": "Candela Gentle",
+                "start_local": "2026-09-13T20:00:00+03:00",
+                "end_local": "2026-09-13T20:30:00+03:00",
+                "start_at": "2026-09-13T20:00:00+03:00",
+                "price_minor": 50_000,
+                "currency": "EGP",
+            },
+        ]
+    )
+
+    started = _turn(
+        history=history,
+        active_task=None,
+        message="عايزة أغير ميعاد ليزر الإبط اللي عندي بكرة، لسه هحدد الوقت الجديد",
+        turn_number=201,
+        env=env,
+    )
+    active_task = started.active_task
+    assert isinstance(active_task, RescheduleTaskState), "verified reschedule target was not persisted"
+    assert active_task.target.appointment_id == "apt-underarm-sat"
+    assert active_task.replacement.date is not None
+    assert active_task.option_snapshot is not None, "replacement availability was not persisted"
+
+    completed = _turn(
+        history=history,
+        active_task=active_task,
+        message="خليه بعد بكرة الساعة 8 مساءً",
+        turn_number=202,
+        env=env,
+    )
+    reschedule_writes = [
+        trace
+        for trace in completed.traces
+        if trace.simulated_write == "reschedule"
+    ]
+    assert len(reschedule_writes) == 1, "replacement did not produce exactly one reschedule write"
+    assert completed.active_task is None, "completed reschedule task was not cleared"
+    assert any(outcome.status == "completed" for outcome in completed.outcomes)
+
+
 def main() -> None:
     _progressive_booking_with_side_read()
     _cancel_unfinished_booking()
+    _progressive_reschedule()
     print("\nV2 STATEFUL CONVERSATION SUITE PASSED")
 
 
