@@ -1,5 +1,6 @@
-from pathlib import Path
+from __future__ import annotations
 
+from pathlib import Path
 
 FILES = (
     Path("app/services/agent_v2/state_executor.py"),
