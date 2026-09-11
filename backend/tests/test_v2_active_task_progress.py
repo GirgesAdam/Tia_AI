@@ -11,13 +11,16 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
     persist_initial_task_intent,
     plan_active_task_progress,
 )
-from app.services.agent_v2.planner import PlanStep
+from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    RescheduleTarget,
+    RescheduleTaskState,
     WriteAuthorization,
 )
 
@@ -38,16 +41,61 @@ def _context():
                 }
             ],
             "doctors": [],
+            "appointments": [
+                {
+                    "appointment_id": "apt-1",
+                    "service_id": "svc-underarm",
+                    "status": "confirmed",
+                    "start_local": "2026-09-12T19:00:00+03:00",
+                },
+                {
+                    "appointment_id": "apt-2",
+                    "service_id": "svc-underarm",
+                    "status": "confirmed",
+                    "start_local": "2026-09-14T18:00:00+03:00",
+                },
+            ],
         }
     )
 
 
-def _authorization() -> WriteAuthorization:
+def _authorization(operation: str = "booking") -> WriteAuthorization:
     return WriteAuthorization(
-        operation="booking",
+        operation=operation,
         authorized=True,
         source_turn_id="turn-start",
         granted_at=NOW,
+    )
+
+
+def _reschedule_state() -> RescheduleTaskState:
+    return RescheduleTaskState(
+        write_authorization=_authorization("reschedule"),
+        target=RescheduleTarget(
+            appointment_id="apt-1",
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            start_local="2026-09-12T19:00:00+03:00",
+        ),
+        replacement=CustomerConstraints(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+        ),
+    )
+
+
+def _fresh_reschedule_step() -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="reschedule",
+        disposition="read",
+        reads=[ReadRequest(kind="appointments"), ReadRequest(kind="availability")],
+        write_intent=WriteIntent(kind="reschedule", authorized=True, parameters={}),
+        state_action="start_reschedule",
+        response_goal="present_availability",
     )
 
 
@@ -123,3 +171,67 @@ def test_exact_time_is_planned_for_verification_not_immediate_success() -> None:
     assert step.facts["exact_time_requested"] is True
     assert step.write_intent is not None
     assert step.write_intent.requires_verification is True
+
+
+def test_repeated_reschedule_updates_replacement_without_retargeting_appointment() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-09-13"),
+            time=TimeConstraint(mode="exact", start_time="20:00"),
+        ),
+    )
+
+    adapted = adapt_matching_active_task_step(
+        _fresh_reschedule_step(),
+        operation=operation,
+        active_task=_reschedule_state(),
+        context=_context(),
+    )
+
+    assert adapted.disposition == "state_update"
+    assert adapted.state_action == "update_active"
+    assert adapted.facts["date"]["start_date"] == "2026-09-13"
+    assert adapted.facts["time"]["start_time"] == "20:00"
+    assert "appointment_id" not in adapted.facts
+
+
+def test_explicit_same_reschedule_target_still_updates_replacement() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            appointment=EntityReference(ref="A1"),
+            date=DateConstraint(mode="exact", start_date="2026-09-13"),
+        ),
+    )
+
+    adapted = adapt_matching_active_task_step(
+        _fresh_reschedule_step(),
+        operation=operation,
+        active_task=_reschedule_state(),
+        context=_context(),
+    )
+
+    assert adapted.state_action == "update_active"
+    assert "appointment_id" not in adapted.facts
+
+
+def test_explicit_different_reschedule_target_remains_fresh_workflow() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            appointment=EntityReference(ref="A2"),
+            date=DateConstraint(mode="exact", start_date="2026-09-15"),
+        ),
+    )
+    original = _fresh_reschedule_step()
+
+    adapted = adapt_matching_active_task_step(
+        original,
+        operation=operation,
+        active_task=_reschedule_state(),
+        context=_context(),
+    )
+
+    assert adapted == original
+    assert adapted.state_action == "start_reschedule"
