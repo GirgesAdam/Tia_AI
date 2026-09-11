@@ -173,6 +173,32 @@ def _base_parameters(
     return values, ambiguous
 
 
+def _service_requires_laser_device(
+    operation: TurnOperation,
+    context: PlannerContext,
+) -> bool:
+    service = operation.entities.service
+    if service is None or service.ref is None:
+        return False
+    rows = context.semantic_context.model_input.get("services")
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict) or row.get("ref") != service.ref:
+            continue
+        return row.get("requires_laser_device") is True
+    return False
+
+
+def _slot_ambiguity_field(step: PlanStep) -> ClarificationField:
+    params = step.write_intent.parameters if step.write_intent is not None else {}
+    if "doctor_id" not in params:
+        return "doctor"
+    if bool(step.facts.get("service_requires_laser_device")) and "device_key" not in params:
+        return "device"
+    return "selection"
+
+
 def _clarify(
     *,
     index: int,
@@ -353,6 +379,8 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
     if ambiguous.get("doctor"):
         return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
+    if ambiguous.get("device"):
+        return _clarify(index=index, operation=operation, field="device")
     if ambiguous.get("appointment"):
         return _clarify(
             index=index,
@@ -412,6 +440,7 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         if "date" not in params:
             return _clarify(index=index, operation=operation, field="date")
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
+        requires_device = _service_requires_laser_device(operation, context)
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -425,7 +454,11 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
             ),
             state_action="start_booking",
             response_goal="present_availability",
-            facts={**params, "exact_time_requested": exact_time},
+            facts={
+                **params,
+                "exact_time_requested": exact_time,
+                "service_requires_laser_device": requires_device,
+            },
         )
 
     if operation.type == "appointment_list":
@@ -458,6 +491,7 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         if "date" not in params:
             return _clarify(index=index, operation=operation, field="date")
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
+        requires_device = _service_requires_laser_device(operation, context)
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -469,7 +503,11 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
             write_intent=WriteIntent(kind="reschedule", authorized=True, parameters=params),
             state_action="start_reschedule",
             response_goal="present_availability",
-            facts={**params, "exact_time_requested": exact_time},
+            facts={
+                **params,
+                "exact_time_requested": exact_time,
+                "service_requires_laser_device": requires_device,
+            },
         )
 
     if operation.type == "customer_profile":
@@ -603,6 +641,17 @@ def advance_step_after_verification(
             return step
         count = verification.exact_slot_match_count
         if count == 1:
+            if (
+                bool(step.facts.get("service_requires_laser_device"))
+                and not verified_parameters.get("device_key")
+            ):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "clarification_field": "device",
+                        "response_goal": "clarification",
+                    }
+                )
             return step.model_copy(
                 update={
                     "disposition": "write_ready",
@@ -616,11 +665,12 @@ def advance_step_after_verification(
                 update={"disposition": "blocked", "response_goal": "requested_time_unavailable"}
             )
         if count is not None and count > 1:
+            field = _slot_ambiguity_field(step)
             return step.model_copy(
                 update={
                     "disposition": "clarify",
-                    "clarification_field": "doctor",
-                    "response_goal": "ask_doctor_choice",
+                    "clarification_field": field,
+                    "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
                 }
             )
         return step
@@ -668,6 +718,17 @@ def advance_step_after_verification(
             return step
         slot_count = verification.exact_slot_match_count
         if slot_count == 1 and appointment_count == 1:
+            if (
+                bool(step.facts.get("service_requires_laser_device"))
+                and not verified_parameters.get("device_key")
+            ):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "clarification_field": "device",
+                        "response_goal": "clarification",
+                    }
+                )
             return step.model_copy(
                 update={
                     "disposition": "write_ready",
@@ -681,11 +742,12 @@ def advance_step_after_verification(
                 update={"disposition": "blocked", "response_goal": "requested_time_unavailable"}
             )
         if slot_count is not None and slot_count > 1:
+            field = _slot_ambiguity_field(step)
             return step.model_copy(
                 update={
                     "disposition": "clarify",
-                    "clarification_field": "doctor",
-                    "response_goal": "ask_doctor_choice",
+                    "clarification_field": field,
+                    "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
                 }
             )
         return step
