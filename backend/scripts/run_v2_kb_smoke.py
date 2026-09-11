@@ -105,6 +105,14 @@ def _reads_for_step(step) -> ReadExecutionBundle:
     return ReadExecutionBundle(results=results)
 
 
+def _contains_exact(value: object, target: str) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_exact(item, target) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_exact(item, target) for item in value)
+    return value == target
+
+
 def _run_case(message: str, *, expected_operation: str, knowledge_expected: bool) -> None:
     semantic_context = build_semantic_context(CATALOG)
     history = [HumanMessage(content=message)]
@@ -142,7 +150,7 @@ def _run_case(message: str, *, expected_operation: str, knowledge_expected: bool
 
     visible = [customer_visible_outcome(item) for item in outcomes]
     encoded = json.dumps(visible, ensure_ascii=False, default=str)
-    has_knowledge = KNOWLEDGE_TEXT in encoded
+    has_knowledge = _contains_exact(visible, KNOWLEDGE_TEXT)
     if has_knowledge != knowledge_expected:
         raise AssertionError(
             f"knowledge_expected={knowledge_expected} but outcome had knowledge={has_knowledge}: {encoded}"
