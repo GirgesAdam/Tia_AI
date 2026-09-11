@@ -172,7 +172,15 @@ class TurnEntities(StrictContractModel):
 
 
 class TurnOperation(StrictContractModel):
-    type: OperationType
+    type: OperationType = Field(
+        description=(
+            "Choose the customer's semantic action. Use book whenever the customer is asking Tia "
+            "to create/reserve a new appointment now, even when required booking details are still "
+            "missing and Python will need to clarify them. Do not downgrade an incomplete booking "
+            "request to availability. Use availability only when the customer is asking to inspect "
+            "possible appointment options without requesting creation of a new appointment."
+        )
+    )
     entities: TurnEntities
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
