@@ -1,0 +1,65 @@
+name: V2 Stateful Conversation Suite
+
+on:
+  push:
+    branches:
+      - agent-core-v2-semantic-contract
+    paths:
+      - .github/workflows/v2-stateful-conversation-suite.yml
+      - backend/scripts/run_v2_stateful_conversation_suite.py
+      - backend/app/agents/v2/**
+      - backend/app/services/agent_v2/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v2-stateful:
+    name: Run V2 stateful multi-turn suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_v2_stateful_unused
+      SUPABASE_SECRET_KEY: sb_secret_v2_stateful_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+      - name: Run V2 stateful conversation suite
+        run: python scripts/run_v2_stateful_conversation_suite.py
