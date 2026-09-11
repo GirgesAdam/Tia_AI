@@ -47,6 +47,45 @@ def resolved_operation_parameters(
     return params
 
 
+def adapt_matching_active_task_step(
+    step: PlanStep,
+    *,
+    operation: TurnOperation,
+    active_task: ActiveTaskState | None,
+    context: SemanticContext,
+) -> PlanStep:
+    """Treat a repeated structured reschedule intent as an update to its verified active target.
+
+    The semantic model may emit ``reschedule`` again on a natural follow-up instead of
+    ``continue_active``. Once Python has already verified and persisted one reschedule target, a
+    follow-up that does not identify a different appointment must mutate only the replacement
+    constraints. This prevents a replacement date from being reused to search for the original
+    appointment. An explicit different appointment remains a fresh workflow request.
+    """
+    if not isinstance(active_task, RescheduleTaskState) or operation.type != "reschedule":
+        return step
+    if step.clarification_field == "appointment":
+        return step
+
+    appointment = operation.entities.appointment
+    if appointment is not None and appointment.candidate_refs:
+        return step
+
+    params = resolved_operation_parameters(operation, context=context)
+    explicit_target = params.pop("appointment_id", None)
+    if explicit_target is not None and str(explicit_target) != active_task.target.appointment_id:
+        return step
+
+    return PlanStep(
+        operation_index=step.operation_index,
+        operation_type=operation.type,
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+        facts=params,
+    )
+
+
 def persist_initial_task_intent(
     step: PlanStep,
     *,
