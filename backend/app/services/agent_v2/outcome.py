@@ -64,7 +64,7 @@ class TurnOutcome(StrictOutcomeModel):
     active_task_summary: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_shape(self) -> "TurnOutcome":
+    def validate_shape(self) -> TurnOutcome:
         choice_goals = {
             "ask_service_choice",
             "ask_doctor_choice",
