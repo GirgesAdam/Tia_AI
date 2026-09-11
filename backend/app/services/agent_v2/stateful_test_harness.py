@@ -12,6 +12,7 @@ from app.agents.v2.semantic_state_view import with_safe_task_context
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
     persist_initial_task_intent,
     plan_active_task_progress,
 )
@@ -199,13 +200,19 @@ def run_v2_stateful_fixture_turn(
 
     for planned_step in plan.steps:
         operation = _operation_for_step(understanding, planned_step)
-        effective_step = persist_initial_task_intent(
+        effective_step = adapt_matching_active_task_step(
             planned_step,
+            operation=operation,
+            active_task=current_task,
+            context=semantic_context,
+        )
+        effective_step = persist_initial_task_intent(
+            effective_step,
             operation=operation,
             context=semantic_context,
         )
 
-        if effective_step.state_action == "update_active" and operation.type == "continue_active":
+        if effective_step.state_action == "update_active":
             initial_transition = apply_step_state(
                 current_task,
                 step=effective_step,
