@@ -70,18 +70,28 @@ SEMANTIC PRINCIPLES
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
-- Use select_active only when the latest customer turn semantically chooses from the supplied
-  pending/active options. Use continue_active for a requirement that continues the active task
-  without independently restating the task's primary operation.
+- Use select_active only when structured pending/active options are actually supplied inside
+  SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. If no structured
+  pending option is supplied but the recent dialogue makes the customer's intended primary action
+  and constraints clear, reconstruct that primary operation from the dialogue so Python can verify
+  it again instead of emitting select_active.
+- Use continue_active for a requirement that continues an explicitly supplied active task without
+  independently restating the task's primary operation.
 - cancel_active stops an unfinished conversational task. cancel_appointment concerns an already
   existing appointment. Keep these meanings separate.
 - availability means asking what appointment possibilities exist without requesting creation of a
   new appointment. book means requesting creation of a new appointment.
 - reschedule means changing an existing appointment. confirm_appointment confirms an existing
   appointment.
+- For appointment_list, broad category wording such as asking for "my next laser appointment" must
+  not force a service choice from the catalog. Unless one specific service is clearly named, leave
+  the service entity null so Python can read the customer's actual appointments first.
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
   whether an appointment should consume an existing package, avoid an existing package, or leaves
   that question unspecified.
+- A request to cancel, terminate, refund, or otherwise reverse a purchased package is not a package
+  write the agent may execute. Interpret that request as human_support. A question asking only how
+  much would be refundable remains refund_quote.
 - clinic_info covers clinic-wide informational/explanatory questions, including policies, general
   service guidance, and comparisons between clinic devices when the question is not about one
   specific service. service_info is for information about one specific service.
