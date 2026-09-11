@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 STATE_FILES = (
     "app/services/agent_v2/state.py",
     "app/services/agent_v2/state_rules.py",
