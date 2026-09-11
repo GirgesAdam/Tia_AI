@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
-from app.core.doctor_names import normalize_doctor_name_parts
 from app.database.session import get_db
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.branch import Branch
@@ -29,23 +28,19 @@ router = APIRouter()
 
 
 class DoctorAdminCreate(BaseModel):
-    first_name: str = Field(min_length=1, max_length=120)
-    last_name: str = Field(min_length=1, max_length=120)
-    email: str | None = Field(default=None, max_length=320)
+    name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
-    service_ids: list[UUID] = Field(min_length=1, max_length=200)
+    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
     working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
     booking_enabled: bool = True
 
 
 class DoctorAdminUpdate(BaseModel):
-    first_name: str = Field(min_length=1, max_length=120)
-    last_name: str = Field(min_length=1, max_length=120)
-    email: str | None = Field(default=None, max_length=320)
+    name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
-    service_ids: list[UUID] = Field(min_length=1, max_length=200)
+    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
     booking_enabled: bool = True
 
 
@@ -56,6 +51,11 @@ def _clean_optional(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _stored_doctor_name(value: str | None) -> tuple[str, str]:
+    """Store the single user-facing doctor name without changing the shared staff schema."""
+    return ((value or "").strip(), "")
+
+
 def _active_service_ids(
     db: Session,
     *,
@@ -63,6 +63,8 @@ def _active_service_ids(
     service_ids: list[UUID],
 ) -> set[UUID]:
     unique_ids = set(service_ids)
+    if not unique_ids:
+        return set()
     rows = set(
         db.scalars(
             select(Service.id).where(
@@ -198,15 +200,12 @@ def create_doctor_from_admin(
         workspace_id=workspace.id,
         service_ids=payload.service_ids,
     )
-    first_name, last_name = normalize_doctor_name_parts(
-        payload.first_name.strip(), payload.last_name.strip()
-    )
+    first_name, last_name = _stored_doctor_name(payload.name)
 
     staff = Staff(
         workspace_id=workspace.id,
         first_name=first_name,
         last_name=last_name,
-        email=_clean_optional(payload.email),
         phone=_clean_optional(payload.phone),
         job_title="Doctor",
     )
@@ -256,10 +255,7 @@ def create_doctor_from_admin(
         },
         flush=False,
     )
-    _commit_or_conflict(
-        db,
-        "Could not create doctor. Check that the staff email is not already used and the schedule is valid.",
-    )
+    _commit_or_conflict(db, "Could not create doctor. Check the schedule and try again.")
     db.refresh(doctor)
     return doctor
 
@@ -292,12 +288,9 @@ def update_doctor_from_admin(
         workspace_id=workspace_id,
         service_ids=payload.service_ids,
     )
-    first_name, last_name = normalize_doctor_name_parts(
-        payload.first_name.strip(), payload.last_name.strip()
-    )
+    first_name, last_name = _stored_doctor_name(payload.name)
     staff.first_name = first_name
     staff.last_name = last_name
-    staff.email = _clean_optional(payload.email)
     staff.phone = _clean_optional(payload.phone)
     doctor.specialization = _clean_optional(payload.specialization)
     doctor.booking_enabled = payload.booking_enabled
