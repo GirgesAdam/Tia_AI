@@ -425,6 +425,28 @@ def apply_step_state(
     )
 
 
+def finalize_step_after_state_transition(
+    step: PlanStep,
+    transition: StateTransition,
+) -> PlanStep:
+    """Encode state mutation truth into the responder-facing step after Python applies it."""
+    if step.state_action != "cancel_active":
+        return step
+    if transition.changed and transition.active_task is None:
+        return step.model_copy(
+            update={
+                "response_goal": "active_task_cancelled",
+                "facts": {**step.facts, "active_task_cancelled": True},
+            }
+        )
+    return step.model_copy(
+        update={
+            "response_goal": "clarification",
+            "facts": {**step.facts, "active_task_cancelled": False},
+        }
+    )
+
+
 def complete_state_after_action(
     active_task: ActiveTaskState | None,
     *,
