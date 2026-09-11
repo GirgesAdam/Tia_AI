@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.database.session import SessionLocal
 from app.models.automation_worker import AutomationWorker
+from app.models.clinic_integration_sync import ClinicIntegrationSyncSchedule
 from app.models.workspace import Workspace
 from app.services.automations import (
     AutomationError,
@@ -117,12 +118,18 @@ def run_workspace_tick(
                     claimed_job.job_id,
                 )
 
-        sync = run_scheduled_sync_tick(
-            db,
-            workspace=workspace,
-            page_size=sync_page_size,
-            max_pages_per_domain=sync_max_pages,
-        )
+        sync_claimed = False
+        sync_reason = "sync_disabled"
+        schedule = db.get(ClinicIntegrationSyncSchedule, workspace.id)
+        if schedule is not None and schedule.enabled:
+            sync = run_scheduled_sync_tick(
+                db,
+                workspace=workspace,
+                page_size=sync_page_size,
+                max_pages_per_domain=sync_max_pages,
+            )
+            sync_claimed = sync.claimed
+            sync_reason = sync.reason or (sync.cycle.status if sync.cycle else None)
 
         logger.info(
             "automation_tick workspace=%s planned=%s cancelled=%s claimed=%s executed=%s failed=%s sync_claimed=%s sync_reason=%s",
@@ -132,8 +139,8 @@ def run_workspace_tick(
             len(claimed),
             executed,
             failed,
-            sync.claimed,
-            sync.reason,
+            sync_claimed,
+            sync_reason,
         )
 
 
