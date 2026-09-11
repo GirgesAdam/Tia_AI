@@ -184,6 +184,12 @@ def _replace_doctor_hours(
     )
     for row in rows:
         db.delete(row)
+    # SessionLocal has autoflush disabled, and the replacement payload often
+    # retains some unchanged intervals. Flush deletions before inserting the
+    # replacement rows so the unique working-hour constraint cannot see both
+    # the old and new copy of an unchanged interval at the same time.
+    if rows:
+        db.flush()
     replacements = [
         DoctorWorkingHour(
             workspace_id=workspace.id,
