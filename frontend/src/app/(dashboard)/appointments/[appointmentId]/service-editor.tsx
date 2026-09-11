@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Save, Stethoscope } from "lucide-react";
+import { CalendarClock, Save, Stethoscope } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format";
@@ -60,6 +60,7 @@ export function AppointmentServiceEditor({
   const [serviceId, setServiceId] = useState(currentServiceId);
   const [doctorId, setDoctorId] = useState(currentDoctorId);
   const [deviceKey, setDeviceKey] = useState(currentDeviceKey || "");
+  const [startAt, setStartAt] = useState("");
   const selected = services.find((service) => service.id === serviceId) || null;
   const devices = devicePrices.filter(
     (row) => row.service_id === serviceId && row.configured && row.price_minor != null,
@@ -69,12 +70,13 @@ export function AppointmentServiceEditor({
   const changed =
     serviceId !== currentServiceId ||
     doctorId !== currentDoctorId ||
-    deviceKey !== (currentDeviceKey || "");
+    deviceKey !== (currentDeviceKey || "") ||
+    Boolean(startAt);
 
   return (
     <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
       <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900">
-        <Stethoscope size={16} /> تعديل الخدمة يدويًا
+        <Stethoscope size={16} /> تعديل الموعد يدويًا
       </summary>
       <form action={formAction} className="mt-4 space-y-3">
         <input type="hidden" name="appointment_id" value={appointmentId} />
@@ -109,7 +111,21 @@ export function AppointmentServiceEditor({
             {doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.name}</option>)}
           </select>
           <span className="mt-1 block text-[11px] font-semibold text-slate-500">
-            لو الخدمة الجديدة مش متاحة مع الدكتور الحالي، اختار دكتور تاني وسيتم فحص نفس الميعاد قبل الحفظ.
+            لو غيرت الدكتور، النظام هيفحص توافره مع الخدمة والجهاز في الوقت المختار قبل الحفظ.
+          </span>
+        </label>
+
+        <label className="block text-xs font-bold text-slate-700">
+          <span className="flex items-center gap-1.5"><CalendarClock size={14} /> وقت الموعد الجديد (اختياري)</span>
+          <input
+            type="datetime-local"
+            name="start_at"
+            value={startAt}
+            onChange={(event) => setStartAt(event.target.value)}
+            className="form-control mt-1.5 h-10 min-h-10"
+          />
+          <span className="mt-1 block text-[11px] font-semibold text-slate-500">
+            سيبه فاضي لو عايز تحتفظ بنفس وقت الموعد الحالي.
           </span>
         </label>
 
@@ -148,7 +164,7 @@ export function AppointmentServiceEditor({
           </div>
         )}
         <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-          سيُعاد فحص نفس التوقيت مع الدكتور والجهاز. المدفوعات المسجلة لن تُحذف؛ سيُعاد فقط حساب المتبقي على السعر الجديد.
+          لو سيبت الوقت والدكتور زي ما هم، تعديل الخدمة أو الجهاز هيحافظ على نفس الحجز ويفحص التعارضات الفعلية فقط. لو غيرت الوقت أو الدكتور، هيتم فحص التوافر الكامل قبل الحفظ. المدفوعات المسجلة لن تُحذف؛ سيُعاد فقط حساب المتبقي على السعر الجديد.
         </div>
         {state.error && (
           <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-800">
@@ -157,11 +173,11 @@ export function AppointmentServiceEditor({
         )}
         {state.ok && !state.error && (
           <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-xs font-bold text-teal-800">
-            تم حفظ تعديل الخدمة بنجاح.
+            تم حفظ تعديل الموعد بنجاح.
           </div>
         )}
         <Button type="submit" size="sm" disabled={!changed || !deviceReady || !doctorId || pending}>
-          <Save size={14} /> {pending ? "جاري الحفظ..." : "حفظ تغيير الخدمة"}
+          <Save size={14} /> {pending ? "جاري الحفظ..." : "حفظ تعديلات الموعد"}
         </Button>
       </form>
     </details>
