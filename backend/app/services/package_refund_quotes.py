@@ -51,7 +51,7 @@ class PackageRefundQuoteRead:
 
 
 def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRead:
-    reserved, consumed = _usage_totals(
+    reserved, ledger_consumed = _usage_totals(
         db,
         workspace_id=package.workspace_id,
         package_id=package.id,
@@ -61,16 +61,18 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
         if package.opening_sessions_remaining is not None
         else int(package.sessions_purchased)
     )
+    historical_consumed = 0
     if package.opening_sessions_remaining is not None:
         if not package.sessions_total_known:
             raise PackageRefundQuoteError(
                 "Migrated package does not include the original total session count."
             )
-        consumed += max(
+        historical_consumed = max(
             0,
             int(package.sessions_purchased) - int(package.opening_sessions_remaining),
         )
 
+    consumed = ledger_consumed + historical_consumed
     unit_price = package.standalone_session_price_minor_at_purchase
     if unit_price is None and consumed > 0:
         raise PackageRefundQuoteError(
@@ -90,10 +92,7 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
         collected_minor - consumed_value_minor - previously_refunded_minor,
         0,
     )
-    sessions_remaining = max(0, opening_balance - reserved - (consumed - max(
-        0,
-        int(package.sessions_purchased) - int(package.opening_sessions_remaining),
-    ) if package.opening_sessions_remaining is not None else consumed))
+    sessions_remaining = max(0, opening_balance - reserved - ledger_consumed)
 
     return PackageRefundQuoteRead(
         package_id=package.id,
