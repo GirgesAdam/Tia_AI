@@ -38,6 +38,7 @@ SafetySignal = Literal[
     "privacy_issue",
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
+ServiceDetail = Literal["price", "duration", "description", "devices"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range"]
 SelectionKind = Literal["index", "time", "ref"]
@@ -163,6 +164,7 @@ class TurnOperation(StrictContractModel):
     entities: TurnEntities
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
+    requested_service_details: list[ServiceDetail] = Field(default_factory=list)
 
 
 class TiaTurnUnderstanding(StrictContractModel):
