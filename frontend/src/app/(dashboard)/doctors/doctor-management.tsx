@@ -198,6 +198,30 @@ function RemoveDoctorForm({ doctor }: { doctor: DoctorAdminItem }) {
   );
 }
 
+function DoctorEditorCard({ doctor, services }: { doctor: DoctorAdminItem; services: KnowledgeService[] }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="w-full cursor-pointer text-start text-sm font-black text-slate-950"
+        aria-expanded={open}
+      >
+        {doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}
+      </button>
+      {open && (
+        <div className="mt-5 space-y-5">
+          <DoctorProfileForm doctor={doctor} services={services} />
+          <DoctorScheduleForm doctor={doctor} />
+          <RemoveDoctorForm doctor={doctor} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DoctorManagementPanel({ doctors, services }: { doctors: DoctorAdminItem[]; services: KnowledgeService[] }) {
   const activeDoctors = doctors.filter((doctor) => doctor.is_active);
   const activeServices = services.filter((service) => service.is_active);
@@ -211,14 +235,7 @@ export function DoctorManagementPanel({ doctors, services }: { doctors: DoctorAd
       <CardContent className="space-y-4">
         <CreateDoctorForm services={activeServices} />
         {activeDoctors.map((doctor) => (
-          <details key={doctor.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-            <summary className="cursor-pointer text-sm font-black text-slate-950">{doctor.name}{doctor.specialization ? ` · ${doctor.specialization}` : ""}</summary>
-            <div className="mt-5 space-y-5">
-              <DoctorProfileForm doctor={doctor} services={activeServices} />
-              <DoctorScheduleForm doctor={doctor} />
-              <RemoveDoctorForm doctor={doctor} />
-            </div>
-          </details>
+          <DoctorEditorCard key={doctor.id} doctor={doctor} services={activeServices} />
         ))}
       </CardContent>
     </Card>
