@@ -74,3 +74,27 @@ def test_handoff_status_cannot_masquerade_as_normal_response_goal() -> None:
         active_task_summary={},
     )
     assert outcome.status == "handoff"
+
+
+def test_completed_outcome_rejects_pre_execution_response_goal() -> None:
+    with pytest.raises(ValidationError):
+        TurnOutcome(
+            status="completed",
+            response_goal="present_availability",
+            facts={},
+            choices=[],
+            action_result={"ok": True},
+            active_task_summary={},
+        )
+
+
+def test_terminal_write_goal_rejects_non_completed_status() -> None:
+    with pytest.raises(ValidationError):
+        TurnOutcome(
+            status="blocked",
+            response_goal="booking_completed",
+            facts={},
+            choices=[],
+            action_result={"ok": False},
+            active_task_summary={},
+        )
