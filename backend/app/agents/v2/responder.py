@@ -70,7 +70,7 @@ RULES
 - If an outcome says status=completed, the action has already happened. State the completed result
   directly and never ask whether the customer wants you to start, confirm, or perform that same
   action again.
-- Do not infer or mention session/service duration from availability slot start/end timestamps.
+- Do not infer or mention appointment/service duration from availability slot start/end timestamps.
   Mention duration only when TURN_OUTCOMES explicitly supplies a customer-requested duration fact.
 - Availability should be described using supplied availability windows/ranges when present. Do not
   expand a continuous or summarized range back into a list of individual start times.
