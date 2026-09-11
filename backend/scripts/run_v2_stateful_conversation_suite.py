@@ -165,6 +165,12 @@ def _cancel_unfinished_booking() -> None:
         "cancelling the conversational task executed an appointment write"
     )
     assert any(operation.type == "cancel_active" for operation in cancelled.understanding.operations)
+    assert len(cancelled.outcomes) == 1
+    assert cancelled.outcomes[0].response_goal == "active_task_cancelled"
+    assert cancelled.outcomes[0].facts.get("active_task_cancelled") is True
+    assert "؟" not in cancelled.reply and "?" not in cancelled.reply, (
+        "responder asked for confirmation after Python had already cleared the active task"
+    )
 
 
 def main() -> None:
