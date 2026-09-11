@@ -21,8 +21,8 @@ from app.models.workspace import Workspace
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
-    PlanStep,
     PlannerContext,
+    PlanStep,
     TurnPlan,
     VerificationFacts,
     advance_step_after_verification,
