@@ -23,6 +23,15 @@ const DAYS = [
   { weekday: 4, label: "الجمعة" },
 ] as const;
 
+const KNOWLEDGE_EXAMPLE = `مثال مناسب — عدّله حسب عيادتك:
+العيادة متخصصة في الليزر والعناية بالبشرة. نقدم إزالة الشعر بالليزر لمناطق مختلفة، واستشارات جلدية وليزر، وخدمات مثل الكربون ليزر والفراكشنال وخدمات التصبغات حسب تقييم الحالة.
+
+في إزالة الشعر نستخدم Prime Lase وCandela Gentle. Prime Lase يعتمد على diode laser، بينما أجهزة Candela Gentle قد تستخدم Alexandrite أو Nd:YAG حسب الموديل. مفيش جهاز أفضل لكل الناس؛ الاختيار يعتمد على لون البشرة وسمك الشعر والمنطقة وتقييم المختص.
+
+قبل جلسة إزالة الشعر يفضّل الحلاقة بالموس وعدم استخدام الشمع أو الحلاوة قبل الجلسة. أي سؤال عن الحمل أو أدوية أو تهيج شديد أو مشكلة جلدية يحتاج مراجعة المختص.
+
+ما تكتبش هنا أسعار أو مدد جلسات أو مواعيد متاحة أو أرصدة باقات؛ Tia بتاخد المعلومات دي تلقائيًا من بيانات العيادة.`;
+
 const statusLabel: Record<HistoricalBatch["status"], string> = {
   preview_ready: "تم الفحص",
   importing: "جاري الاستيراد",
@@ -98,7 +107,7 @@ export function ClinicSettingsPanel({
       <Card id="tia-knowledge">
         <CardHeader>
           <CardTitle>معلومات Tia</CardTitle>
-          <CardDescription>اكتب في خانة واحدة كل المعلومات التي تريد Tia أن تعرفها وتشرحها للعملاء.</CardDescription>
+          <CardDescription>اكتب هنا فقط المعلومات التفسيرية التي تريد Tia أن تعرفها وتشرحها للعملاء: نبذة العيادة، شرح الخدمات، الفرق بين الأجهزة، التعليمات والسياسات والأسئلة الشائعة.</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={saveKnowledgeTextFormAction} className="space-y-4">
@@ -107,10 +116,10 @@ export function ClinicSettingsPanel({
               defaultValue={knowledgeText}
               rows={14}
               maxLength={6000}
-              placeholder="مثال: معلومات عن العيادة، شرح الخدمات، مميزات الأجهزة، تعليمات أو أسئلة شائعة..."
+              placeholder={KNOWLEDGE_EXAMPLE}
               className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
             />
-            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا يستخدم للشرح فقط.</p>
+            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
             <Button type="submit">حفظ معلومات Tia</Button>
           </form>
         </CardContent>
