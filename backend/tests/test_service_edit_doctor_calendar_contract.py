@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.api.routes.doctor_admin import DoctorAdminCreate
+from app.api.routes.doctor_admin import (
+    DoctorAdminCreate,
+    DoctorAdminUpdate,
+    _stored_doctor_name,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -45,6 +49,51 @@ def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
     assert 'ctx.workspace.role === "admin"' in page
     assert "DoctorManagementPanel" in page
     assert "doctor_admin_read_router" in router
+
+
+def test_doctor_admin_profile_has_no_required_user_fields_or_email() -> None:
+    create = DoctorAdminCreate()
+    update = DoctorAdminUpdate()
+
+    assert create.name is None
+    assert create.phone is None
+    assert create.specialization is None
+    assert create.service_ids == []
+    assert update.name is None
+    assert update.phone is None
+    assert update.specialization is None
+    assert update.service_ids == []
+    assert "email" not in DoctorAdminCreate.model_fields
+    assert "email" not in DoctorAdminUpdate.model_fields
+    assert "first_name" not in DoctorAdminCreate.model_fields
+    assert "last_name" not in DoctorAdminCreate.model_fields
+    assert _stored_doctor_name(None) == ("", "")
+    assert _stored_doctor_name("  د. سارة منصور  ") == ("د. سارة منصور", "")
+
+
+def test_doctor_admin_ui_uses_one_optional_name_and_keeps_editor_mounted_after_save() -> None:
+    actions = (ROOT / "frontend/src/app/(dashboard)/doctors/actions.ts").read_text(encoding="utf-8")
+    panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-management.tsx").read_text(encoding="utf-8")
+    read_route = (ROOT / "backend/app/api/routes/doctor_admin_read.py").read_text(encoding="utf-8")
+
+    profile_action = actions.split("export async function updateDoctorAction", 1)[1].split(
+        "export async function updateDoctorScheduleAction", 1
+    )[0]
+    schedule_action = actions.split("export async function updateDoctorScheduleAction", 1)[1].split(
+        "export async function removeDoctorAction", 1
+    )[0]
+
+    assert 'name="name"' in panel
+    assert 'name="first_name"' not in panel
+    assert 'name="last_name"' not in panel
+    assert 'name="email"' not in panel
+    assert "required" not in panel
+    assert 'revalidatePath("/doctors")' not in profile_action
+    assert 'revalidatePath("/doctors")' not in schedule_action
+    assert "refreshDoctorRelatedViews();" in profile_action
+    assert "email:" not in read_route
+    assert "first_name:" not in read_route
+    assert "last_name:" not in read_route
 
 
 def test_doctor_delete_is_soft_and_blocks_doctors_with_upcoming_visits() -> None:
