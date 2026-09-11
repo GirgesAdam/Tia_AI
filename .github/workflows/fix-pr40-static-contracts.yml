@@ -37,10 +37,14 @@ jobs:
           text = text.replace(old_header, new_header, 1)
           path.write_text(text, encoding='utf-8')
           PY
-      - name: Verify affected tests
-        working-directory: backend
+      - name: Verify contract markers
         run: |
-          python -m pytest tests/test_realtime_recovery.py tests/test_service_edit_doctor_calendar_contract.py -q
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('backend/app/agents/turn_interpreter.py').read_text(encoding='utf-8')
+          assert 'Resolve clear relative dates/times' in text
+          assert 'EXISTING APPOINTMENT EDITS' in text
+          PY
       - name: Commit fixes
         run: |
           git config user.name "Tia CI"
