@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -27,6 +28,7 @@ class AppointmentServiceUpdate(BaseModel):
     service_id: UUID
     doctor_id: UUID | None = None
     laser_device_key: Literal["prime_lase", "candela_gentle"] | None = None
+    start_at: datetime | None = None
 
 
 def _require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
@@ -57,6 +59,7 @@ def update_appointment_service(
             service_id=payload.service_id,
             doctor_id=payload.doctor_id,
             laser_device_key=payload.laser_device_key,
+            start_at=payload.start_at,
             changed_by_user_id=access.user.id,
         )
         db.commit()

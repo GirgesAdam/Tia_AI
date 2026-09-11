@@ -39,10 +39,16 @@ export async function updateAppointmentStatus(formData: FormData) {
 export type AppointmentServiceChangeState = { ok: boolean; error: string | null };
 
 function serviceChangeError(error: unknown) {
-  if (!(error instanceof TiaApiError)) return "تعذر تعديل الخدمة. حاول مرة أخرى.";
+  if (!(error instanceof TiaApiError)) return "تعذر تعديل الموعد. حاول مرة أخرى.";
   const detail = error.technicalMessage || "";
-  if (detail.includes("not available for the selected service/device with the selected doctor")) {
-    return "الخدمة أو الجهاز الجديد مش متاحين في نفس الميعاد مع الدكتور المختار. اختار دكتور تاني أو غيّر الموعد.";
+  if (
+    detail.includes("not available for the selected service/device with the selected doctor") ||
+    detail.includes("Requested appointment time is not available")
+  ) {
+    return "الخدمة أو الجهاز أو الدكتور مش متاحين في الوقت المختار. غيّر الوقت أو اختار دكتور تاني.";
+  }
+  if (detail.includes("another appointment") || detail.includes("already booked at this time")) {
+    return "فيه تعارض مع موعد تاني للدكتور أو الجهاز في الوقت ده. اختار وقت مختلف.";
   }
   if (detail.includes("not assigned") || detail.includes("does not provide")) {
     return "الدكتور المختار غير متاح لتنفيذ الخدمة دي. اختار دكتور تاني للخدمة.";
@@ -62,6 +68,7 @@ export async function changeAppointmentService(
   const serviceId = String(formData.get("service_id") || "");
   const doctorId = String(formData.get("doctor_id") || "").trim();
   const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
+  const startAt = String(formData.get("start_at") || "").trim();
   if (!appointmentId || !serviceId || !doctorId) {
     return { ok: false, error: "اختار الخدمة والدكتور قبل الحفظ." };
   }
@@ -72,6 +79,7 @@ export async function changeAppointmentService(
         service_id: serviceId,
         doctor_id: doctorId,
         laser_device_key: laserDeviceKey || null,
+        start_at: startAt || null,
       }),
     });
     refreshAppointmentViews(appointmentId, patientId || undefined);
