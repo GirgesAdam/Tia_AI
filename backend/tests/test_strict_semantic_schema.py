@@ -1,8 +1,5 @@
-from app.agents.flow_interpreter import FlowTurnDecision
-from app.agents.semantic_router import (
-    SemanticCapabilityDecision,
-)
 from app.agents.turn_interpreter import UnifiedTurnDecision
+from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision
 
 
 def test_semantic_schema_is_strict_provider_compatible() -> None:
