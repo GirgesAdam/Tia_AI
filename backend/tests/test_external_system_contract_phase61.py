@@ -213,17 +213,22 @@ def test_admin_runtime_diagnostics_expose_capabilities_and_link_counts() -> None
     assert "func.count(ClinicIntegrationEntityLink.id)" in service_source
 
 
-def test_integration_setup_ui_surfaces_historical_import_contract() -> None:
+def test_clinic_settings_surfaces_historical_import_contract() -> None:
     root = Path(__file__).resolve().parent.parent.parent
-    source = (
+    setup = (root / "frontend/src/app/(dashboard)/setup/page.tsx").read_text(encoding="utf-8")
+    panel = (
+        root / "frontend/src/app/(dashboard)/setup/clinic-settings-panel.tsx"
+    ).read_text(encoding="utf-8")
+    legacy_page = (
         root / "frontend/src/app/(dashboard)/setup/integration/page.tsx"
     ).read_text(encoding="utf-8")
+    source = setup + panel
 
-    assert "HistoricalImportUploader" in source
+    assert "HistoricalImportUploader" in panel
     assert "HistoricalBatch" in source
-    assert '"/clinic/history/batches"' in source
-    assert 'href="/api/clinic-history-template"' in source
-
+    assert '"/clinic/history/batches"' in setup
+    assert 'href="/api/clinic-history-template"' in panel
+    assert 'redirect("/setup#historical-data")' in legacy_page
 
 
 def test_shipped_external_example_contains_patient_and_payment_vendor_sections() -> None:
@@ -235,7 +240,6 @@ def test_shipped_external_example_contains_patient_and_payment_vendor_sections()
     assert '"Payments Sheet"' in source
     assert '"Transaction Kind": "CHARGE"' in source
     assert '"Transaction Kind": "REVERSAL"' in source
-
 
 
 def test_runtime_diagnostics_service_returns_adapter_capabilities(monkeypatch) -> None:
