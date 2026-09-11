@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.clinic_inventory import LASER_DEVICE_NAMES, ServiceDevicePrice
@@ -13,6 +13,9 @@ from app.schemas.clinic_knowledge_base import ClinicKnowledgeEntryRead, ClinicKn
 
 class ClinicKnowledgeError(ValueError):
     pass
+
+
+SINGLE_KNOWLEDGE_TITLE = "معلومات العيادة"
 
 
 def _validate_target(db: Session, *, workspace_id: UUID, payload: ClinicKnowledgeEntryWrite) -> None:
@@ -61,6 +64,46 @@ def list_knowledge_entries(db: Session, *, workspace_id: UUID, active_only: bool
     return [_read(entry, service_name) for entry, service_name in rows]
 
 
+def read_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
+    """Expose the legacy structured entries as one editable text field during migration."""
+    entries = list_knowledge_entries(db, workspace_id=workspace_id)
+    if not entries:
+        return ""
+    if len(entries) == 1 and entries[0].title == SINGLE_KNOWLEDGE_TITLE:
+        return entries[0].content
+
+    blocks: list[str] = []
+    for entry in entries:
+        content = entry.content.strip()
+        if not content:
+            continue
+        title = entry.title.strip()
+        blocks.append(f"{title}\n{content}" if title else content)
+    return "\n\n".join(blocks)[:6000]
+
+
+def replace_knowledge_text(db: Session, *, workspace_id: UUID, content: str) -> str:
+    """Atomically replace all user-managed knowledge with one clinic-wide text entry."""
+    normalized = content.strip()
+    db.execute(delete(ClinicKnowledgeEntry).where(ClinicKnowledgeEntry.workspace_id == workspace_id))
+    db.flush()
+    if normalized:
+        db.add(
+            ClinicKnowledgeEntry(
+                workspace_id=workspace_id,
+                scope_type="clinic",
+                service_id=None,
+                device_key=None,
+                title=SINGLE_KNOWLEDGE_TITLE,
+                content=normalized,
+                sort_order=0,
+                is_active=True,
+            )
+        )
+        db.flush()
+    return normalized
+
+
 def create_knowledge_entry(db: Session, *, workspace_id: UUID, payload: ClinicKnowledgeEntryWrite) -> ClinicKnowledgeEntry:
     _validate_target(db, workspace_id=workspace_id, payload=payload)
     entry = ClinicKnowledgeEntry(workspace_id=workspace_id, **payload.model_dump())
@@ -100,7 +143,7 @@ def relevant_knowledge_context(
 ) -> dict[str, object] | None:
     """Return only grounded explanatory entries relevant to the current turn."""
     clauses = []
-    if include_clinic:
+    if include_clinic or service_id is not None or device_key:
         clauses.append(ClinicKnowledgeEntry.scope_type == "clinic")
     if service_id is not None:
         clauses.append(
@@ -140,7 +183,7 @@ def relevant_knowledge_context(
                 "service_id": str(item.service_id) if item.service_id else None,
                 "device_key": item.device_key,
                 "title": item.title,
-                "content": item.content[:1200],
+                "content": item.content[:6000] if item.title == SINGLE_KNOWLEDGE_TITLE else item.content[:1200],
             }
             for item in entries
         ],

@@ -13,6 +13,7 @@ from app.schemas.clinic_knowledge_base import (
     ClinicKnowledgeEntryRead,
     ClinicKnowledgeEntryUpdate,
     ClinicKnowledgeEntryWrite,
+    ClinicKnowledgeText,
 )
 from app.services.activity import record_activity_event
 from app.services.clinic_knowledge_base import (
@@ -20,6 +21,8 @@ from app.services.clinic_knowledge_base import (
     create_knowledge_entry,
     delete_knowledge_entry,
     list_knowledge_entries,
+    read_knowledge_text,
+    replace_knowledge_text,
     update_knowledge_entry,
 )
 
@@ -36,6 +39,37 @@ def read_knowledge_base(
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicKnowledgeBaseSnapshot:
     return ClinicKnowledgeBaseSnapshot(entries=list_knowledge_entries(db, workspace_id=access.workspace.id))
+
+
+@router.get("/knowledge-text", response_model=ClinicKnowledgeText)
+def read_single_knowledge_text(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicKnowledgeText:
+    return ClinicKnowledgeText(content=read_knowledge_text(db, workspace_id=access.workspace.id))
+
+
+@router.put("/knowledge-text", response_model=ClinicKnowledgeText)
+def replace_single_knowledge_text(
+    payload: ClinicKnowledgeText,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicKnowledgeText:
+    content = replace_knowledge_text(db, workspace_id=access.workspace.id, content=payload.content)
+    record_activity_event(
+        db,
+        workspace_id=access.workspace.id,
+        actor_type="staff",
+        actor_user_id=access.user.id,
+        action="clinic.knowledge_replaced",
+        entity_type="clinic_knowledge",
+        entity_id=None,
+        summary="Clinic knowledge text replaced.",
+        metadata={"characters": len(content)},
+        flush=False,
+    )
+    db.commit()
+    return ClinicKnowledgeText(content=content)
 
 
 @router.post("/knowledge-base", response_model=ClinicKnowledgeEntryRead, status_code=status.HTTP_201_CREATED)

@@ -50,3 +50,7 @@ class ClinicKnowledgeEntryRead(BaseModel):
 
 class ClinicKnowledgeBaseSnapshot(BaseModel):
     entries: list[ClinicKnowledgeEntryRead]
+
+
+class ClinicKnowledgeText(BaseModel):
+    content: str = Field(default="", max_length=6000)
