@@ -26,7 +26,11 @@ from app.services.agent_v2.planner import (
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle
 from app.services.agent_v2.state import ActiveTaskState
-from app.services.agent_v2.state_executor import apply_step_state, complete_state_after_action
+from app.services.agent_v2.state_executor import (
+    apply_step_state,
+    complete_state_after_action,
+    finalize_step_after_state_transition,
+)
 from app.services.agent_v2.test_harness import (
     V2FixtureEnvironment,
     V2HarnessStepTrace,
@@ -99,6 +103,7 @@ def _execute_step(
         now=local_now,
         turn_id=turn_id,
     )
+    advanced = finalize_step_after_state_transition(advanced, transition)
     task_after_transition = transition.active_task
     simulated_write, action_result = _simulated_action(
         advanced,
