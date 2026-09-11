@@ -39,6 +39,26 @@ _INTERNAL_KEYS = frozenset(
     }
 )
 
+_COMPLETED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
+    "booking": "booking_completed",
+    "confirm_appointment": "appointment_confirmed",
+    "cancel_appointment": "cancellation_completed",
+    "reschedule": "reschedule_completed",
+    "buy_package": "package_purchased",
+    "follow_up": "follow_up_created",
+    "marketing_update": "marketing_updated",
+}
+
+_FAILED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
+    "booking": "clarification",
+    "confirm_appointment": "clarification",
+    "cancel_appointment": "clarification",
+    "reschedule": "clarification",
+    "buy_package": "package_information",
+    "follow_up": "clarification",
+    "marketing_update": "clarification",
+}
+
 
 def _money(minor: object, currency: object) -> str | None:
     if minor is None or not currency:
@@ -139,18 +159,63 @@ def _availability_facts(result: ReadResult) -> dict[str, object]:
     return {key: value for key, value in facts.items() if value not in (None, "", [])}
 
 
-def _read_facts(result: ReadResult) -> dict[str, object]:
+def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> set[str]:
+    try:
+        operation = turn.operations[step.operation_index]
+    except IndexError:
+        return set()
+    details = set(operation.requested_service_details)
+    if operation.type == "pricing":
+        details.add("price")
+    if operation.type == "service_info" and not details:
+        details.add("description")
+    return details
+
+
+def _service_catalog_facts(result: ReadResult, requested_details: set[str]) -> dict[str, object]:
+    visible = _visible_value(result.payload)
+    if not isinstance(visible, dict):
+        return {}
+    service = visible.get("service")
+    if not isinstance(service, dict):
+        return visible
+
+    shaped: dict[str, object] = {}
+    if service.get("name") not in (None, ""):
+        shaped["name"] = service["name"]
+    if "price" in requested_details:
+        for key in ("price", "currency"):
+            if service.get(key) not in (None, ""):
+                shaped[key] = service[key]
+    if "duration" in requested_details and service.get("customer_duration_text") not in (None, ""):
+        shaped["customer_duration_text"] = service["customer_duration_text"]
+    if "description" in requested_details and service.get("description") not in (None, ""):
+        shaped["description"] = service["description"]
+    if "devices" in requested_details and service.get("laser_devices") not in (None, [], {}):
+        shaped["laser_devices"] = service["laser_devices"]
+    return {"service": shaped}
+
+
+def _read_facts(result: ReadResult, *, requested_service_details: set[str]) -> dict[str, object]:
     if result.kind == "availability":
         return {"availability": _availability_facts(result)}
+    if result.kind == "service_catalog":
+        return {
+            "service_catalog": _service_catalog_facts(result, requested_service_details)
+        }
     return {result.kind: _visible_value(result.payload)}
 
 
-def _facts_from_reads(bundle: ReadExecutionBundle | None) -> dict[str, object]:
+def _facts_from_reads(
+    bundle: ReadExecutionBundle | None,
+    *,
+    requested_service_details: set[str],
+) -> dict[str, object]:
     if bundle is None:
         return {}
     facts: dict[str, object] = {}
     for result in bundle.results:
-        current = _read_facts(result)
+        current = _read_facts(result, requested_service_details=requested_service_details)
         for key, value in current.items():
             if key not in facts:
                 facts[key] = value
@@ -329,6 +394,21 @@ def _result_requires_staff(bundle: ReadExecutionBundle | None) -> bool:
     return any(result.error_code == "refund_quote_requires_staff" for result in bundle.results)
 
 
+def _completed_write_goal(step: PlanStep) -> ResponseGoal:
+    if step.write_intent is None:
+        raise OutcomeBuildError("Completed write outcome requires a write intent.")
+    goal = _COMPLETED_GOAL_BY_WRITE_KIND.get(step.write_intent.kind)
+    if goal is None:
+        raise OutcomeBuildError(f"No terminal response goal for write kind {step.write_intent.kind}.")
+    return goal
+
+
+def _failed_write_goal(step: PlanStep) -> ResponseGoal:
+    if step.write_intent is None:
+        return "clarification"
+    return _FAILED_GOAL_BY_WRITE_KIND.get(step.write_intent.kind, "clarification")
+
+
 def build_handoff_outcome(plan: TurnPlan) -> TurnOutcome:
     if plan.handoff_category is None:
         raise OutcomeBuildError("Turn plan does not require handoff.")
@@ -352,7 +432,8 @@ def build_step_outcome(
     active_task_summary: dict[str, object] | None = None,
 ) -> TurnOutcome:
     """Convert deterministic planning/execution facts into one responder-safe outcome."""
-    read_facts = _facts_from_reads(reads)
+    requested_details = _requested_service_details(step, turn)
+    read_facts = _facts_from_reads(reads, requested_service_details=requested_details)
     base_facts = {**_visible_dict(step.facts), **read_facts}
     active_summary = _visible_dict(dict(active_task_summary or {}))
 
@@ -403,14 +484,14 @@ def build_step_outcome(
         if action_result.get("ok") is not True:
             return TurnOutcome(
                 status="blocked",
-                response_goal=step.response_goal or "clarification",
+                response_goal=_failed_write_goal(step),
                 facts=base_facts,
                 action_result=_visible_dict(action_result),
                 active_task_summary=active_summary,
             )
         return TurnOutcome(
             status="completed",
-            response_goal=step.response_goal or "clarification",
+            response_goal=_completed_write_goal(step),
             facts=base_facts,
             action_result=_visible_dict(action_result),
             active_task_summary=active_summary,
@@ -434,9 +515,8 @@ def build_step_outcome(
             active_task_summary=active_summary,
         )
 
-    status = "answered"
     return TurnOutcome(
-        status=status,
+        status="answered",
         response_goal=step.response_goal or "clarification",
         facts=base_facts,
         active_task_summary=active_summary,
