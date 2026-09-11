@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,8 +79,14 @@ def _appointment_catalog_rows(
             now=now,
         )
     )
+    timezone = ZoneInfo(workspace.timezone)
     rows: list[dict[str, object]] = []
     for item in response.appointments[:10]:
+        start_local = (
+            item.start_at.astimezone(timezone).isoformat()
+            if item.start_at.tzinfo is not None
+            else item.start_at.isoformat()
+        )
         rows.append(
             {
                 "appointment_id": item.appointment_id,
@@ -88,9 +95,7 @@ def _appointment_catalog_rows(
                 "doctor_id": item.doctor_id,
                 "doctor_name": item.doctor_name,
                 "status": item.status,
-                "start_local": item.start_at.astimezone().isoformat()
-                if item.start_at.tzinfo is not None
-                else item.start_at.isoformat(),
+                "start_local": start_local,
                 "laser_device_key": item.laser_device_key,
                 "laser_device_name": item.laser_device_name,
             }
@@ -174,11 +179,7 @@ def _execute_shadow_step(
     semantic_context: SemanticContext,
     read_context: ReadExecutionContext,
 ) -> tuple[ShadowStepTrace, TurnOutcome | None]:
-    bundle = (
-        execute_step_reads(step, read_context)
-        if step.reads
-        else ReadExecutionBundle()
-    )
+    bundle = execute_step_reads(step, read_context) if step.reads else ReadExecutionBundle()
     advanced = (
         advance_step_after_verification(step, bundle.verification)
         if step.write_intent is not None and step.reads
