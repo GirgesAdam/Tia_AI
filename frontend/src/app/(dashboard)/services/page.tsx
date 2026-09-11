@@ -9,11 +9,11 @@ import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
 import {
-  createService,
   updateLaserDevicePrice,
   updatePackageOffer,
   updateServicePricing,
 } from "./actions";
+import { ServiceCreateForm } from "./service-create-form";
 
 type Service = {
   id: string;
@@ -75,14 +75,8 @@ export default async function ServicesPage() {
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة خدمة</CardTitle></CardHeader>
           <CardContent>
-            <form action={createService} className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(180px,1.5fr)_minmax(140px,1fr)_120px_150px_auto] xl:items-end">
-              <label><span className="mb-1.5 block text-xs font-bold">اسم الخدمة</span><Input name="name" required maxLength={200} placeholder="مثال: Full Body" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold">التصنيف</span><Input name="category" maxLength={120} placeholder="مثال: Laser" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold">المدة بالدقائق</span><Input name="duration_minutes" type="number" min="1" max="1440" defaultValue="60" required /></label>
-              <label><span className="mb-1.5 block text-xs font-bold">السعر الأساسي</span><Input name="price" type="number" min="0" step="0.01" defaultValue="0" required /></label>
-              <div className="space-y-2"><label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700"><input type="checkbox" name="requires_laser_device" value="1" /> يحتاج جهاز ليزر</label><Button type="submit" className="w-full">إضافة</Button></div>
-            </form>
-            <p className="mt-3 text-xs text-[var(--muted)]">لو الخدمة تحتاج جهاز ليزر، السعر الأساسي لا يُستخدم في الحجز؛ حدّد سعر كل جهاز ثم باكيدجاته.</p>
+            <ServiceCreateForm />
+            <p className="mt-3 text-xs text-[var(--muted)]">لو الخدمة تحتاج تحديد جهاز ليزر، اكتب سعر الجلسة لكل جهاز بدل السعر الأساسي.</p>
           </CardContent>
         </Card>
       )}
