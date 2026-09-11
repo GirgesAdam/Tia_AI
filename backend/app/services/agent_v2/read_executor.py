@@ -23,6 +23,7 @@ from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.services.agent_v2.planner import PlanStep, ReadKind, ReadRequest, VerificationFacts
 from app.services.package_offers import list_package_offers
+from app.services.package_refund_quotes import list_patient_package_refund_quotes
 from app.services.patient_history import build_patient_history_context
 from app.services.patient_packages import list_patient_packages
 
@@ -61,22 +62,18 @@ class ReadExecutionContext:
 
 
 def _catalog(context: ReadExecutionContext) -> dict[str, Any]:
-    if context.catalog is not None:
-        return context.catalog
-    return build_clinic_catalog(context.db, context.workspace)
+    return context.catalog or build_clinic_catalog(context.db, context.workspace)
 
 
 def _adapter(context: ReadExecutionContext) -> ClinicAdapter:
-    if context.adapter is not None:
-        return context.adapter
-    return get_clinic_adapter(db=context.db, workspace=context.workspace)
+    return context.adapter or get_clinic_adapter(db=context.db, workspace=context.workspace)
 
 
 def _catalog_rows(catalog: dict[str, Any], collection: str) -> list[dict[str, Any]]:
-    values = catalog.get(collection)
-    if not isinstance(values, list):
+    rows = catalog.get(collection)
+    if not isinstance(rows, list):
         return []
-    return [dict(row) for row in values if isinstance(row, dict)]
+    return [dict(row) for row in rows if isinstance(row, dict)]
 
 
 def _catalog_row(
@@ -92,14 +89,14 @@ def _catalog_row(
     return None
 
 
-def _single_location_branch_id(
-    context: ReadExecutionContext,
-    catalog: dict[str, Any],
-) -> str:
+def _single_location_branch_id(context: ReadExecutionContext) -> str:
     if context.workspace.primary_branch_id is not None:
         return str(context.workspace.primary_branch_id)
-    branches = _catalog_rows(catalog, "branches")
-    branch_ids = [str(row.get("id")) for row in branches if row.get("id")]
+    branch_ids = [
+        str(row["id"])
+        for row in _catalog_rows(_catalog(context), "branches")
+        if row.get("id")
+    ]
     if len(branch_ids) == 1:
         return branch_ids[0]
     raise ReadExecutionError("Single-location clinic branch could not be resolved deterministically.")
@@ -167,7 +164,6 @@ def _slot_matches_time(slot: AvailabilitySlot, *, timezone_name: str, constraint
     tz = ZoneInfo(timezone_name)
     local_start = slot.start_at.astimezone(tz).timetz().replace(tzinfo=None)
     local_end = slot.end_at.astimezone(tz).timetz().replace(tzinfo=None)
-
     if mode == "exact":
         return start is not None and local_start == start
     if mode == "after":
@@ -236,23 +232,27 @@ def _appointment_payload(row: AppointmentRecord) -> dict[str, object]:
     }
 
 
-def _appointment_matches_date(row: AppointmentRecord, raw: object) -> bool:
+def _appointment_matches_date(
+    row: AppointmentRecord,
+    raw: object,
+    *,
+    now: datetime,
+) -> bool:
     if not isinstance(raw, dict):
         return True
+    tz = ZoneInfo(row.timezone)
     dates, _truncated, _first_only = _constraint_dates(
         raw,
-        now_date=datetime.now(ZoneInfo(row.timezone)).date(),
+        now_date=now.astimezone(tz).date(),
     )
     if not dates:
         return True
-    local_date = row.start_at.astimezone(ZoneInfo(row.timezone)).date()
-    return local_date in set(dates)
+    return row.start_at.astimezone(tz).date() in set(dates)
 
 
 def _read_service_catalog(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
-    catalog = _catalog(context)
     service_id = request.parameters.get("service_id")
-    row = _catalog_row(catalog, "services", service_id) if service_id else None
+    row = _catalog_row(_catalog(context), "services", service_id) if service_id else None
     return ReadResult(
         kind=request.kind,
         ok=row is not None,
@@ -262,14 +262,13 @@ def _read_service_catalog(request: ReadRequest, context: ReadExecutionContext) -
 
 
 def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
-    catalog = _catalog(context)
-    branches = _catalog_rows(catalog, "branches")
+    branches = _catalog_rows(_catalog(context), "branches")
     primary = str(context.workspace.primary_branch_id) if context.workspace.primary_branch_id else None
-    visible_branches = []
+    visible = []
     for branch in branches:
         if primary is not None and str(branch.get("id")) != primary:
             continue
-        visible_branches.append(
+        visible.append(
             {
                 key: branch.get(key)
                 for key in (
@@ -293,32 +292,26 @@ def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> Re
         payload={
             "clinic_name": context.workspace.name,
             "timezone": context.workspace.timezone,
-            "locations": visible_branches[:1],
+            "locations": visible[:1],
         },
     )
 
 
 def _read_doctors(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
-    catalog = _catalog(context)
     service_id = request.parameters.get("service_id")
     doctor_id = request.parameters.get("doctor_id")
-    doctors = _catalog_rows(catalog, "doctors")
-    filtered: list[dict[str, Any]] = []
-    for row in doctors:
+    filtered = []
+    for row in _catalog_rows(_catalog(context), "doctors"):
         if doctor_id is not None and str(row.get("id")) != str(doctor_id):
             continue
-        service_ids = row.get("service_ids")
         if service_id is not None:
+            service_ids = row.get("service_ids")
             if not isinstance(service_ids, list) or str(service_id) not in {
                 str(item) for item in service_ids
             }:
                 continue
         filtered.append(row)
-    return ReadResult(
-        kind=request.kind,
-        ok=True,
-        payload={"doctors": filtered},
-    )
+    return ReadResult(kind=request.kind, ok=True, payload={"doctors": filtered})
 
 
 def _read_availability(
@@ -330,29 +323,23 @@ def _read_availability(
     params = {**dict(inherited or {}), **request.parameters}
     service_id = params.get("service_id")
     if service_id is None:
-        return (
-            ReadResult(kind=request.kind, ok=False, error_code="missing_service"),
-            VerificationFacts(),
-        )
-    date_values, truncated, stop_on_first_available = _constraint_dates(
+        return ReadResult(kind=request.kind, ok=False, error_code="missing_service"), VerificationFacts()
+
+    date_values, truncated, stop_on_first = _constraint_dates(
         params.get("date"),
         now_date=context.now.astimezone(ZoneInfo(context.workspace.timezone)).date(),
     )
     if not date_values:
-        return (
-            ReadResult(kind=request.kind, ok=False, error_code="missing_date"),
-            VerificationFacts(),
-        )
+        return ReadResult(kind=request.kind, ok=False, error_code="missing_date"), VerificationFacts()
 
-    catalog = _catalog(context)
-    branch_id = str(params.get("branch_id") or _single_location_branch_id(context, catalog))
+    branch_id = str(params.get("branch_id") or _single_location_branch_id(context))
     doctor_id = str(params["doctor_id"]) if params.get("doctor_id") else None
     appointment_id = str(params["appointment_id"]) if params.get("appointment_id") else None
     device_key = str(params["device_key"]) if params.get("device_key") else None
     adapter = _adapter(context)
     adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
 
-    result_slots: list[dict[str, object]] = []
+    slots: list[dict[str, object]] = []
     checked_dates: list[str] = []
     service_meta: dict[str, object] = {}
     for booking_date in date_values:
@@ -378,7 +365,7 @@ def _read_availability(
             "branch_name": availability.branch_name,
             "timezone": availability.timezone,
         }
-        filtered = [
+        matches = [
             slot
             for slot in availability.slots
             if _slot_matches_time(
@@ -387,27 +374,25 @@ def _read_availability(
                 constraint=params.get("time"),
             )
         ]
-        result_slots.extend(
-            _slot_payload(slot, timezone_name=availability.timezone) for slot in filtered
-        )
-        if filtered and stop_on_first_available:
+        slots.extend(_slot_payload(slot, timezone_name=availability.timezone) for slot in matches)
+        if matches and stop_on_first:
             break
 
     mode, _start, _end = _time_constraint(params.get("time"))
-    exact_count = len(result_slots) if mode == "exact" else None
-    verified_parameters: dict[str, object] = {}
+    exact_count = len(slots) if mode == "exact" else None
+    verified: dict[str, object] = {}
     if exact_count == 1:
-        slot = result_slots[0]
-        verified_parameters = {
+        slot = slots[0]
+        verified = {
             "branch_id": slot["branch_id"],
             "service_id": slot["service_id"],
             "doctor_id": slot["doctor_id"],
             "start_at": slot["start_at"],
         }
         if slot.get("laser_device_key"):
-            verified_parameters["device_key"] = slot["laser_device_key"]
+            verified["device_key"] = slot["laser_device_key"]
         if appointment_id is not None:
-            verified_parameters["appointment_id"] = appointment_id
+            verified["appointment_id"] = appointment_id
 
     return (
         ReadResult(
@@ -416,15 +401,12 @@ def _read_availability(
             payload={
                 **service_meta,
                 "checked_dates": checked_dates,
-                "slots": result_slots,
-                "matching_slot_count": len(result_slots),
+                "slots": slots,
+                "matching_slot_count": len(slots),
                 "search_truncated": truncated,
             },
         ),
-        VerificationFacts(
-            exact_slot_match_count=exact_count,
-            verified_parameters=verified_parameters,
-        ),
+        VerificationFacts(exact_slot_match_count=exact_count, verified_parameters=verified),
     )
 
 
@@ -450,17 +432,18 @@ def _read_appointments(
         rows = [row for row in rows if row.status == "pending"]
 
     params = request.parameters
-    appointment_id = params.get("appointment_id")
-    service_id = params.get("service_id")
-    doctor_id = params.get("doctor_id")
-    if appointment_id is not None:
-        rows = [row for row in rows if row.appointment_id == str(appointment_id)]
-    if service_id is not None:
-        rows = [row for row in rows if row.service_id == str(service_id)]
-    if doctor_id is not None:
-        rows = [row for row in rows if row.doctor_id == str(doctor_id)]
+    if params.get("appointment_id") is not None:
+        rows = [row for row in rows if row.appointment_id == str(params["appointment_id"])]
+    if params.get("service_id") is not None:
+        rows = [row for row in rows if row.service_id == str(params["service_id"])]
+    if params.get("doctor_id") is not None:
+        rows = [row for row in rows if row.doctor_id == str(params["doctor_id"])]
     if params.get("date") is not None:
-        rows = [row for row in rows if _appointment_matches_date(row, params.get("date"))]
+        rows = [
+            row
+            for row in rows
+            if _appointment_matches_date(row, params["date"], now=context.now)
+        ]
 
     unique = rows[0] if len(rows) == 1 else None
     verified: dict[str, object] = {}
@@ -474,16 +457,14 @@ def _read_appointments(
         if unique.laser_device_key:
             verified["device_key"] = unique.laser_device_key
 
+    count = len(rows) if operation_type != "appointment_list" else None
     return (
         ReadResult(
             kind=request.kind,
             ok=True,
             payload={"appointments": [_appointment_payload(row) for row in rows]},
         ),
-        VerificationFacts(
-            appointment_match_count=(len(rows) if operation_type != "appointment_list" else None),
-            verified_parameters=verified,
-        ),
+        VerificationFacts(appointment_match_count=count, verified_parameters=verified),
         unique,
     )
 
@@ -519,11 +500,7 @@ def _package_filters(request: ReadRequest) -> tuple[UUID | None, str | None, int
     service_id = request.parameters.get("service_id")
     package_id = request.parameters.get("package_id")
     device_key = str(request.parameters["device_key"]) if request.parameters.get("device_key") else None
-    sessions = (
-        int(request.parameters["package_sessions"])
-        if request.parameters.get("package_sessions") is not None
-        else None
-    )
+    sessions = int(request.parameters["package_sessions"]) if request.parameters.get("package_sessions") is not None else None
     return (
         _parse_uuid(service_id, field_name="service_id") if service_id is not None else None,
         device_key,
@@ -568,15 +545,17 @@ def _read_package_offers(
         rows = [row for row in rows if row.device_key == device_key]
     if sessions is not None:
         rows = [row for row in rows if row.sessions_count == sessions]
+
     verified: dict[str, object] = {}
     if len(rows) == 1:
+        row = rows[0]
         verified = {
-            "package_offer_id": str(rows[0].id),
-            "service_id": str(rows[0].service_id),
-            "device_key": rows[0].device_key,
-            "package_sessions": rows[0].sessions_count,
-            "price_minor": int(rows[0].price_minor),
-            "currency": rows[0].currency,
+            "package_offer_id": str(row.id),
+            "service_id": str(row.service_id),
+            "device_key": row.device_key,
+            "package_sessions": row.sessions_count,
+            "price_minor": int(row.price_minor),
+            "currency": row.currency,
         }
     return (
         ReadResult(
@@ -593,53 +572,20 @@ def _read_package_offers(
 
 def _read_package_refund_quote(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
     service_id, device_key, _sessions, package_id = _package_filters(request)
-    rows = list_patient_packages(
+    quotes, unsafe = list_patient_package_refund_quotes(
         context.db,
         workspace_id=context.workspace.id,
         patient_id=context.patient.id,
+        package_id=package_id,
         service_id=service_id,
-        usable_only=False,
-        include_financials=True,
+        laser_device_key=device_key,
     )
-    if package_id is not None:
-        rows = [row for row in rows if row.id == package_id]
-    if device_key is not None:
-        rows = [row for row in rows if row.laser_device_key == device_key]
-
-    quotes: list[dict[str, object]] = []
-    unsafe: list[str] = []
-    for row in rows:
-        unit_price = row.standalone_session_price_minor_at_purchase
-        if unit_price is None and row.sessions_consumed > 0:
-            unsafe.append(str(row.id))
-            continue
-        consumed_value_minor = int(row.sessions_consumed) * int(unit_price or 0)
-        refundable_minor = max(
-            int(row.amount_paid_minor)
-            - consumed_value_minor
-            - int(row.amount_refunded_minor),
-            0,
-        )
-        quotes.append(
-            {
-                "package_id": str(row.id),
-                "package_name": row.name,
-                "currency": row.currency,
-                "sessions_consumed": int(row.sessions_consumed),
-                "sessions_remaining": int(row.sessions_remaining),
-                "collected_minor": int(row.amount_paid_minor),
-                "previously_refunded_minor": int(row.amount_refunded_minor),
-                "standalone_session_price_minor_at_purchase": int(unit_price or 0),
-                "consumed_value_minor": consumed_value_minor,
-                "refundable_minor": refundable_minor,
-            }
-        )
     return ReadResult(
         kind=request.kind,
         ok=not unsafe,
         payload={
-            "quotes": quotes,
-            "unsafe_package_ids": unsafe,
+            "quotes": [quote.as_dict() for quote in quotes],
+            "unsafe_package_ids": [str(item) for item in unsafe],
             "needs_package_choice": len(quotes) + len(unsafe) > 1,
         },
         error_code="refund_quote_requires_staff" if unsafe else None,
@@ -676,8 +622,7 @@ def execute_step_reads(step: PlanStep, context: ReadExecutionContext) -> ReadExe
 
     for request in step.reads:
         if request.kind == "service_catalog":
-            result = _read_service_catalog(request, context)
-            results.append(result)
+            results.append(_read_service_catalog(request, context))
         elif request.kind == "clinic_info":
             results.append(_read_clinic_info(request, context))
         elif request.kind == "doctors":
