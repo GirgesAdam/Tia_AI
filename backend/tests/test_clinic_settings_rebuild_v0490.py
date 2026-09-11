@@ -150,6 +150,7 @@ def test_append_patient_payload_changes_do_not_force_replace() -> None:
     assert 'link.payload_hash != row.payload_hash' in append_block
     assert 'Appointment/payment/package facts remain strict' in source
 
+
 def test_patient_id_can_identify_patient_without_phone_or_email() -> None:
     payload, code, _message = _normalize_patient({"patient_id": "P-1001", "full_name": "Sara"})
     assert code is None
@@ -359,7 +360,8 @@ def test_frontend_no_longer_uses_mapping_wizard_contract() -> None:
     page = (FRONTEND / "src/app/(dashboard)/setup/integration/page.tsx").read_text(encoding="utf-8")
     uploader = (FRONTEND / "src/app/(dashboard)/setup/integration/history-uploader.tsx").read_text(encoding="utf-8")
     setup_page = (FRONTEND / "src/app/(dashboard)/setup/page.tsx").read_text(encoding="utf-8")
-    combined = page + uploader + setup_page
+    panel = (FRONTEND / "src/app/(dashboard)/setup/clinic-settings-panel.tsx").read_text(encoding="utf-8")
+    combined = page + uploader + setup_page + panel
     assert "IntegrationWizard" not in combined
     assert "price_minor" not in combined
     assert "doctor.is_active" not in combined
@@ -389,7 +391,7 @@ def test_history_import_is_bounded_and_setup_mutations_are_audited() -> None:
 
 
 def test_history_ui_resumes_durable_preview_import_and_failed_batches() -> None:
-    page = (FRONTEND / "src/app/(dashboard)/setup/integration/page.tsx").read_text(encoding="utf-8")
+    page = (FRONTEND / "src/app/(dashboard)/setup/page.tsx").read_text(encoding="utf-8")
     uploader = (FRONTEND / "src/app/(dashboard)/setup/integration/history-uploader.tsx").read_text(encoding="utf-8")
     assert '["importing", "preview_ready", "failed"].includes(batch.status)' in page
     assert "batch && !preview" in uploader
@@ -429,14 +431,15 @@ def test_setup_ui_is_refocused_without_duplicate_service_or_doctor_management() 
 
     assert "ClinicSettingsPanel" in page
     assert "ClinicSetupImporter" not in page
-    assert 'href="/services"' in panel
-    assert 'href="/doctors"' in panel
-    assert 'href="/setup/integration"' in panel
+    assert 'href="/services"' not in panel
+    assert 'href="/doctors"' not in panel
+    assert 'href="/setup/integration"' not in panel
     assert "WhatsApp" not in page
     assert "واتساب والـAutomation" not in page
-    assert "إدارة الخدمات والأسعار" in panel
-    assert "إدارة الدكاترة ومواعيدهم" in panel
-    assert "Knowledge Base الخاصة بـ Tia" in panel
+    assert "سياسة الحجز" not in panel
+    assert 'id="tia-knowledge"' in panel
+    assert panel.count('name="content"') == 1
+    assert "HistoricalImportUploader" in panel
 
     # The legacy setup importer remains available in code for backwards-compatible
     # import flows, but it is intentionally no longer rendered on Clinic Settings.
@@ -447,7 +450,6 @@ def test_setup_ui_is_refocused_without_duplicate_service_or_doctor_management() 
     assert '@router.post("/setup-v2/preview"' in route
     assert '@router.post("/setup-v2/apply-draft"' in route
     assert '@router.get("/setup-v2/template")' in route
-
 
 
 def test_setup_preview_preserves_missing_cells_as_blank_without_weekday() -> None:
@@ -485,6 +487,7 @@ def test_setup_template_booking_policy_values_are_blank() -> None:
         assert all(value in (None, "") for _setting, value in rows)
     finally:
         wb.close()
+
 
 def test_setup_excel_optional_columns_are_tolerant_and_preserve_required_runtime_fields() -> None:
     import base64
