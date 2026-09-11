@@ -23,8 +23,7 @@ const DAYS = [
   { weekday: 4, label: "الجمعة" },
 ] as const;
 
-const KNOWLEDGE_EXAMPLE = `مثال مناسب — عدّله حسب عيادتك:
-العيادة متخصصة في الليزر والعناية بالبشرة. نقدم إزالة الشعر بالليزر لمناطق مختلفة، واستشارات جلدية وليزر، وجلسات عناية بالبشرة مثل الهيدرافيشل والفراكشنال حسب احتياج الحالة.
+const KNOWLEDGE_EXAMPLE = `العيادة متخصصة في الليزر والعناية بالبشرة. نقدم إزالة الشعر بالليزر لمناطق مختلفة، واستشارات جلدية وليزر، وجلسات عناية بالبشرة مثل الهيدرافيشل والفراكشنال حسب احتياج الحالة.
 
 في إزالة الشعر نستخدم Prime Lase وCandela Gentle. مفيش جهاز أفضل لكل الناس؛ الجهاز الأنسب يختلف حسب نوع البشرة والشعر والمنطقة وتقييم المختص. اكتب هنا أي فرق أو ميزة فعلية خاصة بالأجهزة الموجودة عندك لو حابب Tia تشرحها للعملاء.
 
@@ -111,14 +110,22 @@ export function ClinicSettingsPanel({
         </CardHeader>
         <CardContent>
           <form action={saveKnowledgeTextFormAction} className="space-y-4">
-            <textarea
-              name="content"
-              defaultValue={knowledgeText}
-              rows={14}
-              maxLength={6000}
-              placeholder={KNOWLEDGE_EXAMPLE}
-              className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-            />
+            <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4">
+              <div className="mb-2 text-sm font-bold text-teal-950">مثال لمعلومات Tia — عدّله حسب عيادتك</div>
+              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{KNOWLEDGE_EXAMPLE}</div>
+            </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-bold">معلومات عيادتك</span>
+              <textarea
+                name="content"
+                defaultValue={knowledgeText}
+                rows={14}
+                maxLength={6000}
+                placeholder="اكتب هنا معلومات عيادتك التي تريد Tia أن تستخدمها في الشرح للعملاء..."
+                className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              />
+            </label>
             <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
             <Button type="submit">حفظ معلومات Tia</Button>
           </form>
