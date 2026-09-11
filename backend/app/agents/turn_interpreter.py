@@ -223,26 +223,79 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
 def _semantic_catalog_for_single_location(
     clinic_catalog: dict[str, object],
 ) -> dict[str, object]:
-    """Hide storage-level location rows from customer-language interpretation.
+    """Return only facts required for semantic interpretation.
 
-    The current product is a single-location clinic experience. PostgreSQL and
-    external adapters may still require a branch/location foreign key internally,
-    but choosing that row is a deterministic backend concern rather than a
-    customer intent or LLM grounding task.
+    The full canonical catalog remains unchanged and authoritative for grounding,
+    pricing, availability, and execution. This copy removes duplicated and
+    operational fields before sending clinic context to the LLM.
     """
-    semantic_catalog = deepcopy(clinic_catalog)
-    semantic_catalog.pop("branches", None)
+    semantic: dict[str, object] = {"services": [], "doctors": []}
 
-    doctors = semantic_catalog.get("doctors")
-    if isinstance(doctors, list):
-        for doctor in doctors:
-            if not isinstance(doctor, dict):
+    services = clinic_catalog.get("services")
+    if isinstance(services, list):
+        semantic_services: list[dict[str, object]] = []
+        for row in services:
+            if not isinstance(row, dict):
                 continue
-            doctor.pop("branch_ids", None)
-            doctor.pop("scheduled_branch_ids", None)
+            item: dict[str, object] = {}
+            for key in ("id", "name", "category", "requires_laser_device"):
+                value = row.get(key)
+                if value not in (None, "", []):
+                    item[key] = value
+            description = str(row.get("description") or "").strip()
+            if description:
+                item["description"] = description[:240]
+            raw_devices = row.get("laser_devices")
+            if isinstance(raw_devices, list):
+                devices = [
+                    {
+                        key: device.get(key)
+                        for key in ("device_key", "device_name")
+                        if device.get(key) not in (None, "")
+                    }
+                    for device in raw_devices
+                    if isinstance(device, dict)
+                ]
+                devices = [device for device in devices if device]
+                if devices:
+                    item["laser_devices"] = devices
+            if item:
+                semantic_services.append(item)
+        semantic["services"] = semantic_services
 
-    return semantic_catalog
+    doctors = clinic_catalog.get("doctors")
+    if isinstance(doctors, list):
+        semantic_doctors: list[dict[str, object]] = []
+        for row in doctors:
+            if not isinstance(row, dict):
+                continue
+            item = {
+                key: row.get(key)
+                for key in ("id", "name", "specialization", "service_ids")
+                if row.get(key) not in (None, "", [])
+            }
+            if item:
+                semantic_doctors.append(item)
+        semantic["doctors"] = semantic_doctors
 
+    appointments = clinic_catalog.get("appointments")
+    if isinstance(appointments, list):
+        appointment_keys = (
+            "id", "appointment_id", "service_id", "service_name",
+            "doctor_id", "doctor_name", "status", "start_local",
+            "laser_device_key", "laser_device_name",
+        )
+        semantic["appointments"] = [
+            {
+                key: row.get(key)
+                for key in appointment_keys
+                if row.get(key) not in (None, "", [])
+            }
+            for row in appointments
+            if isinstance(row, dict)
+        ]
+
+    return semantic
 
 def _single_location_entity_state(state: object) -> dict[str, object]:
     if not isinstance(state, dict):

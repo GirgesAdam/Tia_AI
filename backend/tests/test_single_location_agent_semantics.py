@@ -76,7 +76,7 @@ def test_semantic_catalog_hides_storage_location_rows() -> None:
     semantic = _semantic_catalog_for_single_location(catalog)
 
     assert "branches" not in semantic
-    assert semantic["services"][0]["doctor_ids"] == ["doctor-1"]
+    assert "doctor_ids" not in semantic["services"][0]
     assert "branch_ids" not in semantic["doctors"][0]
     assert "scheduled_branch_ids" not in semantic["doctors"][0]
     assert "branches" in catalog
@@ -121,3 +121,54 @@ def test_presented_options_do_not_expose_branch_names_or_branch_choices() -> Non
     assert "branch_name" not in summary["slots"][0]
     assert summary["services"][0]["id"] == "service-1"
     assert summary["doctors"][0]["id"] == "doctor-1"
+
+
+def test_semantic_catalog_drops_operational_and_duplicate_fields() -> None:
+    catalog = {
+        "services": [
+            {
+                "id": "service-1", "name": "HydraFacial", "category": "Skin",
+                "description": "D" * 500, "duration_minutes": 60,
+                "price_minor": 180000, "currency": "EGP", "price": "1,800 EGP",
+                "requires_medical_review": False, "requires_laser_device": False,
+                "doctor_ids": ["doctor-1"],
+            },
+            {
+                "id": "service-2", "name": "Underarm Laser", "category": "Laser",
+                "requires_laser_device": True, "doctor_ids": ["doctor-1"],
+                "laser_devices": [{
+                    "device_key": "candela_gentle", "device_name": "Candela Gentle",
+                    "price_minor": 65000, "currency": "EGP", "configured": True,
+                }],
+            },
+        ],
+        "branches": [{"id": "branch-1", "working_hours": [{"weekday": 1}]}],
+        "doctors": [{
+            "id": "doctor-1", "name": "Ahmed", "specialization": "Dermatology",
+            "service_ids": ["service-1", "service-2"], "branch_ids": ["branch-1"],
+            "working_hours": [{"weekday": 1, "start": "10:00", "end": "20:00"}],
+        }],
+        "appointments": [{
+            "id": "appointment-1", "appointment_id": "appointment-1",
+            "service_id": "service-1", "service_name": "HydraFacial",
+            "doctor_id": "doctor-1", "doctor_name": "Ahmed", "status": "confirmed",
+            "start_local": "2026-09-12T10:00:00+03:00",
+            "end_local": "2026-09-12T11:00:00+03:00", "price_minor": 180000,
+            "payment_status": "paid",
+        }],
+    }
+    semantic = _semantic_catalog_for_single_location(catalog)
+    assert "branches" not in semantic
+    assert "doctor_ids" not in semantic["services"][0]
+    assert "price_minor" not in semantic["services"][0]
+    assert "duration_minutes" not in semantic["services"][0]
+    assert len(semantic["services"][0]["description"]) == 240
+    assert semantic["services"][1]["laser_devices"] == [
+        {"device_key": "candela_gentle", "device_name": "Candela Gentle"}
+    ]
+    assert "working_hours" not in semantic["doctors"][0]
+    assert "branch_ids" not in semantic["doctors"][0]
+    assert "end_local" not in semantic["appointments"][0]
+    assert "price_minor" not in semantic["appointments"][0]
+    assert "branches" in catalog
+    assert "working_hours" in catalog["doctors"][0]
