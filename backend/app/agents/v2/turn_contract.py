@@ -70,7 +70,7 @@ class DateConstraint(StrictContractModel):
     end_date: str | None = None
 
     @model_validator(mode="after")
-    def validate_dates(self) -> "DateConstraint":
+    def validate_dates(self) -> DateConstraint:
         if self.start_date is not None:
             date.fromisoformat(self.start_date)
         if self.end_date is not None:
@@ -96,7 +96,7 @@ class TimeConstraint(StrictContractModel):
     end_time: str | None = None
 
     @model_validator(mode="after")
-    def validate_times(self) -> "TimeConstraint":
+    def validate_times(self) -> TimeConstraint:
         parsed_start = time.fromisoformat(self.start_time) if self.start_time else None
         parsed_end = time.fromisoformat(self.end_time) if self.end_time else None
 
@@ -117,7 +117,7 @@ class Selection(StrictContractModel):
     ref: str | None = None
 
     @model_validator(mode="after")
-    def validate_selection(self) -> "Selection":
+    def validate_selection(self) -> Selection:
         if self.kind == "index":
             if self.index is None or self.index < 1:
                 raise ValueError("index selection requires a positive index.")
@@ -150,7 +150,7 @@ class TurnEntities(StrictContractModel):
     follow_up_at_local: str | None = None
 
     @model_validator(mode="after")
-    def validate_follow_up_datetime(self) -> "TurnEntities":
+    def validate_follow_up_datetime(self) -> TurnEntities:
         if self.package_sessions is not None and self.package_sessions < 1:
             raise ValueError("package_sessions must be positive.")
         if self.follow_up_at_local is not None:
@@ -172,7 +172,7 @@ class TiaTurnUnderstanding(StrictContractModel):
     safety_signals: list[SafetySignal] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_non_empty_turn(self) -> "TiaTurnUnderstanding":
+    def validate_non_empty_turn(self) -> TiaTurnUnderstanding:
         if not self.operations and not self.safety_signals:
             raise ValueError("A turn must contain at least one operation or safety signal.")
         if len(self.operations) > 6:
