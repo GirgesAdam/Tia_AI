@@ -33,6 +33,7 @@ ResponseGoal = Literal[
     "reschedule_completed",
     "cancellation_completed",
     "appointment_confirmed",
+    "active_task_cancelled",
     "package_information",
     "package_purchased",
     "package_refund_quote",
@@ -62,6 +63,23 @@ _COMPLETED_ACTION_BY_GOAL = {
     "follow_up_created": "follow_up",
     "marketing_updated": "marketing_update",
 }
+
+
+def _strip_reference_metadata(value: object) -> object:
+    """Remove ephemeral/internal reference tokens before any outcome reaches language rendering."""
+    if isinstance(value, dict):
+        visible: dict[str, object] = {}
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            if key == "ref" or key.endswith("_ref") or key.endswith("_refs"):
+                continue
+            visible[key] = _strip_reference_metadata(item)
+        return visible
+    if isinstance(value, list):
+        return [_strip_reference_metadata(item) for item in value]
+    if isinstance(value, tuple):
+        return [_strip_reference_metadata(item) for item in value]
+    return value
 
 
 class StrictOutcomeModel(BaseModel):
@@ -102,6 +120,34 @@ class TurnOutcome(StrictOutcomeModel):
             raise ValueError("completed outcomes require a terminal write response goal.")
         if self.status != "completed" and self.response_goal in _COMPLETED_RESPONSE_GOALS:
             raise ValueError("terminal write response goals require completed status.")
+        if self.response_goal == "active_task_cancelled" and self.status != "answered":
+            raise ValueError("active task cancellation is a terminal state result, not a clinic write.")
+
+        stripped_facts = _strip_reference_metadata(self.facts)
+        stripped_action = _strip_reference_metadata(self.action_result)
+        stripped_summary = _strip_reference_metadata(self.active_task_summary)
+        assert isinstance(stripped_facts, dict)
+        assert isinstance(stripped_action, dict)
+        assert isinstance(stripped_summary, dict)
+        self.facts = stripped_facts
+        self.action_result = stripped_action
+        self.active_task_summary = stripped_summary
+        self.choices = [
+            choice.model_copy(
+                update={
+                    "facts": (
+                        cleaned
+                        if isinstance(
+                            cleaned := _strip_reference_metadata(choice.facts),
+                            dict,
+                        )
+                        else {}
+                    )
+                }
+            )
+            for choice in self.choices
+        ]
+
         if self.status == "completed" and self.action_result.get("ok") is True:
             self.action_result = {
                 **self.action_result,
