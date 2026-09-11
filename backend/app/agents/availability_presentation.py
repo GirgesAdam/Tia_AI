@@ -63,7 +63,7 @@ def _regular_start_range(
         return None
     deltas = [
         int((current - previous).total_seconds())
-        for previous, current in zip(starts, starts[1:], strict=True)
+        for previous, current in zip(starts, starts[1:])
     ]
     if not deltas or len(set(deltas)) != 1:
         return None
