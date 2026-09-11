@@ -8,7 +8,13 @@ from langchain_core.messages import HumanMessage
 
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import shadow
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, VerificationFacts, WriteIntent
+from app.services.agent_v2.planner import (
+    PlanStep,
+    ReadRequest,
+    TurnPlan,
+    VerificationFacts,
+    WriteIntent,
+)
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 
 NOW = datetime(2026, 9, 11, 16, 0, tzinfo=UTC)
