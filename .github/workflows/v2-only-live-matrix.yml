@@ -25,6 +25,7 @@ jobs:
         working-directory: backend
     env:
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
       ENVIRONMENT: staging
       DEBUG: "false"
       DOCS_ENABLED: "false"
