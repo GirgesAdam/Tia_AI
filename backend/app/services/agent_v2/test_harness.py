@@ -14,8 +14,8 @@ from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
-    PlanStep,
     PlannerContext,
+    PlanStep,
     TurnPlan,
     VerificationFacts,
     advance_step_after_verification,
@@ -23,7 +23,6 @@ from app.services.agent_v2.planner import (
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import ActiveTaskState
-
 
 DEFAULT_CATALOG: dict[str, object] = {
     "services": [
@@ -513,9 +512,7 @@ def execute_fixture_reads(step: PlanStep, env: V2FixtureEnvironment) -> ReadExec
             rows = [dict(row) for row in env.refund_quotes]
             if params.get("package_id"):
                 rows = [row for row in rows if row.get("package_id") == params["package_id"]]
-            results.append(
-                ReadResult(kind=request.kind, ok=True, payload={"quotes": rows})
-            )
+            results.append(ReadResult(kind=request.kind, ok=True, payload={"quotes": rows}))
         else:
             raise ValueError(f"Unsupported V2 fixture read kind: {request.kind}")
 
