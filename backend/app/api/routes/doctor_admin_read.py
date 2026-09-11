@@ -36,11 +36,8 @@ class DoctorAdminListItem(BaseModel):
     id: UUID
     staff_id: UUID
     name: str
-    first_name: str
-    last_name: str
     specialization: str | None
     phone: str | None
-    email: str | None
     booking_enabled: bool
     is_active: bool
     services: list[DoctorAdminNamedLink]
@@ -108,12 +105,8 @@ def list_doctors_for_admin(
     for assignment in assignments:
         primary_branch_by_doctor.setdefault(assignment.doctor_id, assignment.branch_id)
 
-    selected_pairs = [
-        (doctor_id, branch_id)
-        for doctor_id, branch_id in primary_branch_by_doctor.items()
-    ]
     hour_rows: list[DoctorWorkingHour] = []
-    if selected_pairs:
+    if primary_branch_by_doctor:
         candidate_hours = list(
             db.scalars(
                 select(DoctorWorkingHour)
@@ -154,12 +147,9 @@ def list_doctors_for_admin(
         DoctorAdminListItem(
             id=doctor.id,
             staff_id=doctor.staff_id,
-            name=f"{staff.first_name} {staff.last_name}".strip() or "دكتور",
-            first_name=staff.first_name,
-            last_name=staff.last_name,
+            name=f"{staff.first_name} {staff.last_name}".strip(),
             specialization=doctor.specialization,
             phone=staff.phone,
-            email=staff.email,
             booking_enabled=doctor.booking_enabled,
             is_active=doctor.is_active,
             services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
