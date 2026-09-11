@@ -4,7 +4,7 @@ from app.agents.capability_policy import (
     CAPABILITY_TOOL_POLICY,
     WRITE_TOOL_CAPABILITY,
 )
-from app.agents.semantic_router import SemanticCapabilityDecision
+from app.agents.turn_models import SemanticCapabilityDecision
 
 
 def test_customer_email_capability_is_not_exposed() -> None:
