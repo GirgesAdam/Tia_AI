@@ -1,4 +1,6 @@
-from contextlib import asynccontextmanager
+import asyncio
+import os
+from contextlib import asynccontextmanager, suppress
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -8,14 +10,31 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.database.session import engine
+from app.runtime.automation_scheduler import run_forever as run_automation_scheduler
 
 configure_logging()
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    engine.dispose()
+    scheduler_task: asyncio.Task[None] | None = None
+    if _env_flag("AUTOMATION_SCHEDULER_ENABLED"):
+        scheduler_task = asyncio.create_task(
+            run_automation_scheduler(),
+            name="tia-automation-scheduler",
+        )
+    try:
+        yield
+    finally:
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
+        engine.dispose()
 
 
 docs_url = "/docs" if settings.docs_enabled else None

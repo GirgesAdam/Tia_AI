@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -192,11 +193,7 @@ def run_once() -> None:
             logger.exception("Automation scheduler tick failed for workspace %s", workspace_id)
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+async def run_forever() -> None:
     interval_seconds = _int_env(
         "AUTOMATION_TICK_INTERVAL_SECONDS",
         DEFAULT_INTERVAL_SECONDS,
@@ -207,9 +204,17 @@ def main() -> None:
 
     while True:
         started = time.monotonic()
-        run_once()
+        await asyncio.to_thread(run_once)
         elapsed = time.monotonic() - started
-        time.sleep(max(1.0, interval_seconds - elapsed))
+        await asyncio.sleep(max(1.0, interval_seconds - elapsed))
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    asyncio.run(run_forever())
 
 
 if __name__ == "__main__":
