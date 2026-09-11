@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.agents.capability_policy import resolve_capability_policy
-from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
+from app.agents.turn_models import SemanticCapabilityDecision, SemanticEntityHints
 from app.services import agent_chat
 
 
@@ -100,7 +100,6 @@ def test_booking_prefetch_uses_high_level_read_and_never_executes_write(monkeypa
         )
     ]
     assert all(tool_name != "book_appointment" for tool_name, _ in calls)
-
 
 
 def test_next_availability_prefetch_starts_after_rejected_date(monkeypatch) -> None:
