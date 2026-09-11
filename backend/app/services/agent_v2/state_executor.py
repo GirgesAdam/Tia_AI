@@ -10,8 +10,6 @@ from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingTaskState,
     CustomerConstraints,
-    DerivedBookingState,
-    DerivedRescheduleState,
     OptionChoice,
     RescheduleTarget,
     RescheduleTaskState,
@@ -343,14 +341,6 @@ def _attach_availability_snapshot(
         created_at=now,
         expires_at=now + _OPTION_TTL,
     )
-    if updated.task_type == "booking":
-        return updated.model_copy(
-            update={
-                "derived": updated.derived.model_copy(
-                    update={"availability_snapshot_id": snapshot_id}
-                )
-            }
-        )
     return updated.model_copy(
         update={
             "derived": updated.derived.model_copy(
@@ -365,14 +355,11 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
         return state
     selected_ref = step.facts.get("selected_option_ref")
     status = "ready" if step.disposition == "write_ready" else state.status
-    if state.task_type == "booking":
-        derived = state.derived.model_copy(
-            update={"selected_slot_ref": str(selected_ref) if selected_ref else state.derived.selected_slot_ref}
-        )
-    else:
-        derived = state.derived.model_copy(
-            update={"selected_slot_ref": str(selected_ref) if selected_ref else state.derived.selected_slot_ref}
-        )
+    derived = state.derived.model_copy(
+        update={
+            "selected_slot_ref": str(selected_ref) if selected_ref else state.derived.selected_slot_ref
+        }
+    )
     return state.model_copy(update={"status": status, "derived": derived})
 
 
