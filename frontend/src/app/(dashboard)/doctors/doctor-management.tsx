@@ -9,7 +9,6 @@ import type { KnowledgeHour, KnowledgeService } from "@/lib/agent-knowledge-type
 
 import {
   createDoctorAction,
-  initialDoctorAdminState,
   removeDoctorAction,
   type DoctorAdminState,
   updateDoctorAction,
@@ -27,6 +26,8 @@ export type DoctorAdminItem = {
   services: Array<{ id: string; name: string }>;
   working_hours: KnowledgeHour[];
 };
+
+const initialDoctorAdminState: DoctorAdminState = { notice: null, error: null, saved: null };
 
 const days = [
   { weekday: 5, label: "السبت" },
@@ -129,22 +130,32 @@ function ServiceChecklist({ services, selectedIds = [] }: { services: KnowledgeS
 }
 
 function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
+  const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(createDoctorAction, initialDoctorAdminState);
   return (
-    <details className="rounded-2xl border border-teal-200 bg-teal-50/40 p-4">
-      <summary className="flex cursor-pointer items-center gap-2 font-black text-teal-950"><UserPlus size={17} /> إضافة دكتور</summary>
-      <form action={action} className="mt-5 space-y-5">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
-          <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
-          <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
-        </div>
-        <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div><ServiceChecklist services={services} /></div>
-        <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
-        <ActionState state={state} />
-        <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
-      </form>
-    </details>
+    <div className="rounded-2xl border border-teal-200 bg-teal-50/40 p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full cursor-pointer items-center gap-2 text-start font-black text-teal-950"
+        aria-expanded={open}
+      >
+        <UserPlus size={17} /> إضافة دكتور
+      </button>
+      {open && (
+        <form action={action} className="mt-5 space-y-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
+            <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
+            <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
+          </div>
+          <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div><ServiceChecklist services={services} /></div>
+          <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
+          <ActionState state={state} />
+          <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
+        </form>
+      )}
+    </div>
   );
 }
 

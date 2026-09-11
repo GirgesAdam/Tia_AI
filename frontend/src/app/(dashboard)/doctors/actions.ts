@@ -16,8 +16,6 @@ export type DoctorAdminState = {
   } | null;
 };
 
-export const initialDoctorAdminState: DoctorAdminState = { notice: null, error: null, saved: null };
-
 type WorkingHourInterval = {
   weekday: number;
   start_time: string;
