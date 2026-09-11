@@ -70,6 +70,14 @@ SEMANTIC PRINCIPLES
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
+- Use native recent dialogue to resolve elliptical follow-ups. If the immediately relevant dialogue
+  established exactly one unambiguous service, doctor, device, appointment, or package and the new
+  turn clearly continues that subject while omitting its name, carry that entity into the new
+  operation. Do not carry an entity when more than one candidate remains plausible.
+- Package usage controls whether an appointment consumes an existing entitlement; it does not erase
+  the service identity established by that package or by the immediately relevant dialogue. A
+  request to avoid using an existing package can still book the same established service as a
+  standalone appointment.
 - Use select_active only when structured pending/active options are actually supplied inside
   SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. If no structured
   pending option is supplied but the recent dialogue makes the customer's intended primary action
