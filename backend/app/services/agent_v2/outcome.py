@@ -42,6 +42,18 @@ ResponseGoal = Literal[
     "social_ack",
 ]
 
+_COMPLETED_RESPONSE_GOALS = frozenset(
+    {
+        "booking_completed",
+        "reschedule_completed",
+        "cancellation_completed",
+        "appointment_confirmed",
+        "package_purchased",
+        "follow_up_created",
+        "marketing_updated",
+    }
+)
+
 
 class StrictOutcomeModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -77,4 +89,8 @@ class TurnOutcome(StrictOutcomeModel):
             raise ValueError("choice response goals require verified choices.")
         if self.status == "handoff" and self.response_goal != "handoff":
             raise ValueError("handoff status requires handoff response goal.")
+        if self.status == "completed" and self.response_goal not in _COMPLETED_RESPONSE_GOALS:
+            raise ValueError("completed outcomes require a terminal write response goal.")
+        if self.status != "completed" and self.response_goal in _COMPLETED_RESPONSE_GOALS:
+            raise ValueError("terminal write response goals require completed status.")
         return self
