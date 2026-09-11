@@ -273,7 +273,12 @@ def _appointment_matches_date(
     return row.start_at.astimezone(tz).date() in set(dates)
 
 
-def _read_service_catalog(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
+def _read_service_catalog(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+    *,
+    include_explanation: bool = False,
+) -> ReadResult:
     service_id = request.parameters.get("service_id")
     row = _catalog_row(_catalog(context), "services", service_id) if service_id else None
     if row is None:
@@ -285,13 +290,12 @@ def _read_service_catalog(request: ReadRequest, context: ReadExecutionContext) -
         )
 
     service = dict(row)
-    # Service.description is legacy free-form prose and is not a customer knowledge source.
-    # Keep the existing outcome contract stable by filling its explanatory field only from
-    # the single saved clinic knowledge text.
+    # Service.description is legacy free-form prose and is never a customer knowledge source.
     service.pop("description", None)
-    knowledge = _explanatory_knowledge(context)
-    if knowledge:
-        service["description"] = knowledge
+    if include_explanation:
+        knowledge = _explanatory_knowledge(context)
+        if knowledge:
+            service["description"] = knowledge
     return ReadResult(kind=request.kind, ok=True, payload={"service": service})
 
 
@@ -656,7 +660,13 @@ def execute_step_reads(step: PlanStep, context: ReadExecutionContext) -> ReadExe
 
     for request in step.reads:
         if request.kind == "service_catalog":
-            results.append(_read_service_catalog(request, context))
+            results.append(
+                _read_service_catalog(
+                    request,
+                    context,
+                    include_explanation=step.operation_type == "service_info",
+                )
+            )
         elif request.kind == "clinic_info":
             results.append(_read_clinic_info(request, context))
         elif request.kind == "doctors":
