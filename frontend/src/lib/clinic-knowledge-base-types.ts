@@ -23,3 +23,7 @@ export type ClinicKnowledgeEntryInput = Omit<
   ClinicKnowledgeEntry,
   "id" | "service_name" | "device_name" | "created_at" | "updated_at"
 >;
+
+export type ClinicKnowledgeText = {
+  content: string;
+};
