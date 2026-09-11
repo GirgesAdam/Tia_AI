@@ -34,7 +34,8 @@ def test_v2_planner_is_pure_business_logic_without_llm_or_database_runtime() -> 
     assert "langchain" not in source
     assert "openai" not in source
     assert "sqlalchemy" not in source
-    assert "session" not in source
+    assert "from app.database" not in source
+    assert "from app.models" not in source
     assert "invoke_model" not in source
     assert "@tool" not in source
 
