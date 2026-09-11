@@ -154,6 +154,10 @@ def _doctor_operational_branch(
             is_active=True,
         )
     )
+    # SessionLocal deliberately uses autoflush=False. Persist this assignment now
+    # so a second lookup in the same transaction sees it instead of creating a
+    # duplicate (workspace, doctor, branch) row at commit time.
+    db.flush()
     return branch
 
 
