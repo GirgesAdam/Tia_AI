@@ -64,13 +64,39 @@ def list_knowledge_entries(db: Session, *, workspace_id: UUID, active_only: bool
     return [_read(entry, service_name) for entry, service_name in rows]
 
 
+def read_runtime_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
+    """Return the only explanatory knowledge source allowed in customer replies.
+
+    Legacy service/device-scoped rows remain readable by the setup migration UI so no
+    historical admin text is destroyed, but customer runtime must never consume them.
+    A saved "معلومات Tia" field is represented by one active clinic-wide row with the
+    canonical title below.
+    """
+    entry = db.scalar(
+        select(ClinicKnowledgeEntry)
+        .where(
+            ClinicKnowledgeEntry.workspace_id == workspace_id,
+            ClinicKnowledgeEntry.scope_type == "clinic",
+            ClinicKnowledgeEntry.title == SINGLE_KNOWLEDGE_TITLE,
+            ClinicKnowledgeEntry.is_active.is_(True),
+        )
+        .order_by(ClinicKnowledgeEntry.updated_at.desc(), ClinicKnowledgeEntry.created_at.desc())
+        .limit(1)
+    )
+    if entry is None:
+        return ""
+    return entry.content.strip()[:6000]
+
+
 def read_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
-    """Expose the legacy structured entries as one editable text field during migration."""
+    """Return the single field, or legacy text only as a one-time setup migration preview."""
+    runtime_text = read_runtime_knowledge_text(db, workspace_id=workspace_id)
+    if runtime_text:
+        return runtime_text
+
     entries = list_knowledge_entries(db, workspace_id=workspace_id)
     if not entries:
         return ""
-    if len(entries) == 1 and entries[0].title == SINGLE_KNOWLEDGE_TITLE:
-        return entries[0].content
 
     blocks: list[str] = []
     for entry in entries:
@@ -141,51 +167,28 @@ def relevant_knowledge_context(
     include_clinic: bool = False,
     limit: int = 8,
 ) -> dict[str, object] | None:
-    """Return only grounded explanatory entries relevant to the current turn."""
-    clauses = []
-    if include_clinic or service_id is not None or device_key:
-        clauses.append(ClinicKnowledgeEntry.scope_type == "clinic")
-    if service_id is not None:
-        clauses.append(
-            (ClinicKnowledgeEntry.scope_type == "service")
-            & (ClinicKnowledgeEntry.service_id == service_id)
-        )
-    if device_key:
-        clauses.append(
-            (ClinicKnowledgeEntry.scope_type == "laser_device")
-            & (ClinicKnowledgeEntry.device_key == device_key)
-        )
-    if not clauses:
-        return None
-    from sqlalchemy import or_
+    """Return the one clinic-authored explanatory text used by customer-facing AI.
 
-    entries = list(
-        db.scalars(
-            select(ClinicKnowledgeEntry)
-            .where(
-                ClinicKnowledgeEntry.workspace_id == workspace_id,
-                ClinicKnowledgeEntry.is_active.is_(True),
-                or_(*clauses),
-            )
-            .order_by(ClinicKnowledgeEntry.sort_order, ClinicKnowledgeEntry.created_at)
-            .limit(max(1, min(limit, 8)))
-        )
-    )
-    if not entries:
+    service_id/device_key/include_clinic/limit are retained only for call-site
+    compatibility with the V1 path. They no longer select alternate knowledge
+    sources. Operational facts still come from canonical clinic tables/adapters.
+    """
+    _ = (service_id, device_key, include_clinic, limit)
+    content = read_runtime_knowledge_text(db, workspace_id=workspace_id)
+    if not content:
         return None
     return {
         "ok": True,
-        "source": "curated_clinic_knowledge",
+        "source": "clinic_knowledge_text",
         "authority": "explanatory_only",
         "entries": [
             {
-                "scope_type": item.scope_type,
-                "service_id": str(item.service_id) if item.service_id else None,
-                "device_key": item.device_key,
-                "title": item.title,
-                "content": item.content[:6000] if item.title == SINGLE_KNOWLEDGE_TITLE else item.content[:1200],
+                "scope_type": "clinic",
+                "service_id": None,
+                "device_key": None,
+                "title": SINGLE_KNOWLEDGE_TITLE,
+                "content": content,
             }
-            for item in entries
         ],
         "rule": "Never override canonical price, duration, availability, payment, package, or booking-policy data with this knowledge.",
     }
