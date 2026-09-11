@@ -425,6 +425,19 @@ def _result_requires_staff(bundle: ReadExecutionBundle | None) -> bool:
     return any(result.error_code == "refund_quote_requires_staff" for result in bundle.results)
 
 
+def _refund_quote_choice_count(bundle: ReadExecutionBundle | None) -> int:
+    if bundle is None:
+        return 0
+    for result in bundle.results:
+        if result.kind != "package_refund_quote":
+            continue
+        if result.payload.get("needs_package_choice") is not True:
+            return 0
+        quotes = result.payload.get("quotes")
+        return len(quotes) if isinstance(quotes, list) and len(quotes) > 1 else 0
+    return 0
+
+
 def _completed_write_goal(step: PlanStep) -> ResponseGoal:
     if step.write_intent is None:
         raise OutcomeBuildError("Completed write outcome requires a write intent.")
@@ -534,6 +547,19 @@ def build_step_outcome(
             status="blocked",
             response_goal=step.response_goal or "package_refund_quote",
             facts={**base_facts, "requires_staff_review": True},
+            active_task_summary=active_summary,
+        )
+
+    refund_quote_choice_count = _refund_quote_choice_count(reads)
+    if step.operation_type == "refund_quote" and refund_quote_choice_count > 1:
+        return TurnOutcome(
+            status="needs_input",
+            response_goal="ask_package_choice",
+            facts={
+                "needed": "package",
+                "available_quote_count": refund_quote_choice_count,
+            },
+            choices=_choices_from_packages(reads),
             active_task_summary=active_summary,
         )
 
