@@ -77,11 +77,12 @@ def _catalog_cache_put(
 
 
 def _annotate_catalog_relationships(catalog: dict[str, Any]) -> dict[str, Any]:
-    """Expose canonical doctor compatibility next to service rows for grounding.
+    """Expose only canonical operational facts and entity relationships for grounding.
 
     Adapters already provide doctor -> service/branch IDs. Mirroring the service
-    relationship makes cross-entity consistency explicit to the semantic model
-    without inspecting customer text or duplicating clinic business rules.
+    relationship makes cross-entity consistency explicit to the semantic model.
+    Free-form service descriptions are deliberately removed here so every agent
+    path uses the saved clinic knowledge text as the sole explanatory prose source.
     """
     service_rows = catalog.get("services")
     doctor_rows = catalog.get("doctors")
@@ -110,7 +111,10 @@ def _annotate_catalog_relationships(catalog: dict[str, Any]) -> dict[str, Any]:
                 doctor_ids_by_service[service_id].add(doctor_id)
 
     for service in service_rows:
-        if not isinstance(service, dict) or not service.get("id"):
+        if not isinstance(service, dict):
+            continue
+        service.pop("description", None)
+        if not service.get("id"):
             continue
         service_id = str(service["id"])
         service["doctor_ids"] = sorted(doctor_ids_by_service.get(service_id, set()))
