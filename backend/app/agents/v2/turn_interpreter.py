@@ -82,6 +82,9 @@ SEMANTIC PRINCIPLES
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
   whether an appointment should consume an existing package, avoid an existing package, or leaves
   that question unspecified.
+- clinic_info covers clinic-wide informational/explanatory questions, including policies, general
+  service guidance, and comparisons between clinic devices when the question is not about one
+  specific service. service_info is for information about one specific service.
 - customer_history covers the customer's own prior visits/services/payment facts. A discrepancy or
   contested payment is additionally payment_dispute.
 - Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical
@@ -100,10 +103,12 @@ SEMANTIC PRINCIPLES
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
 - requested_service_details describes only service facts the customer explicitly asked for in that
-  operation: price, duration, description, and/or devices. Do not add extra details merely because
-  they are available in the catalog. A pricing operation semantically requests price. A generic
-  service-information question requests description unless the customer specifically asks for a
-  narrower detail. Leave requested_service_details empty on unrelated operations.
+  operation: price, duration, description, and/or devices. Here description means clinic-authored
+  explanatory guidance from the saved "معلومات Tia" field, not a service-table description. Do not
+  add extra details merely because they are available. A pricing operation semantically requests
+  price. A generic service-information question requests description unless the customer asks for
+  a narrower detail. A request to explain or compare devices for a specific service requests both
+  devices and description. Leave requested_service_details empty on unrelated operations.
 
 DATE/TIME REPRESENTATION
 - exact date: mode=exact with start_date.
