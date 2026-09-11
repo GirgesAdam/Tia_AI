@@ -89,14 +89,26 @@ def read_runtime_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
 
 
 def read_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
-    """Return the single field, or legacy text only as a one-time setup migration preview."""
-    runtime_text = read_runtime_knowledge_text(db, workspace_id=workspace_id)
-    if runtime_text:
-        return runtime_text
+    """Return the one setup field, with legacy rows shown only as a migration preview.
 
+    The setup page already needs the list of entries to render old installations, so it
+    must not perform a second runtime query. Once the canonical single row exists it is
+    preferred; otherwise legacy rows are concatenated only so the admin can review and
+    save them once into the unified field.
+    """
     entries = list_knowledge_entries(db, workspace_id=workspace_id)
     if not entries:
         return ""
+
+    canonical = [
+        entry
+        for entry in entries
+        if entry.title == SINGLE_KNOWLEDGE_TITLE
+        and getattr(entry, "scope_type", "clinic") == "clinic"
+        and bool(getattr(entry, "is_active", True))
+    ]
+    if canonical:
+        return canonical[-1].content.strip()[:6000]
 
     blocks: list[str] = []
     for entry in entries:
