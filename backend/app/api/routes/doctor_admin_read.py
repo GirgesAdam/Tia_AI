@@ -36,6 +36,9 @@ class DoctorAdminListItem(BaseModel):
     id: UUID
     staff_id: UUID
     name: str
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
     specialization: str | None
     phone: str | None
     booking_enabled: bool
@@ -148,6 +151,9 @@ def list_doctors_for_admin(
             id=doctor.id,
             staff_id=doctor.staff_id,
             name=f"{staff.first_name} {staff.last_name}".strip(),
+            first_name=staff.first_name,
+            last_name=staff.last_name,
+            email=None,
             specialization=doctor.specialization,
             phone=staff.phone,
             booking_enabled=doctor.booking_enabled,

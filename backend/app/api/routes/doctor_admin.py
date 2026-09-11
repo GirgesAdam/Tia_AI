@@ -29,6 +29,9 @@ router = APIRouter()
 
 class DoctorAdminCreate(BaseModel):
     name: str | None = Field(default=None, max_length=120)
+    first_name: str | None = Field(default=None, max_length=120)
+    last_name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
     service_ids: list[UUID] = Field(default_factory=list, max_length=200)
@@ -38,6 +41,9 @@ class DoctorAdminCreate(BaseModel):
 
 class DoctorAdminUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=120)
+    first_name: str | None = Field(default=None, max_length=120)
+    last_name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
     service_ids: list[UUID] = Field(default_factory=list, max_length=200)
@@ -51,9 +57,16 @@ def _clean_optional(value: str | None) -> str | None:
     return cleaned or None
 
 
-def _stored_doctor_name(value: str | None) -> tuple[str, str]:
-    """Store the single user-facing doctor name without changing the shared staff schema."""
-    return ((value or "").strip(), "")
+def _stored_doctor_name(
+    *,
+    name: str | None,
+    first_name: str | None,
+    last_name: str | None,
+) -> tuple[str, str]:
+    """Accept the new single-name contract and the previous split-name form safely."""
+    if name is not None:
+        return (name.strip(), "")
+    return ((first_name or "").strip(), (last_name or "").strip())
 
 
 def _active_service_ids(
@@ -200,12 +213,17 @@ def create_doctor_from_admin(
         workspace_id=workspace.id,
         service_ids=payload.service_ids,
     )
-    first_name, last_name = _stored_doctor_name(payload.name)
+    first_name, last_name = _stored_doctor_name(
+        name=payload.name,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+    )
 
     staff = Staff(
         workspace_id=workspace.id,
         first_name=first_name,
         last_name=last_name,
+        email=None,
         phone=_clean_optional(payload.phone),
         job_title="Doctor",
     )
@@ -288,9 +306,14 @@ def update_doctor_from_admin(
         workspace_id=workspace_id,
         service_ids=payload.service_ids,
     )
-    first_name, last_name = _stored_doctor_name(payload.name)
+    first_name, last_name = _stored_doctor_name(
+        name=payload.name,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+    )
     staff.first_name = first_name
     staff.last_name = last_name
+    staff.email = None
     staff.phone = _clean_optional(payload.phone)
     doctor.specialization = _clean_optional(payload.specialization)
     doctor.booking_enabled = payload.booking_enabled

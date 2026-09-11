@@ -51,7 +51,7 @@ def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
     assert "doctor_admin_read_router" in router
 
 
-def test_doctor_admin_profile_has_no_required_user_fields_or_email() -> None:
+def test_doctor_admin_profile_has_no_required_user_fields_and_accepts_legacy_payloads() -> None:
     create = DoctorAdminCreate()
     update = DoctorAdminUpdate()
 
@@ -63,12 +63,21 @@ def test_doctor_admin_profile_has_no_required_user_fields_or_email() -> None:
     assert update.phone is None
     assert update.specialization is None
     assert update.service_ids == []
-    assert "email" not in DoctorAdminCreate.model_fields
-    assert "email" not in DoctorAdminUpdate.model_fields
-    assert "first_name" not in DoctorAdminCreate.model_fields
-    assert "last_name" not in DoctorAdminCreate.model_fields
-    assert _stored_doctor_name(None) == ("", "")
-    assert _stored_doctor_name("  د. سارة منصور  ") == ("د. سارة منصور", "")
+
+    assert create.first_name is None
+    assert create.last_name is None
+    assert create.email is None
+    assert update.first_name is None
+    assert update.last_name is None
+    assert update.email is None
+
+    assert _stored_doctor_name(name=None, first_name=None, last_name=None) == ("", "")
+    assert _stored_doctor_name(
+        name="  د. سارة منصور  ", first_name="legacy", last_name="ignored"
+    ) == ("د. سارة منصور", "")
+    assert _stored_doctor_name(
+        name=None, first_name=" أحمد ", last_name=" محمود "
+    ) == ("أحمد", "محمود")
 
 
 def test_doctor_admin_ui_uses_one_optional_name_and_keeps_editor_mounted_after_save() -> None:
@@ -91,9 +100,14 @@ def test_doctor_admin_ui_uses_one_optional_name_and_keeps_editor_mounted_after_s
     assert 'revalidatePath("/doctors")' not in profile_action
     assert 'revalidatePath("/doctors")' not in schedule_action
     assert "refreshDoctorRelatedViews();" in profile_action
-    assert "email:" not in read_route
-    assert "first_name:" not in read_route
-    assert "last_name:" not in read_route
+
+    # Keep the previous deployed frontend safe until the intentionally manual Vercel rollout.
+    assert "first_name: str | None" in read_route
+    assert "last_name: str | None" in read_route
+    assert "email: str | None" in read_route
+    assert "first_name=staff.first_name" in read_route
+    assert "last_name=staff.last_name" in read_route
+    assert "email=None" in read_route
 
 
 def test_doctor_delete_is_soft_and_blocks_doctors_with_upcoming_visits() -> None:
