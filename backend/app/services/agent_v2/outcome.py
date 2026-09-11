@@ -53,6 +53,15 @@ _COMPLETED_RESPONSE_GOALS = frozenset(
         "marketing_updated",
     }
 )
+_COMPLETED_ACTION_BY_GOAL = {
+    "booking_completed": "booking",
+    "reschedule_completed": "reschedule",
+    "cancellation_completed": "cancel_appointment",
+    "appointment_confirmed": "confirm_appointment",
+    "package_purchased": "buy_package",
+    "follow_up_created": "follow_up",
+    "marketing_updated": "marketing_update",
+}
 
 
 class StrictOutcomeModel(BaseModel):
@@ -93,4 +102,10 @@ class TurnOutcome(StrictOutcomeModel):
             raise ValueError("completed outcomes require a terminal write response goal.")
         if self.status != "completed" and self.response_goal in _COMPLETED_RESPONSE_GOALS:
             raise ValueError("terminal write response goals require completed status.")
+        if self.status == "completed" and self.action_result.get("ok") is True:
+            self.action_result = {
+                **self.action_result,
+                "completed": True,
+                "action": _COMPLETED_ACTION_BY_GOAL[self.response_goal],
+            }
         return self
