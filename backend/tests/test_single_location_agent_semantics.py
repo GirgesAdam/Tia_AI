@@ -1,12 +1,12 @@
 from types import SimpleNamespace
 
-from app.agents.semantic_router import SemanticEntityHints
 from app.agents.turn_interpreter import (
     UnifiedTurnDecision,
     _normalize_single_location_decision,
     _option_summary,
     _semantic_catalog_for_single_location,
 )
+from app.agents.turn_models import SemanticEntityHints
 
 
 def _hints() -> SemanticEntityHints:
