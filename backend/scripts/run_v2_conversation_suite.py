@@ -43,6 +43,14 @@ class ConversationCase:
     turns: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TurnExpectation:
+    operations: tuple[str, ...]
+    statuses: tuple[str, ...]
+    simulated_writes: tuple[str, ...]
+    forbid_trailing_question: bool = False
+
+
 CONVERSATIONS = (
     ConversationCase(
         "شرح خدمة ثم السعر والمدة",
@@ -150,6 +158,21 @@ CONVERSATIONS = (
         ),
     ),
 )
+
+
+EXPECTED_TURNS: dict[tuple[int, int], TurnExpectation] = {
+    (2, 2): TurnExpectation(("availability",), ("answered",), ()),
+    (3, 2): TurnExpectation(("book",), ("completed",), ("booking",)),
+    (4, 1): TurnExpectation(("book",), ("needs_input",), ()),
+    (4, 2): TurnExpectation(("book",), ("completed",), ("booking",)),
+    (8, 2): TurnExpectation(("cancel_appointment",), ("handoff",), ()),
+    (10, 2): TurnExpectation(("book",), ("completed",), ("booking",)),
+    (11, 2): TurnExpectation(("book",), ("completed",), ("booking",)),
+    (12, 2): TurnExpectation(("buy_package",), ("completed",), ("buy_package",)),
+    (13, 1): TurnExpectation(("refund_quote",), ("answered",), (), True),
+    (13, 2): TurnExpectation(("human_support",), ("handoff",), ()),
+    (14, 2): TurnExpectation(("book",), ("completed",), ("booking",)),
+}
 
 
 def _test_environment() -> V2FixtureEnvironment:
@@ -325,6 +348,41 @@ def _compact_result(result: V2HarnessResult) -> dict[str, object]:
     }
 
 
+def _assert_expected_turn(
+    *,
+    conversation_index: int,
+    turn_index: int,
+    result: V2HarnessResult,
+) -> None:
+    expected = EXPECTED_TURNS.get((conversation_index, turn_index))
+    if expected is None:
+        return
+
+    operations = tuple(str(operation.type) for operation in result.understanding.operations)
+    statuses = tuple(str(outcome.status) for outcome in result.outcomes)
+    simulated_writes = tuple(
+        trace.simulated_write for trace in result.traces if trace.simulated_write is not None
+    )
+
+    assert operations == expected.operations, (
+        f"conversation {conversation_index} turn {turn_index}: "
+        f"operations {operations!r} != {expected.operations!r}"
+    )
+    assert statuses == expected.statuses, (
+        f"conversation {conversation_index} turn {turn_index}: "
+        f"statuses {statuses!r} != {expected.statuses!r}"
+    )
+    assert simulated_writes == expected.simulated_writes, (
+        f"conversation {conversation_index} turn {turn_index}: "
+        f"simulated writes {simulated_writes!r} != {expected.simulated_writes!r}"
+    )
+    if expected.forbid_trailing_question:
+        assert "?" not in result.reply and "؟" not in result.reply, (
+            f"conversation {conversation_index} turn {turn_index}: "
+            "completed informational reply unexpectedly appended a question"
+        )
+
+
 def main() -> None:
     print("TIA V2 — 15 NEW CONVERSATIONS / 30 TURNS")
     print("V1 is never called. Writes are simulated and never persisted.\n")
@@ -341,6 +399,11 @@ def main() -> None:
         for turn_index, customer_text in enumerate(case.turns, start=1):
             turn_history = [*history, HumanMessage(content=customer_text)]
             result = _run_turn(history=turn_history, env=env)
+            _assert_expected_turn(
+                conversation_index=index,
+                turn_index=turn_index,
+                result=result,
+            )
             meta = _compact_result(result)
             print(f"\nTURN {turn_index}")
             print(f"CUSTOMER: {customer_text}")
