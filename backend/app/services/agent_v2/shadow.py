@@ -25,7 +25,6 @@ from app.services.agent_v2.planner import (
     PlanStep,
     TurnPlan,
     VerificationFacts,
-    advance_step_after_verification,
     plan_turn,
 )
 from app.services.agent_v2.read_executor import (
@@ -34,6 +33,7 @@ from app.services.agent_v2.read_executor import (
     execute_step_reads,
 )
 from app.services.agent_v2.state import ActiveTaskState
+from app.services.agent_v2.write_policy import advance_step_with_write_policies
 from app.services.patient_packages import list_patient_packages
 
 
@@ -180,11 +180,7 @@ def _execute_shadow_step(
     read_context: ReadExecutionContext,
 ) -> tuple[ShadowStepTrace, TurnOutcome | None]:
     bundle = execute_step_reads(step, read_context) if step.reads else ReadExecutionBundle()
-    advanced = (
-        advance_step_after_verification(step, bundle.verification)
-        if step.write_intent is not None and step.reads
-        else step
-    )
+    advanced = advance_step_with_write_policies(step, bundle)
 
     if advanced.disposition == "write_ready":
         return (
