@@ -108,6 +108,9 @@ def build_semantic_context(
 
     The model never receives database UUIDs/IDs from this builder. Entity identity is
     expressed as turn-local references (S1, D1, V1, A1, P1), then resolved by Python.
+    Free-form clinic/service explanation is deliberately excluded here; the semantic
+    interpreter only needs names/relationships. Customer-facing explanation comes
+    from the single saved "معلومات Tia" knowledge source after planning.
     """
 
     reference_map: dict[str, SemanticReferenceTarget] = {}
@@ -143,9 +146,6 @@ def build_semantic_context(
             for key in ("category", "requires_laser_device"):
                 if row.get(key) not in (None, ""):
                     item[key] = row.get(key)
-            description = str(row.get("description") or "").strip()
-            if description:
-                item["description"] = description[:240]
 
             raw_devices = row.get("laser_devices")
             if isinstance(raw_devices, list):
