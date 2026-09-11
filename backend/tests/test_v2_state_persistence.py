@@ -12,9 +12,9 @@ from app.services.agent_v2.state import (
     CustomerConstraints,
     OptionChoice,
     OptionSnapshot,
-    PersistedActiveTask if False else WriteAuthorization,
     RescheduleTarget,
     RescheduleTaskState,
+    WriteAuthorization,
 )
 
 
