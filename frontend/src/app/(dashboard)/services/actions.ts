@@ -20,7 +20,15 @@ export async function createService(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   if (!name) return;
   const requiresLaserDevice = formData.get("requires_laser_device") === "1";
-  await tiaRequest("/clinic/services", {
+  const basePriceMinor = requiresLaserDevice ? 0 : moneyMinor(formData.get("price"));
+  const primeLasePriceMinor = requiresLaserDevice
+    ? moneyMinor(formData.get("prime_lase_price"))
+    : null;
+  const candelaGentlePriceMinor = requiresLaserDevice
+    ? moneyMinor(formData.get("candela_gentle_price"))
+    : null;
+
+  const service = await tiaRequest<{ id: string }>("/clinic/services", {
     method: "POST",
     body: JSON.stringify({
       name,
@@ -30,12 +38,36 @@ export async function createService(formData: FormData) {
       duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
       buffer_before_minutes: 0,
       buffer_after_minutes: 0,
-      price_minor: requiresLaserDevice ? 0 : moneyMinor(formData.get("price")),
+      price_minor: requiresLaserDevice ? 0 : basePriceMinor,
       currency: "EGP",
       requires_medical_review: false,
       requires_laser_device: requiresLaserDevice,
     }),
   });
+
+  if (requiresLaserDevice) {
+    await Promise.all([
+      tiaRequest("/inventory/laser-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          service_id: service.id,
+          device_key: "prime_lase",
+          price_minor: primeLasePriceMinor,
+          currency: "EGP",
+        }),
+      }),
+      tiaRequest("/inventory/laser-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          service_id: service.id,
+          device_key: "candela_gentle",
+          price_minor: candelaGentlePriceMinor,
+          currency: "EGP",
+        }),
+      }),
+    ]);
+  }
+
   revalidatePath("/services");
   revalidatePath("/appointments");
 }
