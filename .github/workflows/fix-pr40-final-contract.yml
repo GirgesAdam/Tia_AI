@@ -1,0 +1,41 @@
+name: Fix PR40 Final Contract
+
+on:
+  push:
+    branches:
+      - test/realistic-system-journeys-v1
+    paths:
+      - .github/workflows/fix-pr40-final-contract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/realistic-system-journeys-v1
+          fetch-depth: 0
+      - name: Restore existing-edit contract phrase
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/agents/turn_interpreter.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'Existing appointment service/device edits are appointment_reschedule even if date/time stays the same.'
+          new = 'For existing appointment service/device edits, treat it as appointment_reschedule even when the requested date/time stays the same.'
+          if old not in text:
+              raise RuntimeError('existing-edit phrase anchor not found')
+          text = text.replace(old, new, 1)
+          assert 'treat it as appointment_reschedule even when the requested date/time stays' in text
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "Tia CI"
+          git config user.email "tia-ci@users.noreply.github.com"
+          git add backend/app/agents/turn_interpreter.py
+          git commit -m "Restore existing appointment edit contract phrase"
+          git push origin HEAD:test/realistic-system-journeys-v1
