@@ -69,7 +69,7 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
   return (
     <div className="space-y-5">
       <form action={formAction} className="space-y-4 rounded-2xl border border-[var(--border)] bg-white p-5">
-        <div className="flex items-start gap-3"><span className="grid size-10 place-items-center rounded-xl bg-teal-50 text-teal-700"><FileSpreadsheet size={19} /></span><div><b>ارفع ملف البيانات القديمة</b><p className="mt-1 text-xs leading-5 text-[var(--muted)]">تقدر ترفع ملف Excel واحد، أو ملفات CSV للعملاء والمواعيد والمدفوعات وتوزيع المدفوعات والباقات.</p></div></div>
+        <div className="flex items-start gap-3"><span className="grid size-10 place-items-center rounded-xl bg-teal-50 text-teal-700"><FileSpreadsheet size={19} /></span><div><b>ارفع ملف البيانات القديمة</b><p className="mt-1 text-xs leading-5 text-[var(--muted)]">تقدر ترفع ملف Excel واحد، أو ملفات CSV للعملاء والمواعيد والمدفوعات وتوزيع المدفوعات والباقات. كل الجداول التاريخية اختيارية.</p></div></div>
         <input type="file" name="files" accept=".xlsx,.csv" multiple required className="form-control" />
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="rounded-xl border p-3 text-sm"><input type="radio" name="mode" value="append" defaultChecked className="ml-2" /><b>إضافة للبيانات الحالية</b><div className="mt-1 text-xs text-[var(--muted)]">يحافظ على البيانات الموجودة ويضيف الحقائق الجديدة فقط.</div></label>
