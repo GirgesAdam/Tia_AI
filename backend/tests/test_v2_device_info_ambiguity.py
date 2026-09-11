@@ -1,7 +1,12 @@
 from datetime import UTC, datetime
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import (
+    EntityReference,
+    TiaTurnUnderstanding,
+    TurnEntities,
+    TurnOperation,
+)
 from app.services.agent_v2.planner import PlannerContext, plan_turn
 
 NOW = datetime(2026, 9, 11, 15, 0, tzinfo=UTC)
