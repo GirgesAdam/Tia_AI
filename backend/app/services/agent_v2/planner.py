@@ -379,7 +379,15 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
     if ambiguous.get("doctor"):
         return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
-    if ambiguous.get("device"):
+    if ambiguous.get("device") and operation.type in {
+        "doctor_info",
+        "availability",
+        "book",
+        "package_info",
+        "buy_package",
+        "refund_quote",
+        "reschedule",
+    }:
         return _clarify(index=index, operation=operation, field="device")
     if ambiguous.get("appointment"):
         return _clarify(
