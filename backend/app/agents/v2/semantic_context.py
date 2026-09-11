@@ -51,6 +51,53 @@ def _append_reference(
     return ref
 
 
+def _clinic_operating_hours(clinic_catalog: dict[str, object]) -> list[dict[str, object]]:
+    """Return one canonical single-location weekly schedule or fail closed.
+
+    The V2 conversational product is single-location. Native clinic catalogs expose
+    BranchWorkingHour rows as branches[].working_hours. If several branch rows are
+    present, hours are exposed only when their schedules are identical; otherwise
+    the semantic layer does not guess which location owns the customer's time.
+    """
+    raw_branches = clinic_catalog.get("branches")
+    if not isinstance(raw_branches, list):
+        return []
+
+    schedules: list[list[dict[str, object]]] = []
+    signatures: list[tuple[tuple[int, str, str], ...]] = []
+    for branch in raw_branches:
+        if not isinstance(branch, dict):
+            continue
+        raw_hours = branch.get("working_hours")
+        if not isinstance(raw_hours, list):
+            continue
+        normalized: list[dict[str, object]] = []
+        for row in raw_hours:
+            if not isinstance(row, dict):
+                continue
+            weekday = row.get("weekday")
+            start = str(row.get("start") or "")[:5]
+            end = str(row.get("end") or "")[:5]
+            if not isinstance(weekday, int) or not 0 <= weekday <= 6:
+                continue
+            if len(start) != 5 or len(end) != 5:
+                continue
+            normalized.append({"weekday": weekday, "start": start, "end": end})
+        normalized.sort(key=lambda item: (int(item["weekday"]), str(item["start"]), str(item["end"])))
+        signature = tuple(
+            (int(item["weekday"]), str(item["start"]), str(item["end"]))
+            for item in normalized
+        )
+        schedules.append(normalized)
+        signatures.append(signature)
+
+    if not schedules:
+        return []
+    if any(signature != signatures[0] for signature in signatures[1:]):
+        return []
+    return schedules[0]
+
+
 def build_semantic_context(
     clinic_catalog: dict[str, object],
     *,
@@ -236,6 +283,7 @@ def build_semantic_context(
         "doctors": model_doctors,
         "appointments": model_appointments,
         "packages": model_packages,
+        "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
         "active_task": dict(active_task or {}),
         "pending_choice": dict(pending_choice or {}),
     }

@@ -41,6 +41,7 @@ PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range"]
+TimeAmbiguity = Literal["none", "twelve_hour"]
 SelectionKind = Literal["index", "time", "ref"]
 
 
@@ -95,6 +96,8 @@ class TimeConstraint(StrictContractModel):
     mode: TimeMode
     start_time: str | None = None
     end_time: str | None = None
+    start_time_ambiguity: TimeAmbiguity = "none"
+    end_time_ambiguity: TimeAmbiguity = "none"
 
     @model_validator(mode="after")
     def validate_times(self) -> TimeConstraint:
@@ -108,6 +111,10 @@ class TimeConstraint(StrictContractModel):
                 raise ValueError("range time constraint requires start_time and end_time.")
             if parsed_end < parsed_start:
                 raise ValueError("time range end_time cannot be before start_time.")
+        if parsed_start is None and self.start_time_ambiguity != "none":
+            raise ValueError("start_time_ambiguity requires start_time.")
+        if parsed_end is None and self.end_time_ambiguity != "none":
+            raise ValueError("end_time_ambiguity requires end_time.")
         return self
 
 
@@ -116,6 +123,7 @@ class Selection(StrictContractModel):
     index: int | None = None
     time: str | None = None
     ref: str | None = None
+    time_ambiguity: TimeAmbiguity = "none"
 
     @model_validator(mode="after")
     def validate_selection(self) -> Selection:
@@ -124,6 +132,8 @@ class Selection(StrictContractModel):
                 raise ValueError("index selection requires a positive index.")
             if self.time is not None or self.ref is not None:
                 raise ValueError("index selection cannot also contain time/ref.")
+            if self.time_ambiguity != "none":
+                raise ValueError("index selection cannot contain time ambiguity.")
         elif self.kind == "time":
             if self.time is None:
                 raise ValueError("time selection requires time.")
@@ -135,6 +145,8 @@ class Selection(StrictContractModel):
                 raise ValueError("ref selection requires ref.")
             if self.index is not None or self.time is not None:
                 raise ValueError("ref selection cannot also contain index/time.")
+            if self.time_ambiguity != "none":
+                raise ValueError("ref selection cannot contain time ambiguity.")
         return self
 
 

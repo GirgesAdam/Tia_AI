@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.services.agent_v2.test_harness import run_v2_fixture_turn
+from app.services.agent_v2.test_harness import (
+    DEFAULT_CATALOG,
+    V2FixtureEnvironment,
+    run_v2_fixture_turn,
+)
 
 
 MATRIX_CASES = (
@@ -30,6 +35,22 @@ MATRIX_CASES = (
     "سعر الإبط وإيه المتاح بكرة واحجزلي لو فيه 8 مع د مريم",
     "شكرا",
 )
+
+
+def _test_environment() -> V2FixtureEnvironment:
+    """Mirror authoritative branch hours used by the production clinic catalog."""
+    catalog = deepcopy(DEFAULT_CATALOG)
+    catalog["branches"] = [
+        {
+            "id": "single-location",
+            "name": "Tia Test Clinic",
+            "working_hours": [
+                {"weekday": weekday, "start": "10:00", "end": "22:00"}
+                for weekday in range(7)
+            ],
+        }
+    ]
+    return V2FixtureEnvironment(catalog=catalog)
 
 
 def _json(value: object) -> str:
@@ -66,10 +87,12 @@ def _print_result(customer_text: str, result) -> None:
 
 
 def run_matrix(now: datetime) -> None:
+    env = _test_environment()
     for customer_text in MATRIX_CASES:
         result = run_v2_fixture_turn(
             history=[HumanMessage(content=customer_text)],
             local_now=now,
+            env=env,
         )
         _print_result(customer_text, result)
 
@@ -79,6 +102,7 @@ def run_interactive(now: datetime) -> None:
     print("Fixtures only. V1 is not called. Writes are simulated and never persisted.")
     print("Type /reset to clear dialogue history, /quit to exit.\n")
     history: list[BaseMessage] = []
+    env = _test_environment()
     while True:
         customer_text = input("You: ").strip()
         if not customer_text:
@@ -91,7 +115,7 @@ def run_interactive(now: datetime) -> None:
             continue
 
         turn_history = [*history, HumanMessage(content=customer_text)]
-        result = run_v2_fixture_turn(history=turn_history, local_now=now)
+        result = run_v2_fixture_turn(history=turn_history, local_now=now, env=env)
         print(f"Tia V2: {result.reply}")
         if any(trace.simulated_write for trace in result.traces):
             print("[SIMULATED WRITE — no database mutation]")

@@ -12,6 +12,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
+from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from app.core.config import settings
 
@@ -85,8 +86,17 @@ SEMANTIC PRINCIPLES
   contested payment is additionally payment_dispute.
 - Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical
   situations use urgent_medical. Explicit requests for a person use human_support.
-- Resolve clear relative dates/times against the clinic-local clock. If a date/time remains
-  semantically underspecified, leave it null rather than guessing.
+- Resolve clear relative dates against the clinic-local clock. If a date remains semantically
+  underspecified, leave it null rather than guessing.
+- For clock times, separate semantic meaning from AM/PM resolution. If the customer's wording itself
+  fixes the period (for example an explicit morning/evening meaning or an unambiguous 24-hour clock),
+  use time_ambiguity=none. If a clock value from 1 through 12 could still semantically mean either
+  AM or PM, use time_ambiguity=twelve_hour. Do not use clinic opening hours to hide that ambiguity;
+  deterministic Python resolves the two clock candidates against clinic_operating_hours after this
+  call. For an ambiguous clock, encode one 12-hour-form candidate such as 08:00 plus
+  time_ambiguity=twelve_hour rather than guessing 20:00.
+- Apply the same rule independently to start_time_ambiguity/end_time_ambiguity and to a time
+  selection's time_ambiguity. Fields unrelated to a time value use none.
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
 - requested_service_details describes only service facts the customer explicitly asked for in that
@@ -101,8 +111,8 @@ DATE/TIME REPRESENTATION
 - starting from a date: mode=from_date with start_date.
 - nearest available date: mode=next_available with no invented date.
 - exact time: mode=exact with start_time.
-- after/before constraints: mode=after or mode=before with start_time. "After/from 6" includes 6:00
-  itself; Python treats this lower bound as inclusive.
+- after/before constraints: mode=after or mode=before with start_time. After/from a time includes the
+  boundary itself; Python treats this lower bound as inclusive.
 - time range: mode=range with start_time/end_time.
 
 Clinic timezone: {timezone_name}
@@ -197,4 +207,5 @@ def interpret_customer_turn_v2(
         operation="v2-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    return ground_turn_references(invocation.value, semantic_context)
+    grounded = ground_turn_references(invocation.value, semantic_context)
+    return resolve_turn_times_by_clinic_hours(grounded, semantic_context)
