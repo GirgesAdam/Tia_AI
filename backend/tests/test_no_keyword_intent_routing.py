@@ -1,20 +1,27 @@
 from pathlib import Path
 
-FILES = (
-    "app/agents/semantic_router.py",
-    "app/agents/flow_interpreter.py",
+ACTIVE_ROUTING_FILES = (
+    "app/agents/turn_models.py",
     "app/agents/turn_interpreter.py",
     "app/agents/clinic_grounding.py",
     "app/agents/grounded_response.py",
     "app/agents/capability_policy.py",
+)
+LEGACY_ROUTING_FILES = (
+    "app/agents/semantic_router.py",
+    "app/agents/flow_interpreter.py",
     "app/agents/tool_selection.py",
 )
 
 
 def test_routing_architecture_has_no_legacy_lexical_rule_tables() -> None:
     backend = Path(__file__).resolve().parent.parent
-    source = "\n".join((backend / relative).read_text(encoding="utf-8") for relative in FILES)
+    for relative in LEGACY_ROUTING_FILES:
+        assert not (backend / relative).exists()
 
+    source = "\n".join(
+        (backend / relative).read_text(encoding="utf-8") for relative in ACTIVE_ROUTING_FILES
+    )
     forbidden = (
         "_MEDICAL",
         "_BOOKING",
