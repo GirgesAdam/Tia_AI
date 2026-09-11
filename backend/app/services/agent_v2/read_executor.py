@@ -22,6 +22,7 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.services.agent_v2.planner import PlanStep, ReadKind, ReadRequest, VerificationFacts
+from app.services.clinic_knowledge_base import relevant_knowledge_context
 from app.services.package_offers import list_package_offers
 from app.services.package_refund_quotes import list_patient_package_refund_quotes
 from app.services.patient_history import build_patient_history_context
@@ -87,6 +88,28 @@ def _catalog_row(
         if row_id is not None and str(row_id) == target:
             return row
     return None
+
+
+def _explanatory_knowledge(context: ReadExecutionContext) -> str | None:
+    """Read only the clinic-wide saved "معلومات Tia" customer knowledge text."""
+    payload = relevant_knowledge_context(
+        context.db,
+        workspace_id=context.workspace.id,
+        include_clinic=True,
+    )
+    if not isinstance(payload, dict):
+        return None
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return None
+    parts = [
+        str(entry.get("content") or "").strip()
+        for entry in entries
+        if isinstance(entry, dict) and str(entry.get("content") or "").strip()
+    ]
+    if not parts:
+        return None
+    return "\n\n".join(parts)[:6000]
 
 
 def _single_location_branch_id(context: ReadExecutionContext) -> str:
@@ -253,12 +276,23 @@ def _appointment_matches_date(
 def _read_service_catalog(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
     service_id = request.parameters.get("service_id")
     row = _catalog_row(_catalog(context), "services", service_id) if service_id else None
-    return ReadResult(
-        kind=request.kind,
-        ok=row is not None,
-        payload={"service": row} if row is not None else {},
-        error_code=None if row is not None else "service_not_found",
-    )
+    if row is None:
+        return ReadResult(
+            kind=request.kind,
+            ok=False,
+            payload={},
+            error_code="service_not_found",
+        )
+
+    service = dict(row)
+    # Service.description is legacy free-form prose and is not a customer knowledge source.
+    # Keep the existing outcome contract stable by filling its explanatory field only from
+    # the single saved clinic knowledge text.
+    service.pop("description", None)
+    knowledge = _explanatory_knowledge(context)
+    if knowledge:
+        service["description"] = knowledge
+    return ReadResult(kind=request.kind, ok=True, payload={"service": service})
 
 
 def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
@@ -286,15 +320,15 @@ def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> Re
                 if branch.get(key) not in (None, "")
             }
         )
-    return ReadResult(
-        kind=request.kind,
-        ok=True,
-        payload={
-            "clinic_name": context.workspace.name,
-            "timezone": context.workspace.timezone,
-            "locations": visible[:1],
-        },
-    )
+    payload: dict[str, object] = {
+        "clinic_name": context.workspace.name,
+        "timezone": context.workspace.timezone,
+        "locations": visible[:1],
+    }
+    knowledge = _explanatory_knowledge(context)
+    if knowledge:
+        payload["knowledge"] = knowledge
+    return ReadResult(kind=request.kind, ok=True, payload=payload)
 
 
 def _read_doctors(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
