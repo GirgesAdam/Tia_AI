@@ -11,9 +11,9 @@ from app.agents.model_provider import (
     build_realtime_composer_model,
     model_label,
 )
+from app.core.config import settings
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import customer_visible_outcome
-from app.core.config import settings
 
 
 def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
