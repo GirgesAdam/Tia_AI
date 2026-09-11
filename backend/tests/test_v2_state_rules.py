@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.agents.v2.turn_contract import DateConstraint, TimeConstraint
 from app.services.agent_v2.state import (
@@ -27,7 +27,7 @@ from app.services.agent_v2.state_rules import (
     preserve_task_for_side_read,
 )
 
-NOW = datetime(2026, 9, 11, 15, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 11, 15, 0, tzinfo=UTC)
 
 
 def _booking_state() -> BookingTaskState:
