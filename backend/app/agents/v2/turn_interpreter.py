@@ -14,6 +14,7 @@ from app.agents.structured_output import StructuredOutputError, invoke_typed_str
 from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
 from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
+from app.agents.v2.turn_normalization import dedupe_exact_operations
 from app.core.config import settings
 
 
@@ -64,7 +65,8 @@ SEMANTIC PRINCIPLES
   supplied entities remain genuinely possible, leave ref null and use candidate_refs. Never invent
   a reference.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
-  meaningful. Alternatives are not multiple operations.
+  meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
+  only once.
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
@@ -233,4 +235,5 @@ def interpret_customer_turn_v2(
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
     grounded = ground_turn_references(invocation.value, semantic_context)
-    return resolve_turn_times_by_clinic_hours(grounded, semantic_context)
+    resolved = resolve_turn_times_by_clinic_hours(grounded, semantic_context)
+    return dedupe_exact_operations(resolved)
