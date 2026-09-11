@@ -89,9 +89,11 @@ SEMANTIC PRINCIPLES
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
   whether an appointment should consume an existing package, avoid an existing package, or leaves
   that question unspecified.
-- A request to cancel, terminate, refund, or otherwise reverse a purchased package is not a package
-  write the agent may execute. Interpret that request as human_support. A question asking only how
-  much would be refundable remains refund_quote.
+- Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
+  If the customer is only asking what the refund amount or financial consequence would be if the
+  package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
+  customer is actually asking Tia to carry out cancellation/refund/termination now, interpret it as
+  human_support because the agent must not execute purchased-package cancellation.
 - clinic_info covers clinic-wide informational/explanatory questions, including policies, general
   service guidance, and comparisons between clinic devices when the question is not about one
   specific service. service_info is for information about one specific service.
