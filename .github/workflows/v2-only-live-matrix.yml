@@ -3,6 +3,7 @@ name: V2 Only Live Matrix
 on:
   push:
     branches:
+      - main
       - agent-core-v2-semantic-contract
     paths:
       - .github/workflows/v2-only-live-matrix.yml
@@ -10,6 +11,7 @@ on:
       - backend/app/services/agent_v2/**
       - backend/scripts/run_v2_only_chat.py
       - backend/scripts/run_v2_kb_smoke.py
+      - backend/scripts/run_v2_package_booking_review.py
   workflow_dispatch:
 
 permissions:
@@ -63,6 +65,17 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
           test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+      - name: Run focused V2 package booking review
+        env:
+          AGENT_V2_LIVE_ENABLED: "true"
+        run: python scripts/run_v2_package_booking_review.py --report artifacts/v2-package-booking-review.json
+      - name: Upload focused V2 package booking artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-package-booking-review
+          path: backend/artifacts/v2-package-booking-review.json
+          if-no-files-found: warn
       - name: Run V2-only matrix
         run: python scripts/run_v2_only_chat.py --matrix
       - name: Run V2 knowledge smoke
