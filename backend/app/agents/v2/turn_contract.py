@@ -70,7 +70,14 @@ class EntityReference(StrictContractModel):
 
 
 class DateConstraint(StrictContractModel):
-    mode: DateMode
+    mode: DateMode = Field(
+        description=(
+            "Use next_available when the customer asks for the nearest/soonest upcoming availability "
+            "without fixing a calendar date. A conditional fallback to another date applies only "
+            "when its condition is true; if recent_verified_read says availability_found=true, do "
+            "not activate a fallback that was conditioned on there being no availability."
+        )
+    )
     start_date: str | None = None
     end_date: str | None = None
 
@@ -195,7 +202,14 @@ class TurnOperation(StrictContractModel):
     execution_intent: ExecutionIntent = "execute"
     # True only when this operation semantically continues the supplied verified
     # one-turn read context. Python, not the model, owns the actual merge.
-    continues_previous: bool = False
+    continues_previous: bool = Field(
+        default=False,
+        description=(
+            "True only when this operation continues recent_verified_read. Respect its verified "
+            "result summary: a conditional fallback must not replace a successful prior read when "
+            "availability_found=true. Python owns inheritance of omitted scope fields."
+        ),
+    )
 
 
 class TiaTurnUnderstanding(StrictContractModel):
