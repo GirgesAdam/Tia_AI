@@ -23,7 +23,13 @@ from app.services.agent_v2.active_task_progress import (
     persist_initial_task_intent,
     plan_active_task_progress,
 )
-from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
+from app.services.agent_v2.compound_turn_policy import (
+    apply_compound_runtime_cursor,
+    completed_compound_booking_end,
+    compound_anchor_key,
+    normalize_compound_turn_plan,
+    resolve_compound_followup_after_reads,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -266,8 +272,15 @@ def orchestrate_v2_turn(
     pending_write: PendingV2Write | None = None
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
+    compound_cursors: dict[str, datetime] = {}
 
     for planned_step in plan.steps:
+        anchor_key = compound_anchor_key(planned_step)
+        planned_step = apply_compound_runtime_cursor(
+            planned_step,
+            previous_end_at=compound_cursors.get(anchor_key) if anchor_key is not None else None,
+            timezone_name=timezone_name,
+        )
         operation = _operation_for_step(understanding, planned_step)
         effective_step = adapt_matching_active_task_step(
             planned_step,
@@ -303,7 +316,11 @@ def orchestrate_v2_turn(
             if effective_step.reads
             else ReadExecutionBundle()
         )
-        advanced = _advance_after_reads(effective_step, reads)
+        compound_advanced, reads, compound_handled = resolve_compound_followup_after_reads(
+            effective_step,
+            reads,
+        )
+        advanced = compound_advanced if compound_handled else _advance_after_reads(effective_step, reads)
         transition = apply_step_state(
             current_task,
             step=advanced,
@@ -360,6 +377,10 @@ def orchestrate_v2_turn(
 
             if outcome.status == "completed":
                 write_kind = advanced.write_intent.kind if advanced.write_intent is not None else None
+                if write_kind == "booking" and anchor_key is not None:
+                    verified_end = completed_compound_booking_end(reads)
+                    if verified_end is not None:
+                        compound_cursors[anchor_key] = verified_end
                 if current_task is not None and current_task.task_type == write_kind:
                     if (
                         persisted is not None
