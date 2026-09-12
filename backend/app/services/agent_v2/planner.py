@@ -120,20 +120,22 @@ def _canonical_entity(
     *,
     kind: str,
     semantic_context: SemanticContext,
-) -> tuple[str | None, bool]:
+) -> tuple[str | None, bool, list[str]]:
     entity = getattr(operation.entities, field)
     if entity is None:
-        return None, False
+        return None, False, []
     if entity.ref:
         resolved = semantic_context.resolve(entity.ref, expected_kind=kind)
         if resolved is not None:
-            return resolved, False
-    candidates = [
-        semantic_context.resolve(ref, expected_kind=kind)
+            return resolved, False, []
+    grounded = [
+        item
         for ref in entity.candidate_refs
+        if (item := semantic_context.resolve(ref, expected_kind=kind)) is not None
     ]
-    grounded = [item for item in candidates if item is not None]
-    return None, bool(grounded)
+    if entity.candidate_mode == "set" and grounded:
+        return None, False, list(dict.fromkeys(grounded))
+    return None, bool(grounded), []
 
 
 def _base_parameters(
@@ -142,14 +144,14 @@ def _base_parameters(
 ) -> tuple[dict[str, object], dict[str, bool]]:
     values: dict[str, object] = {}
     ambiguous: dict[str, bool] = {}
-    for field, kind, output_key in (
-        ("service", "service", "service_id"),
-        ("doctor", "doctor", "doctor_id"),
-        ("device", "device", "device_key"),
-        ("appointment", "appointment", "appointment_id"),
-        ("package", "package", "package_id"),
+    for field, kind, output_key, set_key in (
+        ("service", "service", "service_id", "service_ids"),
+        ("doctor", "doctor", "doctor_id", "doctor_ids"),
+        ("device", "device", "device_key", "device_keys"),
+        ("appointment", "appointment", "appointment_id", "appointment_ids"),
+        ("package", "package", "package_id", "package_ids"),
     ):
-        value, is_ambiguous = _canonical_entity(
+        value, is_ambiguous, requested_set = _canonical_entity(
             operation,
             field,
             kind=kind,
@@ -157,6 +159,8 @@ def _base_parameters(
         )
         if value is not None:
             values[output_key] = value
+        if requested_set:
+            values[set_key] = requested_set
         ambiguous[field] = is_ambiguous
 
     if operation.entities.date is not None:
@@ -271,7 +275,8 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
     purpose = state.option_snapshot.purpose
     if purpose == "booking_slot":
         authorized = (
-            state.task_type == "booking"
+            operation.execution_intent == "execute"
+            and state.task_type == "booking"
             and state.write_authorization.authorized
             and state.write_authorization.operation == "booking"
         )
@@ -301,7 +306,8 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
 
     if purpose == "reschedule_slot":
         authorized = (
-            state.task_type == "reschedule"
+            operation.execution_intent == "execute"
+            and state.task_type == "reschedule"
             and state.write_authorization.authorized
             and state.write_authorization.operation == "reschedule"
         )
@@ -332,6 +338,69 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
             "selected_option": selected.model_dump(mode="json"),
         },
     )
+
+
+def _informational_write_read(
+    index: int,
+    operation: TurnOperation,
+    params: dict[str, object],
+) -> PlanStep | None:
+    """Fail closed to reads when the semantic action is mentioned without execution authority."""
+    if operation.execution_intent == "execute":
+        return None
+    if operation.type == "book":
+        if "service_id" not in params:
+            return _clarify(index=index, operation=operation, field="service")
+        if "date" in params:
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=[ReadRequest(kind="availability", parameters=params)],
+                response_goal="present_availability",
+                facts=params,
+            )
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="service_catalog", parameters={"service_id": params["service_id"]})],
+            response_goal="answer_service",
+            facts=params,
+        )
+    if operation.type in {"confirm_appointment", "cancel_appointment"}:
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="appointments", parameters=params)],
+            response_goal="answer_customer_history",
+            facts=params,
+        )
+    if operation.type == "reschedule":
+        reads = [ReadRequest(kind="appointments", parameters=params)]
+        if "date" in params and "service_id" in params:
+            reads.append(ReadRequest(kind="availability", parameters={**params, "reschedule": True}))
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=reads,
+            response_goal="present_availability" if len(reads) > 1 else "answer_customer_history",
+            facts=params,
+        )
+    if operation.type == "buy_package":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="package_offers", parameters=params)],
+            response_goal="package_information",
+            facts=params,
+        )
+    if operation.type in {"follow_up", "marketing_update"}:
+        return _clarify(index=index, operation=operation, field="intent")
+    return None
 
 
 def _plan_operation(index: int, operation: TurnOperation, context: PlannerContext) -> PlanStep:
@@ -374,6 +443,10 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
             state_action="update_active",
             facts=params,
         )
+
+    informational = _informational_write_read(index, operation, params)
+    if informational is not None:
+        return informational
 
     if ambiguous.get("service"):
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
@@ -443,6 +516,8 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         )
 
     if operation.type == "book":
+        if "doctor_ids" in params:
+            return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
         if "date" not in params:
@@ -479,6 +554,8 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         )
 
     if operation.type in {"confirm_appointment", "cancel_appointment"}:
+        if "appointment_ids" in params:
+            return _clarify(index=index, operation=operation, field="appointment", goal="ask_appointment_choice")
         kind: WriteKind = (
             "confirm_appointment" if operation.type == "confirm_appointment" else "cancel_appointment"
         )
@@ -496,6 +573,9 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         )
 
     if operation.type == "reschedule":
+        if "doctor_ids" in params or "appointment_ids" in params:
+            field: ClarificationField = "appointment" if "appointment_ids" in params else "doctor"
+            return _clarify(index=index, operation=operation, field=field)
         if "date" not in params:
             return _clarify(index=index, operation=operation, field="date")
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
