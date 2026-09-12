@@ -23,6 +23,7 @@ from app.services.agent_v2.active_task_progress import (
     persist_initial_task_intent,
     plan_active_task_progress,
 )
+from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -217,6 +218,7 @@ def orchestrate_v2_turn(
             now=local_now,
         ),
     )
+    plan = normalize_compound_turn_plan(plan, catalog=canonical_catalog)
 
     if plan.handoff_category is not None:
         outcome = build_handoff_outcome(plan)
