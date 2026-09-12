@@ -32,9 +32,8 @@ def _run_case(db: Session, workspace: Workspace):
     patient = base._new_patient(db, workspace, "seq-occupied-main")
     blocker_patient = base._new_patient(db, workspace, "seq-occupied-blocker")
 
-    # This fixture was already exercised by the package+other-service review and
-    # naturally uses different doctors/resources. We only reuse its verified slots;
-    # the package itself is irrelevant to this occupied-slot scenario.
+    # Reuse a fixture with different doctors/resources so the blocker only removes
+    # the naive second session; it must not invalidate the first service itself.
     first, second, _offer = seq._find_sequence_pair(db, workspace, package_position="second")
     if str(first["doctor_id"]) == str(second["doctor_id"]):
         raise RuntimeError("Occupied fixture unexpectedly uses the same doctor")
@@ -64,7 +63,7 @@ def _run_case(db: Session, workspace: Workspace):
     )
 
     adapter = get_clinic_adapter(db=db, workspace=workspace)
-    after_blocker = adapter.get_availability(
+    second_live = adapter.get_availability(
         AvailabilityRequest(
             branch_id=str(branch_id),
             service_id=str(second["service_id"]),
@@ -74,14 +73,6 @@ def _run_case(db: Session, workspace: Workspace):
             now=base.datetime.now(UTC),
         )
     )
-    next_slot = next(
-        (slot for slot in after_blocker.slots if slot.start_at > second["start_at"]),
-        None,
-    )
-    if next_slot is None:
-        raise RuntimeError("Occupied fixture has no later verified slot")
-
-    # Verify that seeding the blocker did not invalidate the first service itself.
     first_live = adapter.get_availability(
         AvailabilityRequest(
             branch_id=str(branch_id),
@@ -94,6 +85,21 @@ def _run_case(db: Session, workspace: Workspace):
     )
     if not any(slot.start_at == first["start_at"] for slot in first_live.slots):
         raise RuntimeError("Blocker unexpectedly invalidated the first session")
+    if any(slot.start_at == second["start_at"] for slot in second_live.slots):
+        raise RuntimeError("Blocker did not remove the naive second session")
+
+    second_by_start = {slot.start_at: slot for slot in second_live.slots}
+    joint_pair = next(
+        (
+            (first_slot, second_by_start[first_slot.end_at])
+            for first_slot in first_live.slots
+            if first_slot.start_at >= first["start_at"] and first_slot.end_at in second_by_start
+        ),
+        None,
+    )
+    if joint_pair is None:
+        raise RuntimeError("Occupied fixture has no later same-day joint window")
+    expected_first, expected_second = joint_pair
 
     anchor = seq._local_time(first)
     message = (
@@ -104,17 +110,19 @@ def _run_case(db: Session, workspace: Workspace):
         db,
         workspace,
         patient,
-        "second_compound_slot_occupied_shift_next",
+        "second_compound_slot_occupied_offer_joint_window",
         message,
     )
     result.db_checks += [
         f"blocker_appointment_id={blocker.id}",
         f"blocked_naive_second_start={second['start_at'].isoformat()}",
-        f"expected_next_verified_start={next_slot.start_at.isoformat()}",
+        f"expected_joint_first_start={expected_first.start_at.isoformat()}",
+        f"expected_joint_second_start={expected_second.start_at.isoformat()}",
         f"first_resource_doctor={first['doctor_id']}",
         f"second_resource_doctor={second['doctor_id']}",
         f"first_device={first_device}",
         f"second_device={second_device}",
+        "expected_target_appointment_count_after_turn=0",
     ]
     return result
 
