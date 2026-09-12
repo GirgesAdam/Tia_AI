@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
-from app.agents.v2.semantic_state_view import with_safe_task_context
+from app.agents.v2.semantic_state_view import with_safe_read_context, with_safe_task_context
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.integrations.clinic.base import ClinicAdapter
@@ -175,6 +175,7 @@ def orchestrate_v2_turn(
     adapter: ClinicAdapter | None = None,
     turn_id: str | None = None,
     write_executor: V2WriteExecutor | None = None,
+    recent_read_context: dict[str, Any] | None = None,
 ) -> V2OrchestratedTurn:
     """Run one stateful V2 turn with an optional verified-write executor.
 
@@ -197,6 +198,10 @@ def orchestrate_v2_turn(
     semantic_context = with_safe_task_context(
         semantic_context,
         active_task=_task_dict(initial_task),
+    )
+    semantic_context = with_safe_read_context(
+        semantic_context,
+        read_context=recent_read_context,
     )
     understanding = interpret_customer_turn_v2(
         history=history,
@@ -368,7 +373,6 @@ def orchestrate_v2_turn(
                     current_task = None
                 break
 
-            # Later writes are safe only when each previous write completed successfully.
             break
 
         outcome = build_step_outcome(
