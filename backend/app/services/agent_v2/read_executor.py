@@ -182,7 +182,7 @@ def _time_constraint(raw: object) -> tuple[str | None, time | None, time | None]
 
 def _slot_matches_time(slot: AvailabilitySlot, *, timezone_name: str, constraint: object) -> bool:
     mode, start, end = _time_constraint(constraint)
-    if mode is None:
+    if mode is None or mode == "nearest":
         return True
     tz = ZoneInfo(timezone_name)
     local_start = slot.start_at.astimezone(tz).timetz().replace(tzinfo=None)
@@ -196,6 +196,36 @@ def _slot_matches_time(slot: AvailabilitySlot, *, timezone_name: str, constraint
     if mode == "range":
         return start is not None and end is not None and local_start >= start and local_end <= end
     return False
+
+
+def _minutes_of_day(value: time) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _nearest_payloads(
+    slots: list[dict[str, object]],
+    *,
+    anchor: time | None,
+) -> list[dict[str, object]]:
+    if not slots:
+        return []
+    parsed = [(slot, datetime.fromisoformat(str(slot["start_local"]))) for slot in slots]
+    earliest_date = min(local.date() for _, local in parsed)
+    same_date = [(slot, local) for slot, local in parsed if local.date() == earliest_date]
+    if anchor is None:
+        earliest = min(local.time() for _, local in same_date)
+        return [slot for slot, local in same_date if local.time() == earliest]
+    anchor_minutes = _minutes_of_day(anchor)
+    distances = [
+        abs(_minutes_of_day(local.time()) - anchor_minutes)
+        for _, local in same_date
+    ]
+    minimum = min(distances)
+    return [
+        slot
+        for (slot, _local), distance in zip(same_date, distances, strict=True)
+        if distance == minimum
+    ]
 
 
 def _slot_payload(slot: AvailabilitySlot, *, timezone_name: str) -> dict[str, object]:
@@ -290,7 +320,6 @@ def _read_service_catalog(
         )
 
     service = dict(row)
-    # Service.description is legacy free-form prose and is never a customer knowledge source.
     service.pop("description", None)
     if include_explanation:
         knowledge = _explanatory_knowledge(context)
@@ -338,9 +367,18 @@ def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> Re
 def _read_doctors(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
     service_id = request.parameters.get("service_id")
     doctor_id = request.parameters.get("doctor_id")
+    raw_doctor_ids = request.parameters.get("doctor_ids")
+    doctor_ids = (
+        {str(item) for item in raw_doctor_ids}
+        if isinstance(raw_doctor_ids, list)
+        else set()
+    )
     filtered = []
     for row in _catalog_rows(_catalog(context), "doctors"):
-        if doctor_id is not None and str(row.get("id")) != str(doctor_id):
+        row_id = str(row.get("id"))
+        if doctor_id is not None and row_id != str(doctor_id):
+            continue
+        if doctor_ids and row_id not in doctor_ids:
             continue
         if service_id is not None:
             service_ids = row.get("service_ids")
@@ -372,6 +410,12 @@ def _read_availability(
 
     branch_id = str(params.get("branch_id") or _single_location_branch_id(context))
     doctor_id = str(params["doctor_id"]) if params.get("doctor_id") else None
+    raw_doctor_ids = params.get("doctor_ids")
+    requested_doctors = (
+        [str(item) for item in raw_doctor_ids]
+        if isinstance(raw_doctor_ids, list) and raw_doctor_ids
+        else ([doctor_id] if doctor_id is not None else [None])
+    )
     appointment_id = str(params["appointment_id"]) if params.get("appointment_id") else None
     device_key = str(params["device_key"]) if params.get("device_key") else None
     adapter = _adapter(context)
@@ -381,42 +425,60 @@ def _read_availability(
     checked_dates: list[str] = []
     service_meta: dict[str, object] = {}
     for booking_date in date_values:
-        availability = adapter.get_availability(
-            AvailabilityRequest(
-                branch_id=branch_id,
-                service_id=str(service_id),
-                booking_date=booking_date,
-                doctor_id=doctor_id,
-                exclude_appointment_id=appointment_id if params.get("reschedule") else None,
-                now=context.now,
-                laser_device_key=device_key,
-            )
-        )
         checked_dates.append(booking_date.isoformat())
-        service_meta = {
-            "service_id": availability.service_id,
-            "service_name": availability.service_name,
-            "service_duration_minutes": availability.service_duration_minutes,
-            "service_price_minor": availability.service_price_minor,
-            "service_currency": availability.service_currency,
-            "branch_id": availability.branch_id,
-            "branch_name": availability.branch_name,
-            "timezone": availability.timezone,
-        }
-        matches = [
-            slot
-            for slot in availability.slots
-            if _slot_matches_time(
-                slot,
-                timezone_name=availability.timezone,
-                constraint=params.get("time"),
+        date_matches: list[dict[str, object]] = []
+        for requested_doctor in requested_doctors:
+            availability = adapter.get_availability(
+                AvailabilityRequest(
+                    branch_id=branch_id,
+                    service_id=str(service_id),
+                    booking_date=booking_date,
+                    doctor_id=requested_doctor,
+                    exclude_appointment_id=appointment_id if params.get("reschedule") else None,
+                    now=context.now,
+                    laser_device_key=device_key,
+                )
             )
-        ]
-        slots.extend(_slot_payload(slot, timezone_name=availability.timezone) for slot in matches)
-        if matches and stop_on_first:
+            if not service_meta:
+                service_meta = {
+                    "service_id": availability.service_id,
+                    "service_name": availability.service_name,
+                    "service_duration_minutes": availability.service_duration_minutes,
+                    "service_price_minor": availability.service_price_minor,
+                    "service_currency": availability.service_currency,
+                    "branch_id": availability.branch_id,
+                    "branch_name": availability.branch_name,
+                    "timezone": availability.timezone,
+                }
+            matches = [
+                slot
+                for slot in availability.slots
+                if _slot_matches_time(
+                    slot,
+                    timezone_name=availability.timezone,
+                    constraint=params.get("time"),
+                )
+            ]
+            date_matches.extend(
+                _slot_payload(slot, timezone_name=availability.timezone) for slot in matches
+            )
+        # A set query can produce duplicates if an adapter ignores its doctor filter.
+        unique: dict[tuple[str, str, str], dict[str, object]] = {}
+        for slot in date_matches:
+            key = (
+                str(slot.get("doctor_id") or ""),
+                str(slot.get("start_at") or ""),
+                str(slot.get("laser_device_key") or ""),
+            )
+            unique[key] = slot
+        date_matches = list(unique.values())
+        slots.extend(date_matches)
+        if date_matches and stop_on_first:
             break
 
-    mode, _start, _end = _time_constraint(params.get("time"))
+    mode, start, _end = _time_constraint(params.get("time"))
+    if mode == "nearest":
+        slots = _nearest_payloads(slots, anchor=start)
     exact_count = len(slots) if mode == "exact" else None
     verified: dict[str, object] = {}
     if exact_count == 1:
