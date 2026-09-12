@@ -180,6 +180,10 @@ def execute_write_ready_step(
                     "appointment_id": str(appointment.id),
                     "status": appointment.status,
                 }
+                if package_resolution.package_used:
+                    result["package_used"] = True
+                    if package_resolution.package_name:
+                        result["package_name"] = package_resolution.package_name
             elif intent.kind == "confirm_appointment":
                 appointment = confirm_appointment_operation(
                     db,
