@@ -98,13 +98,30 @@ def _recent_verified_read_context(
     return dict(value) if isinstance(value, dict) else None
 
 
+def _availability_option_count_for_step(
+    turn: V2OrchestratedTurn,
+    *,
+    operation_index: int,
+) -> int | None:
+    """Read the verified availability count from the matching runtime outcome."""
+    for trace in reversed(turn.traces):
+        if trace.operation_index != operation_index or trace.outcome is None:
+            continue
+        availability = trace.outcome.facts.get("availability")
+        if not isinstance(availability, dict):
+            return None
+        value = availability.get("available_option_count")
+        return value if isinstance(value, int) and value >= 0 else None
+    return None
+
+
 def _verified_read_context_from_turn(
     db: Session,
     *,
     workspace: Workspace,
     turn: V2OrchestratedTurn,
 ) -> dict[str, Any] | None:
-    """Keep only the last read-only canonical scope; writes/tasks keep their own state."""
+    """Keep only the last read-only canonical scope plus a minimal verified result summary."""
     for step in reversed(turn.plan.steps):
         if step.disposition != "read" or step.write_intent is not None or not step.reads:
             continue
@@ -121,6 +138,13 @@ def _verified_read_context_from_turn(
             value = step.facts.get(key)
             if value not in (None, "", [], {}):
                 context[key] = value
+
+        option_count = _availability_option_count_for_step(
+            turn,
+            operation_index=step.operation_index,
+        )
+        if option_count is not None:
+            context["availability_option_count"] = option_count
 
         # A doctor-list read establishes a verified set even though the customer did
         # not enumerate every doctor. Recreate that exact set from canonical catalog
