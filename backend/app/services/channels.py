@@ -27,7 +27,7 @@ from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatResponse
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.schemas.crm import normalize_phone
-from app.services.agent_chat import run_agent_for_existing_inbound
+from app.services.agent_v2.live_chat import run_agent_for_existing_inbound
 from app.services.conversation_ownership import (
     DISPATCH_SEND_LEASE,
     OWNER_HUMAN,
