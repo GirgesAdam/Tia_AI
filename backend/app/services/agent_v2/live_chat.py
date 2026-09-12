@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -19,6 +20,8 @@ from app.services.agent_chat import (
     _history_from_db,
     _uuid_from_metadata,
     _workspace_clock,
+    run_agent_chat as run_agent_chat_v1,
+    run_agent_for_existing_inbound as run_agent_for_existing_inbound_v1,
 )
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
 from app.services.agent_v2.write_executor import execute_write_ready_step
@@ -218,6 +221,9 @@ def run_agent_chat(
     workspace: Workspace,
     payload: AgentChatRequest,
 ) -> AgentChatResponse:
+    if not settings.agent_v2_live_enabled:
+        return run_agent_chat_v1(db=db, workspace=workspace, payload=payload)
+
     now = datetime.now(UTC)
     run_id = uuid4()
     patient = _get_patient_v2(db, workspace_id=workspace.id, patient_id=payload.patient_id)
@@ -269,6 +275,16 @@ def run_agent_for_existing_inbound(
     inbound: Message,
     source: str = "channel_adapter",
 ) -> AgentChatResponse:
+    if not settings.agent_v2_live_enabled:
+        return run_agent_for_existing_inbound_v1(
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            conversation=conversation,
+            inbound=inbound,
+            source=source,
+        )
+
     if inbound.workspace_id != workspace.id:
         raise AgentChatError("Inbound message belongs to another workspace.")
     if inbound.conversation_id != conversation.id:
