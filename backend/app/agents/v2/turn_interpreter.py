@@ -82,6 +82,11 @@ SEMANTIC PRINCIPLES
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
+- Resolve the whole latest customer turn jointly before emitting operations. Cross-operation
+  references such as the same day, time, doctor, device, or visit may be defined by another
+  operation in the same turn even when the explicit value appears later in the sentence. Copy the
+  resolved semantic constraint onto every operation that refers to it; do not replace an unresolved
+  same-turn reference with the current date/time or another guessed value.
 - Package purchase and appointment creation are separate independently meaningful actions. If the
   customer asks to buy a package and book its first session in the same turn, emit buy_package plus
   a separate book operation for that session; the booking should use package_usage=use_existing when
