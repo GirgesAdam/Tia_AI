@@ -71,6 +71,11 @@ SEMANTIC PRINCIPLES
   candidate_refs, and candidate_mode=ambiguous. If the customer intentionally refers to several
   entities as a group to inspect or compare, use candidate_refs with candidate_mode=set. Never invent
   a reference.
+- A direct comparison between two or more supplied doctors, devices, services, packages, or other
+  entities is a set comparison, not an identity ambiguity. Keep the comparison informational and use
+  candidate_mode=set for the compared entity set. For an availability comparison with no explicit
+  date, use date mode=next_available so Python can verify which requested candidate is available
+  sooner. Never ask the customer to choose one candidate merely in order to compare them.
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
@@ -87,6 +92,11 @@ SEMANTIC PRINCIPLES
   operation in the same turn even when the explicit value appears later in the sentence. Copy the
   resolved semantic constraint onto every operation that refers to it; do not replace an unresolved
   same-turn reference with the current date/time or another guessed value.
+- A same-turn relative reference MUST NOT remain unresolved when its explicit value exists anywhere
+  else in the latest customer message. Read the complete customer message before finalizing any
+  operation. If one requested appointment says it is on the same day/time/doctor/device as another
+  requested appointment whose value is explicit later in the turn, copy that explicit value into the
+  first operation too. Leaving that date/time/entity null would incorrectly force a clarification.
 - Package purchase and appointment creation are separate independently meaningful actions. If the
   customer asks to buy a package and book its first session in the same turn, emit buy_package plus
   a separate book operation for that session; the booking should use package_usage=use_existing when
