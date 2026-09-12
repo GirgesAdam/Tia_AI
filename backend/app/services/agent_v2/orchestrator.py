@@ -30,6 +30,7 @@ from app.services.agent_v2.compound_turn_policy import (
     normalize_compound_turn_plan,
     resolve_compound_followup_after_reads,
 )
+from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -264,6 +265,11 @@ def orchestrate_v2_turn(
         now=local_now,
         catalog=canonical_catalog,
         adapter=adapter,
+    )
+    plan = preflight_compound_visit_plan(
+        plan,
+        context=read_context,
+        timezone_name=timezone_name,
     )
     resolved_turn_id = turn_id or str(run_id)
     current_task = initial_task
