@@ -99,7 +99,8 @@ def resolve_booking_package(
             usage_mode=usage_mode,
         )
 
-    local_date = start_at.astimezone(ZoneInfo(workspace.timezone)).date()
+    timezone_name = str(getattr(workspace, "timezone", None) or "UTC")
+    local_date = start_at.astimezone(ZoneInfo(timezone_name)).date()
     eligible = _eligible_packages(
         db,
         workspace=workspace,
