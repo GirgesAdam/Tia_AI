@@ -30,6 +30,55 @@ def _latest_customer_index(history: list[BaseMessage]) -> int | None:
     return None
 
 
+def _deterministic_medical_handoff_reply(
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> str | None:
+    """Render medical escalations without a second model call.
+
+    The safety classification already happened in the structured interpreter. This function only
+    renders that verified result; it never inspects customer wording to decide whether a handoff is
+    needed. Script detection is used solely to preserve the customer's reply language.
+    """
+    medical = next(
+        (
+            outcome
+            for outcome in outcomes
+            if outcome.status == "handoff"
+            and outcome.response_goal == "handoff"
+            and outcome.facts.get("category") == "medical"
+        ),
+        None,
+    )
+    if medical is None:
+        return None
+
+    latest_index = _latest_customer_index(history)
+    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
+    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
+    urgent = medical.facts.get("priority") == "urgent"
+
+    if urgent:
+        if arabic:
+            return (
+                "دي حالة محتاجة مساعدة طبية عاجلة. ما تستناش رد من الشات؛ اتصل بخدمات "
+                "الطوارئ المحلية أو اتجه لأقرب قسم طوارئ فورًا. وحوّلت المحادثة للفريق الطبي "
+                "في العيادة للمراجعة."
+            )
+        return (
+            "This needs urgent medical attention. Do not wait for a chat reply; contact your local "
+            "emergency services or go to the nearest emergency department now. I have also handed "
+            "the conversation to the clinic medical team for review."
+        )
+
+    if arabic:
+        return "الموضوع ده محتاج تقييم من الفريق الطبي، فحوّلت المحادثة لفريق العيادة للمراجعة."
+    return (
+        "This needs assessment by the medical team, so I’ve handed the conversation to the clinic "
+        "team for review."
+    )
+
+
 def _native_recent_messages(
     history: list[BaseMessage],
     *,
@@ -173,6 +222,10 @@ def compose_v2_customer_reply(
     outcomes: list[TurnOutcome],
 ) -> tuple[str, str]:
     """Render one customer reply from verified V2 outcomes; never execute actions or tools."""
+    deterministic_medical = _deterministic_medical_handoff_reply(history, outcomes)
+    if deterministic_medical is not None:
+        return deterministic_medical, "deterministic:medical-handoff"
+
     messages = _build_responder_messages(
         clinic_name=clinic_name,
         timezone_name=timezone_name,
