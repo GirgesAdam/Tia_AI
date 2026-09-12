@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import BaseMessage
@@ -353,7 +354,10 @@ def orchestrate_v2_turn(
             if outcome.status == "completed":
                 write_kind = advanced.write_intent.kind if advanced.write_intent is not None else None
                 if current_task is not None and current_task.task_type == write_kind:
-                    if persisted is not None and persisted.active_task.task_type == current_task.task_type:
+                    if (
+                        persisted is not None
+                        and persisted.active_task.task_type == current_task.task_type
+                    ):
                         completed_existing_task_result = dict(action_result)
                     current_task = None
                 continue
