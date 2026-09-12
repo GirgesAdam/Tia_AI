@@ -245,7 +245,7 @@ def _run_v2_after_inbound(
             patient=patient,
             reason=_handoff_reason(turn),
             category=turn.plan.handoff_category or "other",
-            priority="normal",
+            priority=turn.plan.handoff_priority or "normal",
             source="ai",
             commit=False,
         )
