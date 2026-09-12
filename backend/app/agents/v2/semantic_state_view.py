@@ -182,6 +182,8 @@ def with_safe_read_context(
     *,
     read_context: dict[str, Any] | None = None,
 ) -> SemanticContext:
+    if read_context is None:
+        return context
     model_input = dict(context.model_input)
     model_input["recent_verified_read"] = verified_read_semantic_view(
         read_context,
