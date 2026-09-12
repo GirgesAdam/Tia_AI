@@ -11,10 +11,6 @@ on:
       - backend/app/services/agent_v2/**
       - backend/scripts/run_v2_only_chat.py
       - backend/scripts/run_v2_kb_smoke.py
-      - backend/scripts/run_v2_package_booking_review.py
-      - backend/scripts/run_v2_package_booking_followup_review.py
-      - backend/scripts/run_v2_compound_booking_review.py
-      - backend/scripts/run_v2_compound_booking_followup.py
   workflow_dispatch:
 
 permissions:
@@ -68,17 +64,6 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
           test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
-      - name: Run corrected V2 compound booking follow-up
-        env:
-          AGENT_V2_LIVE_ENABLED: "true"
-        run: python scripts/run_v2_compound_booking_followup.py --report artifacts/v2-compound-booking-followup.json
-      - name: Upload corrected V2 compound booking artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: v2-compound-booking-followup
-          path: backend/artifacts/v2-compound-booking-followup.json
-          if-no-files-found: warn
       - name: Run V2-only matrix
         run: python scripts/run_v2_only_chat.py --matrix
       - name: Run V2 knowledge smoke
