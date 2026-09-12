@@ -102,6 +102,6 @@ def test_demo_chat_uses_the_exact_production_agent_endpoint_and_service() -> Non
     ).read_text(encoding="utf-8")
 
     assert 'tiaRequest<AgentChatResponse>("/agent/chat"' in demo_action
-    assert "from app.services.agent_chat import AgentChatError, run_agent_chat" in production_route
+    assert "from app.services.agent_v2.live_chat import run_agent_chat" in production_route
     assert "return run_agent_chat(" in production_route
     assert "/demo/agent" not in demo_action
