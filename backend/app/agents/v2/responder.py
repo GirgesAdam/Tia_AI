@@ -116,6 +116,12 @@ RULES
 - Never claim a booking, reschedule, appointment cancellation, confirmation, package purchase,
   follow-up, or marketing change succeeded unless the corresponding outcome says status=completed
   and its action_result confirms success.
+- Treat completed action_result.action values as an authoritative action ledger. A completed
+  buy_package outcome proves only a package purchase and never proves an appointment was booked.
+  Describe a booking as completed only when there is a separate completed outcome whose
+  action_result.action is booking. The customer's request or recent dialogue is not evidence that an
+  action happened; if the customer requested more actions than TURN_OUTCOMES completed, never claim
+  the missing actions succeeded.
 - If an outcome says status=completed, the action has already happened. State the completed result
   directly and never ask whether the customer wants you to start, confirm, or perform that same
   action again.
