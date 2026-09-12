@@ -24,6 +24,18 @@ def _entity_ref(
     return _reverse_refs(context, kind).get(str(value))
 
 
+def _entity_refs(
+    value: object,
+    *,
+    kind: ReferenceKind,
+    context: SemanticContext,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    reverse = _reverse_refs(context, kind)
+    return [reverse[str(item)] for item in value if str(item) in reverse]
+
+
 def _safe_constraints(value: object, context: SemanticContext) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
@@ -37,6 +49,9 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
         ref = _entity_ref(value.get(input_key), kind=kind, context=context)
         if ref is not None:
             safe[output_key] = ref
+    doctor_refs = _entity_refs(value.get("doctor_ids"), kind="doctor", context=context)
+    if doctor_refs:
+        safe["doctor_refs"] = doctor_refs
     for key in ("date", "time", "package_usage"):
         item = value.get(key)
         if item not in (None, "", {}, []):
@@ -130,6 +145,22 @@ def active_task_semantic_view(
     return safe
 
 
+def verified_read_semantic_view(
+    read_context: dict[str, Any] | None,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
+    """Expose only the immediately previous verified read scope using ephemeral refs."""
+    if not isinstance(read_context, dict):
+        return {}
+    operation_type = read_context.get("operation_type")
+    if not isinstance(operation_type, str) or not operation_type:
+        return {}
+    safe: dict[str, object] = {"operation_type": operation_type}
+    safe.update(_safe_constraints(read_context, context))
+    return safe
+
+
 def pending_choice_semantic_view(value: dict[str, Any] | None) -> dict[str, object]:
     return _safe_option_snapshot(value)
 
@@ -143,4 +174,17 @@ def with_safe_task_context(
     model_input = dict(context.model_input)
     model_input["active_task"] = active_task_semantic_view(active_task, context=context)
     model_input["pending_choice"] = pending_choice_semantic_view(pending_choice)
+    return SemanticContext(model_input=model_input, reference_map=context.reference_map)
+
+
+def with_safe_read_context(
+    context: SemanticContext,
+    *,
+    read_context: dict[str, Any] | None = None,
+) -> SemanticContext:
+    model_input = dict(context.model_input)
+    model_input["recent_verified_read"] = verified_read_semantic_view(
+        read_context,
+        context=context,
+    )
     return SemanticContext(model_input=model_input, reference_map=context.reference_map)
