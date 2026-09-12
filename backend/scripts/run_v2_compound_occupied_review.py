@@ -102,18 +102,40 @@ def _run_case(db: Session, workspace: Workspace):
     expected_first, expected_second = joint_pair
 
     anchor = seq._local_time(first)
-    message = (
+    first_message = (
         f"احجزلي {seq._service_phrase(first)} وبعدها {seq._service_phrase(second)} "
         f"يوم {first['day'].isoformat()} من الساعة {anchor}. عايزهم ورا بعض ونفذ الحجزين"
     )
-    result = seq._run_one_message(
+    first_response, first_duration = base._send(
         db,
         workspace,
         patient,
-        "second_compound_slot_occupied_offer_joint_window",
-        message,
+        first_message,
+        None,
     )
-    result.db_checks += [
+    after_offer = seq._appointments(db, patient.id)
+
+    confirmation = "تمام احجز الاتنين في المواعيد دي"
+    second_response, second_duration = base._send(
+        db,
+        workspace,
+        patient,
+        confirmation,
+        first_response.conversation_id,
+    )
+    after_confirmation = seq._appointments(db, patient.id)
+
+    result = base.Result(name="second_compound_slot_occupied_offer_and_confirm_joint_window")
+    result.turns = [
+        base.Turn(first_message, first_response.reply, first_response.model, first_duration),
+        base.Turn(confirmation, second_response.reply, second_response.model, second_duration),
+    ]
+    result.db_checks = [
+        f"appointment_count_after_offer={len(after_offer)}",
+        f"appointment_count_after_confirmation={len(after_confirmation)}",
+        f"service_ids_after_confirmation={[str(row.service_id) for row in after_confirmation]}",
+        f"starts_after_confirmation={[row.start_at.isoformat() for row in after_confirmation]}",
+        f"ends_after_confirmation={[row.end_at.isoformat() for row in after_confirmation]}",
         f"blocker_appointment_id={blocker.id}",
         f"blocked_naive_second_start={second['start_at'].isoformat()}",
         f"expected_joint_first_start={expected_first.start_at.isoformat()}",
@@ -122,7 +144,8 @@ def _run_case(db: Session, workspace: Workspace):
         f"second_resource_doctor={second['doctor_id']}",
         f"first_device={first_device}",
         f"second_device={second_device}",
-        "expected_target_appointment_count_after_turn=0",
+        "expected_target_appointment_count_after_offer=0",
+        "expected_target_appointment_count_after_confirmation=2",
     ]
     return result
 
