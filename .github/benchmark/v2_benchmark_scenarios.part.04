@@ -1,0 +1,31 @@
+xisting_package_other_service": _existing_package_other_service,
+    "two_services_same_visit": _two_services_same_visit,
+    "exact_time_availability": _exact_time_availability,
+    "time_window_availability": _time_window_availability,
+    "conditional_fallback": _conditional_fallback,
+    "nearest_available": _nearest_available,
+    "change_time_during_booking": _change_time_during_booking,
+    "change_doctor_during_booking": _change_doctor_during_booking,
+    "change_service_mid_conversation": _change_service_mid_conversation,
+    "doctor_discovery": _doctor_discovery,
+    "doctor_comparison": _doctor_comparison,
+    "laser_device_consistency": _laser_device_consistency,
+    "simple_price": _simple_price,
+    "service_price_comparison": _service_price_comparison,
+    "package_comparison": _package_comparison,
+    "hypothetical_question": _hypothetical_question,
+    "reschedule_existing": _reschedule_existing,
+    "cancel_existing": _cancel_existing,
+    "no_show_semantics": _no_show_semantics,
+    "multi_request": _multi_request,
+    "out_of_scope_recovery": _out_of_scope_recovery,
+    "two_packages_same_visit": _two_packages_same_visit,
+}
+
+
+def prepare_scenario(db: Session, workspace: Workspace, name: str) -> PreparedScenario:
+    try:
+        handler = _HANDLERS[name]
+    except KeyError as exc:
+        raise KeyError(f"Unknown scenario: {name}") from exc
+    return handler(db, workspace)

@@ -1,0 +1,119 @@
+patient=patient,
+        observations=[
+            f"existing_package_id={package.id}",
+            f"existing_package_remaining={read.sessions_remaining}",
+            f"existing_package_service={package_service.name}",
+        ],
+        messages=[
+            f"أنا عندي باكيدج {package_service.name}، بس المرة دي عايز أحجز {other['name']} كخدمة تانية مع {doctor['name']} يوم {day.isoformat()}، إيه المتاح؟",
+            f"احجزلي {other['name']} الساعة {slot.start_at.astimezone(tz).strftime('%H:%M')} وماتستخدمش الباكيدج القديمة",
+        ],
+    )
+
+
+def _two_services_same_visit(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    service_a = service_by_name(db, workspace, "PRP للبشرة")
+    service_b = service_by_name(db, workspace, "استشارة جلدية وليزر")
+    return PreparedScenario(
+        patient=patient,
+        observations=[
+            f"service_a={service_a.name}",
+            f"service_b={service_b.name}",
+            "required_rule=one_common_doctor_one_visit_one_appointment_time",
+        ],
+        messages=[
+            f"عايز أحجز {service_a.name} و{service_b.name} مع بعض في نفس الزيارة، اختار دكتور واحد يعمل الاتنين ووريني أقرب ميعاد مناسب قبل ما تحجز",
+            "تمام، احجز الخدمتين مع بعض في أقرب اختيار مناسب اللي لقيته، نفس الدكتور وفي زيارة واحدة",
+        ],
+    )
+
+
+def _exact_time_availability(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, _catalog, service, doctor, _branch, day, available, tz, slot = generic_context(db, workspace)
+    when = slot.start_at.astimezone(tz).strftime("%H:%M")
+    return PreparedScenario(
+        patient=patient,
+        messages=[
+            f"هل {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {when} متاح؟ أنا بس بسأل",
+            "تمام، متحجزش حاجة",
+        ],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _time_window_availability(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, _catalog, service, doctor, _branch, day, available, tz, slot = generic_context(db, workspace)
+    local = slot.start_at.astimezone(tz)
+    start = local.strftime("%H:%M")
+    end = (local + timedelta(hours=2)).strftime("%H:%M")
+    return PreparedScenario(
+        patient=patient,
+        messages=[
+            f"عايز مواعيد {service['name']} مع {doctor['name']} يوم {day.isoformat()} من الساعة {start} لحد {end}",
+            "وريني الاختيارات جوه الفترة دي بس ومتحجزش",
+        ],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _conditional_fallback(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, _catalog, service, doctor, _branch, day, available, tz, slot = generic_context(db, workspace)
+    local = slot.start_at.astimezone(tz)
+    start = local.strftime("%H:%M")
+    end = (local + timedelta(hours=2)).strftime("%H:%M")
+    return PreparedScenario(
+        patient=patient,
+        messages=[
+            f"عايز مواعيد {service['name']} مع {doctor['name']} يوم {day.isoformat()} من {start} لـ{end}",
+            "ولو مفيش معاد في الفترة دي، وريني أقرب فترة متاحة بدلها",
+        ],
+        observations=[
+            f"verified_nonempty_anchor={day.isoformat()} {start}-{end}",
+            "expected_write_delta=0",
+        ],
+    )
+
+
+def _nearest_available(db: Session, workspace: Workspace) -> PreparedScenario:
+    service = service_by_name(db, workspace, "استشارة جلدية وليزر")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        messages=[
+            f"إيه أقرب معاد متاح لـ{service.name}؟ أنا مش محدد يوم",
+            "قولي أقرب اختيار بس، من غير حجز",
+        ],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _change_time_during_booking(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, _catalog, service, doctor, _branch, day, available, tz, _slot = generic_context(db, workspace)
+    if len(available.slots) < 2:
+        raise RuntimeError("Need two slots for time-change scenario")
+    first_slot, second_slot = available.slots[0], available.slots[1]
+    first_time = first_slot.start_at.astimezone(tz).strftime("%H:%M")
+    second_time = second_slot.start_at.astimezone(tz).strftime("%H:%M")
+    return PreparedScenario(
+        patient=patient,
+        observations=[f"initial_time={first_time}", f"changed_time={second_time}"],
+        messages=[
+            f"أنا بفكر أحجز {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {first_time}، متحجزش لسه",
+            f"غيرت رأيي، خليها الساعة {second_time} بدل {first_time} واحجزها دلوقتي",
+        ],
+    )
+
+
+def _change_doctor_during_booking(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    service, day, first, second = two_doctors_same_day(db, workspace)
+    doctor_a, _available_a = first
+    doctor_b, available_b = second
+    tz = ZoneInfo(available_b.timezone)
+    target_time = available_b.slots[0].start_at.astimezone(tz).strftime("%H:%M")
+    return PreparedScenario(
+        patient=patient,
+        observations=[f"doctor_a={doctor_a['name']}", f"doctor_b={doctor_b['name']}"],
+        messages=[
+            f"عايز أحجز {service['name']} مع {doctor_a['name']} يوم {day.isoformat()}، إيه المتاح؟",
+            f"غير الدكتور وخليه {doctor_b['name']} في نفس اليوم، وريني مواعيده قبل م�

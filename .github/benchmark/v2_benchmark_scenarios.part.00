@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import json
+from datetime import timedelta
+from uuid import UUID
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+import scripts.run_live_agent_ux_review as base
+from app.models.patient import Patient
+from app.models.patient_package import PatientPackage
+from app.models.service import Service
+from app.models.workspace import Workspace
+from app.services.patient_packages import list_patient_packages
+
+from v2_benchmark_core import (
+    PreparedScenario,
+    availability,
+    doctor_name,
+    generic_context,
+    jsonable,
+    package_offer,
+    package_patient,
+    patient_without_future,
+    replacement_slot,
+    service_by_name,
+    two_doctors_same_day,
+)
+
+TOPICS = {
+    "single_session_booking": "حجز Session عادية من الصفر",
+    "package_purchase": "شراء Package من الصفر",
+    "session_vs_package_ambiguity": "Session vs Package ambiguity",
+    "existing_package_booking": "حجز جلسة من Package موجودة",
+    "existing_package_other_service": "عميل عنده Package ويطلب خدمة أخرى",
+    "two_services_same_visit": "خدمتان في نفس الزيارة",
+    "exact_time_availability": "Availability exact time",
+    "time_window_availability": "Availability time window",
+    "conditional_fallback": "Conditional availability fallback",
+    "nearest_available": "Nearest available مباشرة",
+    "change_time_during_booking": "تغيير الميعاد أثناء الحجز",
+    "change_doctor_during_booking": "تغيير الدكتور أثناء الحجز",
+    "change_service_mid_conversation": "تغيير الخدمة في منتصف المحادثة",
+    "doctor_discovery": "Doctor discovery",
+    "doctor_comparison": "مقارنة دكتورين",
+    "laser_device_consistency": "Laser device / price / availability consistency",
+    "simple_price": "سؤال أسعار بسيط",
+    "service_price_comparison": "مقارنة أسعار وخدمات",
+    "package_comparison": "Package comparison",
+    "hypothetical_question": "Hypothetical read-only question",
+    "reschedule_existing": "Reschedule لموعد موجود",
+    "cancel_existing": "Cancellation",
+    "no_show_semantics": "No-show treated like cancelled for package entitlement",
+    "multi_request": "أكثر من طلب في نفس الرسالة",
+    "out_of_scope_recovery": "Out-of-scope ثم recovery",
+    "two_packages_same_visit": "شراء باكيدجين وحجز أول زيارة للخدمتين مع دكتور واحد",
+}
+
+SCENARIOS = tuple(TOPICS)
+
+
+def _single_session_booking(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, _catalog, service, doctor, _branch, day, available, tz, slot = generic_context(db, workspace)
+    return PreparedScenario(
+        patient=patient,
+        messages=[
+            f"عايز أحجز جلسة {service['name']} مع {doctor['name']} يوم {day.isoformat()}، إيه المواعيد المتاحة؟",
+            f"تمام احجزلي الساعة {slot.start_at.astimezone(tz).strftime('%H:%M')} دلوقتي",
+        ],
+    )
+
+
+def _package_purchase(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    offer = package_offer(
+        db,
+        workspace,
+        service_name="ليزر إزالة الشعر - إبط",
+        sessions=6,
+        device_key="prime_lase",
+    )
+    return PreparedScenario(
+        patient=patient,
+        observations=["target_offer=" + json.dumps(jsonable(offer), ensure_ascii=False, separators=(",", ":"))],
+        messages=[
+            "بكام باكيدج 6 جلسات ليزر إزالة شعر الإبط على جهاز Prime Lase؟ أنا بس بسأل الأول",
+            "تمام، اشتريلي الباكيدج دي دلوقتي",
+        ],
+    )
+
+
+def _session_vs_package_ambiguity(db: Session, workspace: Workspace) -> PreparedScenario:
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        messages=[
+            "عايز أعمل full body",
+            "أنا لسه محددتش Session ولا Package، قولي الاختيارات الأول ومتحجزش حاجة",
+        ],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _existing_package_booking(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, package, read = package_patient(db, workspace)
+    service = db.get(Service, package.service_id)
+    if service is None:
+        raise RuntimeError("Package service missing")
+    _catalog, doctor, day, available = availability(
+        db,
+        workspace,
+        service_id=service.id,
+        device_key=package.laser_device_key,
+    )
+    tz = ZoneInfo(available.timezone)
+    slot = available.slots[0]
+    return PreparedScenario(
+        patient=patient,
+        observations=[
+            f"package_id={package.id}",
+            f"package_remaining_before={read.sessions_remaining}",
+            f"package_service={service.name}",
+        ],
+        messages=[
+            f"عندي باكيدج {service.name} شغالة وعايز أحجز منها الجلسة الجاية يوم {day.isoformat()} مع {doctor['name']}، إيه المتاح؟",
+            f"تمام احجزلي الساعة {slot.start_at.astimezone(tz).strftime('%H:%M')} من الباكيدج",
+        ],
+    )
+
+
+def _existing_package_other_service(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, package, read = package_patient(db, workspace)
+    package_service = db.get(Service, package.service_id)
+    if package_service is None:
+        raise RuntimeError("Package service missing")
+    _catalog, other, doctor, _branch, day, available = base._booking_context(
+        db, workspace, exclude_service_id=str(package.service_id)
+    )
+    tz = ZoneInfo(available.timezone)
+    slot = available.slots[0]
+    return PreparedScenario(
+        

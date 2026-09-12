@@ -1,0 +1,136 @@
+   day, available = replacement_slot(db, workspace, original)
+    tz = ZoneInfo(available.timezone)
+    slot = available.slots[0]
+    observations = [f"original_appointment_id={original.id}", f"replacement_day={day.isoformat()}"]
+
+    def post() -> None:
+        db.refresh(original)
+        observations.append(f"original_status_after={original.status}")
+
+    return PreparedScenario(
+        patient=patient,
+        observations=observations,
+        post=post,
+        messages=[
+            "عايز أغير معادي الجاي",
+            f"غيّره ليوم {day.isoformat()} الساعة {slot.start_at.astimezone(tz).strftime('%H:%M')} مع نفس الدكتور",
+        ],
+    )
+
+
+def _cancel_existing(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    target = base._seed_upcoming(db, workspace, patient, 1)[0]
+    observations = [f"target_appointment_id={target.id}"]
+
+    def post() -> None:
+        db.refresh(target)
+        observations.append(f"target_status_after={target.status}")
+
+    return PreparedScenario(
+        patient=patient,
+        observations=observations,
+        post=post,
+        messages=["فكرني بمعادي الجاي", "تمام، الغيه دلوقتي"],
+    )
+
+
+def _no_show_semantics(db: Session, workspace: Workspace) -> PreparedScenario:
+    row = db.execute(
+        text(
+            """
+            select pp.patient_id, pp.id as package_id, s.name as service_name
+            from package_usages pu
+            join appointments a
+              on a.id = pu.appointment_id and a.workspace_id = pu.workspace_id
+            join patient_packages pp
+              on pp.id = pu.patient_package_id and pp.workspace_id = pu.workspace_id
+            join services s
+              on s.id = pp.service_id and s.workspace_id = pp.workspace_id
+            where pu.workspace_id = :workspace_id
+              and a.status = 'no_show'
+              and pu.status = 'released'
+            order by a.start_at desc
+            limit 1
+            """
+        ),
+        {"workspace_id": str(workspace.id)},
+    ).mappings().first()
+    if row is None:
+        raise RuntimeError("No released package usage attached to a no-show appointment")
+    patient = db.get(Patient, UUID(str(row["patient_id"])))
+    package = db.get(PatientPackage, UUID(str(row["package_id"])))
+    if patient is None or package is None:
+        raise RuntimeError("No-show fixture patient/package missing")
+    reads = list_patient_packages(
+        db,
+        workspace_id=workspace.id,
+        patient_id=patient.id,
+        service_id=package.service_id,
+    )
+    read = next(item for item in reads if item.id == package.id)
+    return PreparedScenario(
+        patient=patient,
+        observations=[
+            f"package_id={package.id}",
+            f"ground_truth_remaining={read.sessions_remaining}",
+            "ground_truth_no_show_usage_status=released",
+            "expected_write_delta=0",
+        ],
+        messages=[
+            f"الجلسة اللي فاتت اللي ماجتش فيها من باكيدج {row['service_name']} اتحسبت من الباكيدج ولا لأ؟ وفاضلي كام جلسة؟"
+        ],
+    )
+
+
+def _multi_request(db: Session, workspace: Workspace) -> PreparedScenario:
+    service = service_by_name(db, workspace, "استشارة جلدية وليزر")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        observations=["expected_write_delta=0"],
+        messages=[
+            f"عايز أعرف سعر {service.name}، ومين الدكاترة اللي بيعملوها، وإيه أقرب معاد متاح؟ أنا بس بجمع معلومات ومش بحجز"
+        ],
+    )
+
+
+def _out_of_scope_recovery(db: Session, workspace: Workspace) -> PreparedScenario:
+    service = service_by_name(db, workspace, "PRP للبشرة")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        observations=["expected_write_delta=0"],
+        messages=[
+            "ممكن تقولي نتيجة ماتش الأهلي الأخير؟",
+            f"طيب سيبك من ده، عايز أعرف سعر {service.name} ومين بيعملها في العيادة",
+        ],
+    )
+
+
+def _two_packages_same_visit(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    offer_a = package_offer(
+        db, workspace, service_name="ليزر إزالة الشعر - إبط", sessions=6, device_key="prime_lase"
+    )
+    offer_b = package_offer(
+        db, workspace, service_name="ليزر إزالة الشعر - بكيني", sessions=6, device_key="prime_lase"
+    )
+    return PreparedScenario(
+        patient=patient,
+        observations=[
+            "offer_a=" + json.dumps(jsonable(offer_a), ensure_ascii=False, separators=(",", ":")),
+            "offer_b=" + json.dumps(jsonable(offer_b), ensure_ascii=False, separators=(",", ":")),
+            "required_rule=one_common_doctor_one_visit_one_appointment_time_for_both_services",
+        ],
+        messages=[
+            "عايز باكيدج 6 جلسات ليزر إبط وباكيدج 6 جلسات بكيني، الاتنين على Prime Lase، وعايز أول جلسة للخدمتين مع بعض في نفس الزيارة. اختار دكتور واحد يعمل الخدمتين ووريني أقرب ميعاد مناسب قبل ما تنفذ أي حاجة",
+            "تمام، اشتري الباكيدجين واحجز أول زيارة للخدمتين مع بعض على أقرب اختيار مناسب اللي لقيته، نفس الدكتور وفي زيارة واحدة",
+        ],
+    )
+
+
+_HANDLERS = {
+    "single_session_booking": _single_session_booking,
+    "package_purchase": _package_purchase,
+    "session_vs_package_ambiguity": _session_vs_package_ambiguity,
+    "existing_package_booking": _existing_package_booking,
+    "e

@@ -1,0 +1,132 @@
+� نحجز",
+            f"تمام احجزلي مع {doctor_b['name']} الساعة {target_time}",
+        ],
+    )
+
+
+def _change_service_mid_conversation(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    _catalog, service_a, doctor_a, _branch, day_a, _available_a = base._booking_context(db, workspace)
+    _catalog2, service_b, doctor_b, _branch2, day_b, _available_b = base._booking_context(
+        db, workspace, exclude_service_id=str(service_a["id"])
+    )
+    return PreparedScenario(
+        patient=patient,
+        observations=[f"service_a={service_a['name']}", f"service_b={service_b['name']}"],
+        messages=[
+            f"إيه مواع؊د {service_a['name']} مع {doctor_a['name']} يوم {day_a.isoformat()}؟",
+            f"سيب {service_a['name']}، أنا غيرت رأيي وعايز {service_b['name']} مع {doctor_b['name']} يوم {day_b.isoformat()}، إيه المتاح؟",
+        ],
+    )
+
+
+def _doctor_discovery(db: Session, workspace: Workspace) -> PreparedScenario:
+    service = service_by_name(db, workspace, "استشارة جلدية وليزر")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        messages=[f"مين كل الدكاترة اللي بيعملوا {service.name}؟", "مين منهم متاح أقرب؟ من غير حجز"],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _doctor_comparison(db: Session, workspace: Workspace) -> PreparedScenario:
+    service, _day, first, second = two_doctors_same_day(db, workspace)
+    doctor_a, _available_a = first
+    doctor_b, _available_b = second
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        messages=[
+            f"بالنسبة لـ{service['name']}، مين متاح أقرب: {doctor_a['name']} ولا {doctor_b['name']}؟",
+            "قارن المتاح بينهم بس، متحجزش حاجة",
+        ],
+        observations=["expected_write_delta=0"],
+    )
+
+
+def _laser_device_consistency(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    service = service_by_name(db, workspace, "ليزر إزالة الشعر - إبط")
+    catalog, _doctor, day, available = availability(
+        db,
+        workspace,
+        service_id=service.id,
+        device_key="prime_lase",
+    )
+    tz = ZoneInfo(available.timezone)
+    slot = available.slots[0]
+    selected_doctor = doctor_name(catalog, slot.doctor_id)
+    return PreparedScenario(
+        patient=patient,
+        observations=["expected_device=prime_lase"],
+        messages=[
+            f"جلسة {service.name} على Prime Lase بكام، ومين متاح يوم {day.isoformat()}؟",
+            f"تمام احجزلي على Prime Lase مع {selected_doctor} الساعة {slot.start_at.astimezone(tz).strftime('%H:%M')}",
+        ],
+    )
+
+
+def _simple_price(db: Session, workspace: Workspace) -> PreparedScenario:
+    service = service_by_name(db, workspace, "PRP للبشرة")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        observations=[f"db_price_minor={service.price_minor}", "expected_write_delta=0"],
+        messages=[f"جلسة {service.name} بكام بسٟ"],
+    )
+
+
+def _service_price_comparison(db: Session, workspace: Workspace) -> PreparedScenario:
+    first = service_by_name(db, workspace, "PRP للبشرة")
+    second = service_by_name(db, workspace, "هيدرافيشل")
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        observations=[
+            f"{first.name}_price_minor={first.price_minor}",
+            f"{second.name}_price_minor={second.price_minor}",
+            "expected_write_delta=0",
+        ],
+        messages=[f"قارنلي بين {first.name} و{second.name}: السعر والمدة لكل واحدة، ومتحجزش"],
+    )
+
+
+def _package_comparison(db: Session, workspace: Workspace) -> PreparedScenario:
+    prime = package_offer(
+        db, workspace, service_name="ليزر إزالة الشعر - إبط", sessions=6, device_key="prime_lase"
+    )
+    candela = package_offer(
+        db, workspace, service_name="ليزر إزالة الشعر - إبط", sessions=6, device_key="candela_gentle"
+    )
+    return PreparedScenario(
+        patient=patient_without_future(db, workspace),
+        observations=[
+            "prime_offer=" + json.dumps(jsonable(prime), ensure_ascii=False, separators=(",", ":")),
+            "candela_offer=" + json.dumps(jsonable(candela), ensure_ascii=False, separators=(",", ":")),
+            "expected_write_delta=0",
+        ],
+        messages=[
+            "قارنلي باكيدج 6 جلسات إزالة شعر الإبط على Prime Lase وباكيدج 6 جلسات على Candela Gentle من ناحية السعر، أنا بس بقارن"
+        ],
+    )
+
+
+def _hypothetical_question(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient, package, read = package_patient(db, workspace)
+    service = db.get(Service, package.service_id)
+    service_name = service.name if service else "الخدمة"
+    return PreparedScenario(
+        patient=patient,
+        observations=[
+            f"package_id={package.id}",
+            f"remaining={read.sessions_remaining}",
+            "expected_write_delta=0",
+        ],
+        messages=[
+            f"لو عندي باكيدج {service_name} وبعدين حبيت أغير ميعاد جلسة أو أسأل عن إلغائها، إيه اللي يحصل؟ أنا بس بسأل ومش عايز أي تغيير دلوقتي",
+            "بالضبط، خليه سؤال افتراضي بس ومتنفذش حاجة",
+        ],
+    )
+
+
+def _reschedule_existing(db: Session, workspace: Workspace) -> PreparedScenario:
+    patient = patient_without_future(db, workspace)
+    original = base._seed_upcoming(db, workspace, patient, 1)[0]
+ 
