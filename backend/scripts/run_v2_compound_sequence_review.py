@@ -22,6 +22,8 @@ from app.models.workspace import Workspace
 from app.services.package_offers import list_package_offers
 from scripts import run_v2_package_booking_review as base
 
+_PAIR_CACHE: dict[str, tuple[dict[str, object], dict[str, object], dict[str, object] | None]] = {}
+
 
 def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -45,10 +47,9 @@ def _doctor_rows(catalog: dict[str, object], service_id: str, branch_id: str):
             for item in (row.get("scheduled_branch_ids") or row.get("branch_ids") or [])
             if item
         }
-        if scheduled and branch_id not in scheduled:
-            continue
-        result.append(row)
-    return result
+        if not scheduled or branch_id in scheduled:
+            result.append(row)
+    return result[:2]
 
 
 def _device_rows(service: dict[str, object]):
@@ -57,24 +58,11 @@ def _device_rows(service: dict[str, object]):
     rows = service.get("laser_devices")
     if not isinstance(rows, list):
         return []
-    result = []
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("device_key"):
-            continue
-        result.append((str(row["device_key"]), str(row.get("device_name") or row["device_key"])))
-    return result
-
-
-def _availability(adapter, branch_id: str, service_id: str, doctor_id: str, day, device_key):
-    return adapter.get_availability(
-        AvailabilityRequest(
-            branch_id=branch_id,
-            service_id=service_id,
-            booking_date=day,
-            doctor_id=doctor_id,
-            laser_device_key=device_key,
-        )
-    )
+    return [
+        (str(row["device_key"]), str(row.get("device_name") or row["device_key"]))
+        for row in rows[:2]
+        if isinstance(row, dict) and row.get("device_key")
+    ]
 
 
 def _spec(service, doctor, availability, slot, device_key, device_name):
@@ -88,105 +76,131 @@ def _spec(service, doctor, availability, slot, device_key, device_name):
         "timezone": availability.timezone,
         "day": slot.start_at.astimezone(ZoneInfo(availability.timezone)).date(),
         "start_at": slot.start_at,
+        "end_at": slot.end_at,
         "duration_minutes": int(slot.duration_minutes),
     }
 
 
-def _service_phrase(spec) -> str:
+def _service_phrase(spec: dict[str, object]) -> str:
     phrase = f"{spec['service_name']} مع {spec['doctor_name']}"
     if spec.get("device_name"):
         phrase += f" على جهاز {spec['device_name']}"
     return phrase
 
 
-def _local_time(spec) -> str:
-    return spec["start_at"].astimezone(ZoneInfo(spec["timezone"])).strftime("%H:%M")
+def _local_time(spec: dict[str, object]) -> str:
+    return spec["start_at"].astimezone(ZoneInfo(str(spec["timezone"]))).strftime("%H:%M")
 
 
 def _find_sequence_pair(db: Session, workspace: Workspace, *, package_position: str | None = None):
+    cache_key = package_position or "none"
+    cached = _PAIR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     catalog = build_clinic_catalog(db, workspace)
-    services = [row for row in (catalog.get("services") or []) if isinstance(row, dict) and row.get("id")]
+    services = [
+        row
+        for row in (catalog.get("services") or [])
+        if isinstance(row, dict) and row.get("id")
+    ]
     branch_id = str(workspace.primary_branch_id or "")
     if not branch_id:
         raise RuntimeError("Staging workspace has no primary branch")
     adapter = get_clinic_adapter(db=db, workspace=workspace)
     today = base.datetime.now(UTC).date()
 
-    offers = list_package_offers(db, workspace_id=workspace.id, active_only=True) if package_position else []
+    offers = (
+        list_package_offers(db, workspace_id=workspace.id, active_only=True)
+        if package_position
+        else []
+    )
     offer_by_scope = {
-        (str(offer.service_id), str(offer.device_key) if offer.device_key else None): offer
+        (str(offer.service_id), str(offer.device_key) if offer.device_key else None): {
+            "sessions_count": int(offer.sessions_count),
+            "service_id": str(offer.service_id),
+            "device_key": str(offer.device_key) if offer.device_key else None,
+        }
         for offer in offers
     }
 
-    for offset in range(1, 30):
+    combos: list[tuple[dict[str, object], dict[str, object], str | None, str | None]] = []
+    for service in services:
+        service_id = str(service["id"])
+        for device_key, device_name in _device_rows(service):
+            for doctor in _doctor_rows(catalog, service_id, branch_id):
+                combos.append((service, doctor, device_key, device_name))
+
+    for offset in range(1, 15):
         day = today + timedelta(days=offset)
-        for first_service in services:
+        available: list[tuple[dict[str, object], dict[str, object], str | None, str | None, object]] = []
+        for service, doctor, device_key, device_name in combos:
+            service_id = str(service["id"])
+            scope = (service_id, device_key)
+            if package_position == "first" and scope not in offer_by_scope:
+                continue
+            availability = adapter.get_availability(
+                AvailabilityRequest(
+                    branch_id=branch_id,
+                    service_id=service_id,
+                    booking_date=day,
+                    doctor_id=str(doctor["id"]),
+                    laser_device_key=device_key,
+                )
+            )
+            if availability.slots:
+                available.append((service, doctor, device_key, device_name, availability))
+
+        second_index: dict[object, list[tuple]] = {}
+        for row in available:
+            service, _doctor, device_key, _device_name, availability = row
+            service_id = str(service["id"])
+            if package_position == "second" and (service_id, device_key) not in offer_by_scope:
+                continue
+            for slot in availability.slots:
+                second_index.setdefault(slot.start_at, []).append((*row, slot))
+
+        for first_service, first_doctor, first_device_key, first_device_name, first_availability in available:
             first_id = str(first_service["id"])
-            for first_device_key, first_device_name in _device_rows(first_service):
-                if package_position == "first" and (first_id, first_device_key) not in offer_by_scope:
-                    continue
-                for first_doctor in _doctor_rows(catalog, first_id, branch_id):
-                    first_availability = _availability(
-                        adapter,
-                        branch_id,
-                        first_id,
-                        str(first_doctor["id"]),
-                        day,
+            if package_position == "first" and (first_id, first_device_key) not in offer_by_scope:
+                continue
+            for first_slot in first_availability.slots[:10]:
+                for second_row in second_index.get(first_slot.end_at, []):
+                    (
+                        second_service,
+                        second_doctor,
+                        second_device_key,
+                        second_device_name,
+                        second_availability,
+                        second_slot,
+                    ) = second_row
+                    second_id = str(second_service["id"])
+                    if second_id == first_id:
+                        continue
+                    first = _spec(
+                        first_service,
+                        first_doctor,
+                        first_availability,
+                        first_slot,
                         first_device_key,
+                        first_device_name,
                     )
-                    for first_slot in first_availability.slots[:8]:
-                        target = first_slot.start_at + timedelta(minutes=int(first_slot.duration_minutes))
-                        for second_service in services:
-                            second_id = str(second_service["id"])
-                            if second_id == first_id:
-                                continue
-                            for second_device_key, second_device_name in _device_rows(second_service):
-                                if package_position == "second" and (
-                                    second_id,
-                                    second_device_key,
-                                ) not in offer_by_scope:
-                                    continue
-                                for second_doctor in _doctor_rows(catalog, second_id, branch_id):
-                                    second_availability = _availability(
-                                        adapter,
-                                        branch_id,
-                                        second_id,
-                                        str(second_doctor["id"]),
-                                        day,
-                                        second_device_key,
-                                    )
-                                    second_slot = next(
-                                        (
-                                            slot
-                                            for slot in second_availability.slots
-                                            if slot.start_at == target
-                                        ),
-                                        None,
-                                    )
-                                    if second_slot is None:
-                                        continue
-                                    first = _spec(
-                                        first_service,
-                                        first_doctor,
-                                        first_availability,
-                                        first_slot,
-                                        first_device_key,
-                                        first_device_name,
-                                    )
-                                    second = _spec(
-                                        second_service,
-                                        second_doctor,
-                                        second_availability,
-                                        second_slot,
-                                        second_device_key,
-                                        second_device_name,
-                                    )
-                                    package_offer = None
-                                    if package_position == "first":
-                                        package_offer = offer_by_scope[(first_id, first_device_key)]
-                                    elif package_position == "second":
-                                        package_offer = offer_by_scope[(second_id, second_device_key)]
-                                    return first, second, package_offer
+                    second = _spec(
+                        second_service,
+                        second_doctor,
+                        second_availability,
+                        second_slot,
+                        second_device_key,
+                        second_device_name,
+                    )
+                    package = None
+                    if package_position == "first":
+                        package = offer_by_scope[(first_id, first_device_key)]
+                    elif package_position == "second":
+                        package = offer_by_scope[(second_id, second_device_key)]
+                    result = (first, second, package)
+                    _PAIR_CACHE[cache_key] = result
+                    return result
     raise RuntimeError(f"No sequential staging fixture found package_position={package_position}")
 
 
@@ -214,8 +228,7 @@ def _run_one_message(db, workspace, patient, name: str, message: str):
     result = base.Result(name=name)
     response, duration = base._send(db, workspace, patient, message, None)
     result.turns = [base.Turn(message, response.reply, response.model, duration)]
-    rows = _appointments(db, patient.id)
-    result.db_checks = _appointment_checks(rows)
+    result.db_checks = _appointment_checks(_appointments(db, patient.id))
     return result
 
 
@@ -228,13 +241,10 @@ def _case_two_services_implicit(db: Session, workspace: Workspace):
         f"الساعة {anchor}. نفذ الحجزين دلوقتي"
     )
     result = _run_one_message(db, workspace, patient, "two_services_same_anchor_implicit", message)
-    result.db_checks.extend(
-        [
-            f"requested_anchor={first['start_at'].isoformat()}",
-            f"expected_second_start={second['start_at'].isoformat()}",
-            f"first_duration_minutes={first['duration_minutes']}",
-        ]
-    )
+    result.db_checks += [
+        f"requested_anchor={first['start_at'].isoformat()}",
+        f"expected_second_start={second['start_at'].isoformat()}",
+    ]
     return result
 
 
@@ -247,16 +257,30 @@ def _case_two_services_after_wording(db: Session, workspace: Workspace):
         f"أنا مناسبني الساعة {anchor}، احجزهم"
     )
     result = _run_one_message(db, workspace, patient, "two_services_same_anchor_after_wording", message)
-    result.db_checks.extend(
-        [
-            f"requested_anchor={first['start_at'].isoformat()}",
-            f"expected_second_start={second['start_at'].isoformat()}",
-        ]
-    )
+    result.db_checks += [
+        f"expected_first_start={first['start_at'].isoformat()}",
+        f"expected_second_start={second['start_at'].isoformat()}",
+    ]
     return result
 
 
-def _case_book_then_buy_same_service(db: Session, workspace: Workspace):
+def _case_natural(db: Session, workspace: Workspace):
+    patient = base._new_patient(db, workspace, "seq-natural")
+    first, second, _ = _find_sequence_pair(db, workspace)
+    anchor = _local_time(first)
+    message = (
+        f"ممكن تحجزلي يوم {first['day'].isoformat()} الساعة {anchor} {_service_phrase(first)}، "
+        f"وعايز في نفس الزيارة {_service_phrase(second)} كمان الساعة {anchor}"
+    )
+    result = _run_one_message(db, workspace, patient, "same_visit_natural_phrase", message)
+    result.db_checks += [
+        f"expected_first_start={first['start_at'].isoformat()}",
+        f"expected_second_start={second['start_at'].isoformat()}",
+    ]
+    return result
+
+
+def _case_book_then_buy_same(db: Session, workspace: Workspace):
     patient = base._new_patient(db, workspace, "seq-book-buy")
     offer, service, doctor, day, availability = base._offer_context(db, workspace)
     slot = availability.slots[0]
@@ -271,100 +295,68 @@ def _case_book_then_buy_same_service(db: Session, workspace: Workspace):
     packages = list(db.scalars(select(PatientPackage).where(PatientPackage.patient_id == patient.id)))
     rows = _appointments(db, patient.id)
     usage = base._usage_for_appointment(db, workspace, rows[-1]) if rows else None
-    result.db_checks.extend(
-        [
-            f"package_count={len(packages)}",
-            f"purchased_package_id={packages[-1].id if packages else None}",
-            f"appointment_package_id={rows[-1].patient_package_id if rows else None}",
-            f"usage_package_id={usage.patient_package_id if usage else None}",
-            f"usage_status={usage.status if usage else None}",
-        ]
-    )
+    result.db_checks += [
+        f"package_count={len(packages)}",
+        f"purchased_package_id={packages[-1].id if packages else None}",
+        f"appointment_package_id={rows[-1].patient_package_id if rows else None}",
+        f"usage_package_id={usage.patient_package_id if usage else None}",
+        f"usage_status={usage.status if usage else None}",
+    ]
     return result
 
 
-def _case_service_then_other_package(db: Session, workspace: Workspace):
-    patient = base._new_patient(db, workspace, "seq-service-package")
-    first, second, offer = _find_sequence_pair(db, workspace, package_position="second")
+def _compound_other_package(db: Session, workspace: Workspace, *, package_first: bool):
+    label = "package-first" if package_first else "service-first"
+    patient = base._new_patient(db, workspace, f"seq-{label}")
+    package_position = "first" if package_first else "second"
+    first, second, offer = _find_sequence_pair(db, workspace, package_position=package_position)
     assert offer is not None
+    package_spec = first if package_first else second
+    standalone_spec = second if package_first else first
     anchor = _local_time(first)
-    second_device = f" على جهاز {second['device_name']}" if second.get("device_name") else ""
-    message = (
-        f"احجزلي {_service_phrase(first)} يوم {first['day'].isoformat()} الساعة {anchor}، وكمان اشتريلي "
-        f"باكيدج {offer.sessions_count} جلسات {second['service_name']}{second_device} واحجز أول جلسة منها "
-        f"مع {second['doctor_name']} في نفس اليوم الساعة {anchor}. نفذ الكل"
+    package_device = f" على جهاز {package_spec['device_name']}" if package_spec.get("device_name") else ""
+    package_request = (
+        f"اشتريلي باكيدج {offer['sessions_count']} جلسات {package_spec['service_name']}{package_device} "
+        f"واحجز أول جلسة منها مع {package_spec['doctor_name']} في نفس اليوم الساعة {anchor}"
     )
-    result = _run_one_message(db, workspace, patient, "service_then_other_package_same_anchor", message)
+    standalone_request = (
+        f"احجزلي {_service_phrase(standalone_spec)} يوم {first['day'].isoformat()} الساعة {anchor}"
+    )
+    message = (
+        f"{package_request}، وكمان {standalone_request}. نفذ الكل"
+        if package_first
+        else f"{standalone_request}، وكمان {package_request}. نفذ الكل"
+    )
+    result = _run_one_message(
+        db,
+        workspace,
+        patient,
+        "package_then_other_service_same_anchor" if package_first else "service_then_other_package_same_anchor",
+        message,
+    )
     packages = list(db.scalars(select(PatientPackage).where(PatientPackage.patient_id == patient.id)))
     rows = _appointments(db, patient.id)
-    result.db_checks.extend(
-        [
-            f"package_count={len(packages)}",
-            f"expected_first_start={first['start_at'].isoformat()}",
-            f"expected_second_start={second['start_at'].isoformat()}",
-        ]
+    usages = (
+        list(db.scalars(select(PackageUsage).where(PackageUsage.appointment_id.in_([row.id for row in rows]))))
+        if rows
+        else []
     )
-    if rows:
-        usages = list(
-            db.scalars(
-                select(PackageUsage).where(PackageUsage.appointment_id.in_([row.id for row in rows]))
-            )
-        )
-        result.db_checks.append(
-            f"usage_links={[(str(row.appointment_id), str(row.patient_package_id), row.status) for row in usages]}"
-        )
-    return result
-
-
-def _case_package_then_other_service(db: Session, workspace: Workspace):
-    patient = base._new_patient(db, workspace, "seq-package-service")
-    first, second, offer = _find_sequence_pair(db, workspace, package_position="first")
-    assert offer is not None
-    anchor = _local_time(first)
-    first_device = f" على جهاز {first['device_name']}" if first.get("device_name") else ""
-    message = (
-        f"اشتريلي باكيدج {offer.sessions_count} جلسات {first['service_name']}{first_device} واحجز أول جلسة منها "
-        f"مع {first['doctor_name']} يوم {first['day'].isoformat()} الساعة {anchor}، وكمان احجزلي "
-        f"{_service_phrase(second)} في نفس اليوم الساعة {anchor}. نفذ الكل"
-    )
-    result = _run_one_message(db, workspace, patient, "package_then_other_service_same_anchor", message)
-    packages = list(db.scalars(select(PatientPackage).where(PatientPackage.patient_id == patient.id)))
-    rows = _appointments(db, patient.id)
-    result.db_checks.extend(
-        [
-            f"package_count={len(packages)}",
-            f"expected_first_start={first['start_at'].isoformat()}",
-            f"expected_second_start={second['start_at'].isoformat()}",
-        ]
-    )
-    return result
-
-
-def _case_repeat_natural_phrase(db: Session, workspace: Workspace):
-    patient = base._new_patient(db, workspace, "seq-natural")
-    first, second, _ = _find_sequence_pair(db, workspace)
-    anchor = _local_time(first)
-    message = (
-        f"ممكن تحجزلي يوم {first['day'].isoformat()} الساعة {anchor} {_service_phrase(first)}، "
-        f"وعايز في نفس الزيارة {_service_phrase(second)} كمان الساعة {anchor}"
-    )
-    result = _run_one_message(db, workspace, patient, "same_visit_natural_phrase", message)
-    result.db_checks.extend(
-        [
-            f"expected_first_start={first['start_at'].isoformat()}",
-            f"expected_second_start={second['start_at'].isoformat()}",
-        ]
-    )
+    result.db_checks += [
+        f"package_count={len(packages)}",
+        f"expected_first_start={first['start_at'].isoformat()}",
+        f"expected_second_start={second['start_at'].isoformat()}",
+        f"usage_links={[(str(row.appointment_id), str(row.patient_package_id), row.status) for row in usages]}",
+    ]
     return result
 
 
 CASES = [
     ("two_services_same_anchor_implicit", _case_two_services_implicit),
     ("two_services_same_anchor_after_wording", _case_two_services_after_wording),
-    ("same_visit_natural_phrase", _case_repeat_natural_phrase),
-    ("book_then_buy_same_service_dependency", _case_book_then_buy_same_service),
-    ("service_then_other_package_same_anchor", _case_service_then_other_package),
-    ("package_then_other_service_same_anchor", _case_package_then_other_service),
+    ("same_visit_natural_phrase", _case_natural),
+    ("book_then_buy_same_service_dependency", _case_book_then_buy_same),
+    ("service_then_other_package_same_anchor", lambda db, ws: _compound_other_package(db, ws, package_first=False)),
+    ("package_then_other_service_same_anchor", lambda db, ws: _compound_other_package(db, ws, package_first=True)),
 ]
 
 
