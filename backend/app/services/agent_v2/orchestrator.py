@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from langchain_core.messages import BaseMessage
@@ -44,14 +44,17 @@ from app.services.agent_v2.state_executor import (
 from app.services.agent_v2.state_persistence import (
     PersistedActiveTask,
     cancel_active_task,
+    complete_active_task,
     load_active_task,
     save_active_task,
 )
 
+V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
+
 
 @dataclass(frozen=True)
 class PendingV2Write:
-    """Verified write boundary that this isolated runtime deliberately does not execute."""
+    """Verified write boundary returned when no real executor is supplied."""
 
     step: PlanStep
     reads: ReadExecutionBundle
@@ -111,25 +114,38 @@ def _persist_final_task(
     initial: PersistedActiveTask | None,
     final_task: ActiveTaskState | None,
     cancelled_existing_task: bool,
+    completed_existing_task_result: dict[str, object] | None,
 ) -> PersistedActiveTask | None:
     initial_task = initial.active_task if initial is not None else None
-    if final_task == initial_task:
+    if final_task == initial_task and completed_existing_task_result is None:
         return initial
 
     if final_task is None:
         if initial is not None:
-            if not cancelled_existing_task:
-                raise RuntimeError(
-                    "V2 runtime may clear persisted state only through an explicit active-task cancellation."
+            if completed_existing_task_result is not None:
+                complete_active_task(
+                    db,
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    patient_id=patient_id,
+                    expected=initial,
+                    run_id=run_id,
+                    result=completed_existing_task_result,
                 )
-            cancel_active_task(
-                db,
-                workspace_id=workspace_id,
-                conversation_id=conversation_id,
-                patient_id=patient_id,
-                expected=initial,
-                run_id=run_id,
-            )
+            elif cancelled_existing_task:
+                cancel_active_task(
+                    db,
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    patient_id=patient_id,
+                    expected=initial,
+                    run_id=run_id,
+                )
+            else:
+                raise RuntimeError(
+                    "V2 runtime may clear persisted state only through an explicit cancellation "
+                    "or a completed terminal write."
+                )
         return None
 
     return save_active_task(
@@ -157,16 +173,14 @@ def orchestrate_v2_turn(
     catalog: dict[str, Any] | None = None,
     adapter: ClinicAdapter | None = None,
     turn_id: str | None = None,
+    write_executor: V2WriteExecutor | None = None,
 ) -> V2OrchestratedTurn:
-    """Run one isolated, stateful V2 turn without executing any business write.
+    """Run one stateful V2 turn with an optional verified-write executor.
 
-    This coordinator owns no semantic or business rules. It loads durable V2 task state before
-    interpretation, delegates language understanding to the structured interpreter, executes only
-    deterministic reads/state transitions, persists the final verified task transition once, and
-    renders a customer reply only when no real write is still required.
-
-    The caller owns the outer database transaction. This function never commits and is not wired
-    into production chat/customer delivery.
+    With no executor this preserves the isolated/shadow boundary and returns the first
+    ``PendingV2Write`` without mutating clinic business data. Production may supply a
+    real executor; successful writes are converted to verified outcomes and compound
+    operations continue in order. The caller owns the outer database transaction.
     """
     persisted = load_active_task(
         db,
@@ -200,6 +214,16 @@ def orchestrate_v2_turn(
 
     if plan.handoff_category is not None:
         outcome = build_handoff_outcome(plan)
+        if persisted is not None:
+            cancel_active_task(
+                db,
+                workspace_id=workspace.id,
+                conversation_id=conversation_id,
+                patient_id=patient.id,
+                expected=persisted,
+                run_id=run_id,
+                reason="human_handoff_requested",
+            )
         reply, model = compose_v2_customer_reply(
             clinic_name=clinic_name,
             timezone_name=timezone_name,
@@ -214,8 +238,8 @@ def orchestrate_v2_turn(
             outcomes=(outcome,),
             reply=reply,
             responder_model=model,
-            active_task=initial_task,
-            persisted_task=persisted,
+            active_task=None,
+            persisted_task=None,
             pending_write=None,
         )
 
@@ -233,6 +257,7 @@ def orchestrate_v2_turn(
     outcomes: list[TurnOutcome] = []
     pending_write: PendingV2Write | None = None
     cancelled_existing_task = False
+    completed_existing_task_result: dict[str, object] | None = None
 
     for planned_step in plan.steps:
         operation = _operation_for_step(understanding, planned_step)
@@ -290,7 +315,29 @@ def orchestrate_v2_turn(
         current_task = transition.active_task
 
         if advanced.disposition == "write_ready":
-            pending_write = PendingV2Write(step=advanced, reads=reads)
+            if write_executor is None:
+                pending_write = PendingV2Write(step=advanced, reads=reads)
+                traces.append(
+                    V2RuntimeStepTrace(
+                        operation_index=advanced.operation_index,
+                        operation_type=advanced.operation_type,
+                        disposition_before=planned_step.disposition,
+                        disposition_after=advanced.disposition,
+                        read_kinds=tuple(result.kind for result in reads.results),
+                        pending_write=True,
+                    )
+                )
+                break
+
+            action_result = write_executor(advanced)
+            outcome = build_step_outcome(
+                advanced,
+                turn=understanding,
+                semantic_context=semantic_context,
+                reads=reads if reads.results else None,
+                action_result=action_result,
+                active_task_summary=_task_dict(current_task),
+            )
             traces.append(
                 V2RuntimeStepTrace(
                     operation_index=advanced.operation_index,
@@ -298,9 +345,26 @@ def orchestrate_v2_turn(
                     disposition_before=planned_step.disposition,
                     disposition_after=advanced.disposition,
                     read_kinds=tuple(result.kind for result in reads.results),
-                    pending_write=True,
+                    outcome=outcome,
                 )
             )
+            outcomes.append(outcome)
+
+            if outcome.status == "completed":
+                write_kind = advanced.write_intent.kind if advanced.write_intent is not None else None
+                if current_task is not None and current_task.task_type == write_kind:
+                    if persisted is not None and persisted.active_task.task_type == current_task.task_type:
+                        completed_existing_task_result = dict(action_result)
+                    current_task = None
+                continue
+
+            if outcome.status == "handoff":
+                if current_task is not None:
+                    cancelled_existing_task = persisted is not None
+                    current_task = None
+                break
+
+            # Later writes are safe only when each previous write completed successfully.
             break
 
         outcome = build_step_outcome(
@@ -322,6 +386,11 @@ def orchestrate_v2_turn(
             )
         )
         outcomes.append(outcome)
+        if outcome.status == "handoff":
+            if current_task is not None:
+                cancelled_existing_task = persisted is not None
+                current_task = None
+            break
 
     persisted_after = _persist_final_task(
         db=db,
@@ -332,6 +401,7 @@ def orchestrate_v2_turn(
         initial=persisted,
         final_task=current_task,
         cancelled_existing_task=cancelled_existing_task,
+        completed_existing_task_result=completed_existing_task_result,
     )
 
     if pending_write is not None:
