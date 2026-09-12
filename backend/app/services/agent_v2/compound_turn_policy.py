@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.services.agent_v2.planner import PlanStep, TurnPlan
+from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 
 _PACKAGE_DEPENDENCY_FACT = "depends_on_package_purchase_operation_index"
 _COMPOUND_SEQUENCE_FACT = "compound_visit_sequenced"
+_COMPOUND_SEQUENCE_INDEX_FACT = "compound_visit_sequence_index"
+_COMPOUND_ANCHOR_FACT = "compound_visit_anchor_local"
 
 
 def _write_kind(step: PlanStep) -> str | None:
@@ -120,7 +124,14 @@ def _exact_anchor(step: PlanStep) -> datetime | None:
         return None
 
 
-def _retime_booking(step: PlanStep, *, local_start: datetime, anchor: datetime) -> PlanStep:
+def _retime_booking(
+    step: PlanStep,
+    *,
+    local_start: datetime,
+    anchor: datetime,
+    sequence_index: int,
+    mode: str,
+) -> PlanStep:
     assert step.write_intent is not None
     original_params = dict(step.write_intent.parameters)
     raw_date = original_params.get("date")
@@ -129,11 +140,17 @@ def _retime_booking(step: PlanStep, *, local_start: datetime, anchor: datetime) 
     assert isinstance(raw_time, dict)
     date_constraint = {
         **raw_date,
+        "mode": "exact",
         "start_date": local_start.date().isoformat(),
+        "end_date": None,
     }
     time_constraint = {
         **raw_time,
+        "mode": mode,
         "start_time": local_start.time().isoformat(timespec="minutes"),
+        "end_time": None,
+        "start_time_ambiguity": "none",
+        "end_time_ambiguity": "none",
     }
     parameters = {
         **original_params,
@@ -162,8 +179,10 @@ def _retime_booking(step: PlanStep, *, local_start: datetime, anchor: datetime) 
                 **step.facts,
                 "date": date_constraint,
                 "time": time_constraint,
+                "exact_time_requested": mode == "exact",
                 _COMPOUND_SEQUENCE_FACT: True,
-                "compound_visit_anchor_local": anchor.isoformat(timespec="minutes"),
+                _COMPOUND_SEQUENCE_INDEX_FACT: sequence_index,
+                _COMPOUND_ANCHOR_FACT: anchor.isoformat(timespec="minutes"),
             },
         }
     )
@@ -200,11 +219,13 @@ def _sequence_shared_anchor_bookings(
             continue
 
         cursor = anchor
-        for step, duration in zip(ordered, durations, strict=True):
+        for sequence_index, (step, duration) in enumerate(zip(ordered, durations, strict=True)):
             replacements[step.operation_index] = _retime_booking(
                 step,
                 local_start=cursor,
                 anchor=anchor,
+                sequence_index=sequence_index,
+                mode="exact" if sequence_index == 0 else "after",
             )
             cursor += timedelta(minutes=duration)
 
@@ -220,11 +241,192 @@ def normalize_compound_turn_plan(
 
     Package purchases are ordered before bookings that canonically depend on the same
     service/device entitlement. Multiple exact bookings sharing one requested local
-    start are treated as one visit anchor and placed back-to-back using canonical
-    service durations; every shifted booking is still verified against availability.
+    start are treated as one visit anchor. The first remains exact; later bookings are
+    converted to "first available after" constraints. Runtime re-reads availability
+    after each successful write, so buffers, doctor/device conflicts, and appointments
+    created earlier in the same turn are authoritative.
     """
     if plan.handoff_category is not None or len(plan.steps) < 2:
         return plan
     steps = _tag_and_order_package_dependencies(list(plan.steps))
     steps = _sequence_shared_anchor_bookings(steps, catalog=catalog)
     return plan.model_copy(update={"steps": steps})
+
+
+def compound_sequence_index(step: PlanStep) -> int | None:
+    raw = step.facts.get(_COMPOUND_SEQUENCE_INDEX_FACT)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def compound_anchor_key(step: PlanStep) -> str | None:
+    value = step.facts.get(_COMPOUND_ANCHOR_FACT)
+    return str(value) if value not in (None, "") else None
+
+
+def apply_compound_runtime_cursor(
+    step: PlanStep,
+    *,
+    previous_end_at: datetime | None,
+    timezone_name: str,
+) -> PlanStep:
+    """Move a later visit booking to start searching at the actual prior session end."""
+    sequence_index = compound_sequence_index(step)
+    if sequence_index is None or sequence_index < 1 or previous_end_at is None:
+        return step
+    anchor_raw = compound_anchor_key(step)
+    if anchor_raw is None:
+        return step
+    try:
+        anchor = datetime.fromisoformat(anchor_raw)
+        local_cursor = previous_end_at.astimezone(ZoneInfo(timezone_name))
+    except (ValueError, TypeError):
+        return step
+    return _retime_booking(
+        step,
+        local_start=local_cursor.replace(tzinfo=None),
+        anchor=anchor,
+        sequence_index=sequence_index,
+        mode="after",
+    )
+
+
+def _availability_results(reads: ReadExecutionBundle) -> list[tuple[int, ReadResult]]:
+    return [
+        (index, result)
+        for index, result in enumerate(reads.results)
+        if result.kind == "availability"
+    ]
+
+
+def _slot_start(slot: dict[str, object]) -> datetime:
+    return datetime.fromisoformat(str(slot["start_at"]))
+
+
+def _clarification_field(step: PlanStep) -> str:
+    params = _write_parameters(step)
+    if "doctor_id" not in params:
+        return "doctor"
+    if bool(step.facts.get("service_requires_laser_device")) and "device_key" not in params:
+        return "device"
+    return "selection"
+
+
+def resolve_compound_followup_after_reads(
+    step: PlanStep,
+    reads: ReadExecutionBundle,
+) -> tuple[PlanStep, ReadExecutionBundle, bool]:
+    """Promote a later compound booking from the earliest live verified slot.
+
+    This runs only for sequence items after the first. Availability is read after
+    earlier writes in the same transaction, so a pre-existing or just-created conflict
+    automatically pushes the booking to the next valid slot instead of overlapping it.
+    """
+    sequence_index = compound_sequence_index(step)
+    if (
+        sequence_index is None
+        or sequence_index < 1
+        or _write_kind(step) != "booking"
+        or step.write_intent is None
+    ):
+        return step, reads, False
+
+    availability_results = _availability_results(reads)
+    if not availability_results:
+        return step, reads, False
+    result_index, availability = availability_results[0]
+    raw_slots = availability.payload.get("slots")
+    slots = [dict(slot) for slot in raw_slots if isinstance(slot, dict)] if isinstance(raw_slots, list) else []
+    if not slots:
+        blocked = step.model_copy(
+            update={
+                "disposition": "blocked",
+                "response_goal": "no_availability",
+            }
+        )
+        return blocked, reads, True
+
+    earliest_start = min(_slot_start(slot) for slot in slots)
+    earliest = [slot for slot in slots if _slot_start(slot) == earliest_start]
+    if len(earliest) != 1:
+        field = _clarification_field(step)
+        clarified = step.model_copy(
+            update={
+                "disposition": "clarify",
+                "clarification_field": field,
+                "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
+            }
+        )
+        return clarified, reads, True
+
+    selected = earliest[0]
+    start_local = datetime.fromisoformat(str(selected["start_local"]))
+    exact_date = {
+        "mode": "exact",
+        "start_date": start_local.date().isoformat(),
+        "end_date": None,
+    }
+    exact_time = {
+        "mode": "exact",
+        "start_time": start_local.strftime("%H:%M"),
+        "end_time": None,
+        "start_time_ambiguity": "none",
+        "end_time_ambiguity": "none",
+    }
+    parameters = {
+        **step.write_intent.parameters,
+        "branch_id": selected["branch_id"],
+        "service_id": selected["service_id"],
+        "doctor_id": selected["doctor_id"],
+        "start_at": selected["start_at"],
+        "date": exact_date,
+        "time": exact_time,
+    }
+    device_key = selected.get("laser_device_key")
+    if device_key:
+        parameters["device_key"] = device_key
+
+    narrowed_results = list(reads.results)
+    narrowed_payload = {
+        **availability.payload,
+        "slots": [selected],
+        "matching_slot_count": 1,
+    }
+    narrowed_results[result_index] = availability.model_copy(update={"payload": narrowed_payload})
+    narrowed_reads = reads.model_copy(update={"results": narrowed_results})
+
+    advanced = step.model_copy(
+        update={
+            "disposition": "write_ready",
+            "write_intent": step.write_intent.model_copy(update={"parameters": parameters}),
+            "response_goal": "booking_completed",
+            "facts": {
+                **step.facts,
+                "date": exact_date,
+                "time": exact_time,
+                "exact_time_requested": True,
+                "compound_visit_selected_start_local": start_local.isoformat(),
+            },
+        }
+    )
+    return advanced, narrowed_reads, True
+
+
+def completed_compound_booking_end(reads: ReadExecutionBundle) -> datetime | None:
+    """Return the verified selected slot end for the cursor after a successful write."""
+    for _index, result in _availability_results(reads):
+        raw_slots = result.payload.get("slots")
+        if not isinstance(raw_slots, list) or len(raw_slots) != 1:
+            continue
+        slot = raw_slots[0]
+        if not isinstance(slot, dict) or not slot.get("end_at"):
+            continue
+        try:
+            return datetime.fromisoformat(str(slot["end_at"]))
+        except ValueError:
+            continue
+    return None
