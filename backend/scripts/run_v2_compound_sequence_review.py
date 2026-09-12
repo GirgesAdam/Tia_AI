@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict
 from datetime import UTC, timedelta
 from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, select
@@ -19,10 +20,12 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
 from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.workspace import Workspace
+from app.services.appointment_creation import create_appointment_operation
 from app.services.package_offers import list_package_offers
 from scripts import run_v2_package_booking_review as base
 
 _PAIR_CACHE: dict[str, tuple[dict[str, object], dict[str, object], dict[str, object] | None]] = {}
+_OCCUPIED_PAIR_CACHE: tuple[dict[str, object], dict[str, object]] | None = None
 
 
 def _args() -> argparse.Namespace:
@@ -92,6 +95,21 @@ def _local_time(spec: dict[str, object]) -> str:
     return spec["start_at"].astimezone(ZoneInfo(str(spec["timezone"]))).strftime("%H:%M")
 
 
+def _catalog_combos(catalog: dict[str, object], branch_id: str):
+    services = [
+        row
+        for row in (catalog.get("services") or [])
+        if isinstance(row, dict) and row.get("id")
+    ]
+    combos: list[tuple[dict[str, object], dict[str, object], str | None, str | None]] = []
+    for service in services:
+        service_id = str(service["id"])
+        for device_key, device_name in _device_rows(service):
+            for doctor in _doctor_rows(catalog, service_id, branch_id):
+                combos.append((service, doctor, device_key, device_name))
+    return combos
+
+
 def _find_sequence_pair(db: Session, workspace: Workspace, *, package_position: str | None = None):
     cache_key = package_position or "none"
     cached = _PAIR_CACHE.get(cache_key)
@@ -99,11 +117,6 @@ def _find_sequence_pair(db: Session, workspace: Workspace, *, package_position: 
         return cached
 
     catalog = build_clinic_catalog(db, workspace)
-    services = [
-        row
-        for row in (catalog.get("services") or [])
-        if isinstance(row, dict) and row.get("id")
-    ]
     branch_id = str(workspace.primary_branch_id or "")
     if not branch_id:
         raise RuntimeError("Staging workspace has no primary branch")
@@ -123,13 +136,7 @@ def _find_sequence_pair(db: Session, workspace: Workspace, *, package_position: 
         }
         for offer in offers
     }
-
-    combos: list[tuple[dict[str, object], dict[str, object], str | None, str | None]] = []
-    for service in services:
-        service_id = str(service["id"])
-        for device_key, device_name in _device_rows(service):
-            for doctor in _doctor_rows(catalog, service_id, branch_id):
-                combos.append((service, doctor, device_key, device_name))
+    combos = _catalog_combos(catalog, branch_id)
 
     for offset in range(1, 15):
         day = today + timedelta(days=offset)
@@ -204,6 +211,86 @@ def _find_sequence_pair(db: Session, workspace: Workspace, *, package_position: 
     raise RuntimeError(f"No sequential staging fixture found package_position={package_position}")
 
 
+def _find_occupied_sequence_pair(db: Session, workspace: Workspace):
+    global _OCCUPIED_PAIR_CACHE
+    if _OCCUPIED_PAIR_CACHE is not None:
+        return _OCCUPIED_PAIR_CACHE
+
+    catalog = build_clinic_catalog(db, workspace)
+    branch_id = str(workspace.primary_branch_id or "")
+    if not branch_id:
+        raise RuntimeError("Staging workspace has no primary branch")
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    today = base.datetime.now(UTC).date()
+    combos = _catalog_combos(catalog, branch_id)
+
+    for offset in range(1, 15):
+        day = today + timedelta(days=offset)
+        available: list[tuple[dict[str, object], dict[str, object], str | None, str | None, object]] = []
+        for service, doctor, device_key, device_name in combos:
+            availability = adapter.get_availability(
+                AvailabilityRequest(
+                    branch_id=branch_id,
+                    service_id=str(service["id"]),
+                    booking_date=day,
+                    doctor_id=str(doctor["id"]),
+                    laser_device_key=device_key,
+                )
+            )
+            if availability.slots:
+                available.append((service, doctor, device_key, device_name, availability))
+
+        second_index: dict[object, list[tuple]] = {}
+        for row in available:
+            _service, _doctor, _device_key, _device_name, availability = row
+            for slot in availability.slots:
+                second_index.setdefault(slot.start_at, []).append((*row, slot))
+
+        for first_service, first_doctor, first_device_key, first_device_name, first_availability in available:
+            first_id = str(first_service["id"])
+            for first_slot in first_availability.slots[:10]:
+                for second_row in second_index.get(first_slot.end_at, []):
+                    (
+                        second_service,
+                        second_doctor,
+                        second_device_key,
+                        second_device_name,
+                        second_availability,
+                        second_slot,
+                    ) = second_row
+                    if str(second_service["id"]) == first_id:
+                        continue
+                    if str(second_doctor["id"]) == str(first_doctor["id"]):
+                        continue
+                    if (
+                        first_device_key is not None
+                        and second_device_key is not None
+                        and first_device_key == second_device_key
+                    ):
+                        continue
+                    if not any(slot.start_at > second_slot.start_at for slot in second_availability.slots):
+                        continue
+                    first = _spec(
+                        first_service,
+                        first_doctor,
+                        first_availability,
+                        first_slot,
+                        first_device_key,
+                        first_device_name,
+                    )
+                    second = _spec(
+                        second_service,
+                        second_doctor,
+                        second_availability,
+                        second_slot,
+                        second_device_key,
+                        second_device_name,
+                    )
+                    _OCCUPIED_PAIR_CACHE = (first, second)
+                    return _OCCUPIED_PAIR_CACHE
+    raise RuntimeError("No occupied-slot compound fixture with distinct resources was found")
+
+
 def _appointments(db: Session, patient_id):
     return list(
         db.scalars(
@@ -243,7 +330,7 @@ def _case_two_services_implicit(db: Session, workspace: Workspace):
     result = _run_one_message(db, workspace, patient, "two_services_same_anchor_implicit", message)
     result.db_checks += [
         f"requested_anchor={first['start_at'].isoformat()}",
-        f"expected_second_start={second['start_at'].isoformat()}",
+        f"naive_second_start={second['start_at'].isoformat()}",
     ]
     return result
 
@@ -259,7 +346,7 @@ def _case_two_services_after_wording(db: Session, workspace: Workspace):
     result = _run_one_message(db, workspace, patient, "two_services_same_anchor_after_wording", message)
     result.db_checks += [
         f"expected_first_start={first['start_at'].isoformat()}",
-        f"expected_second_start={second['start_at'].isoformat()}",
+        f"naive_second_start={second['start_at'].isoformat()}",
     ]
     return result
 
@@ -275,7 +362,7 @@ def _case_natural(db: Session, workspace: Workspace):
     result = _run_one_message(db, workspace, patient, "same_visit_natural_phrase", message)
     result.db_checks += [
         f"expected_first_start={first['start_at'].isoformat()}",
-        f"expected_second_start={second['start_at'].isoformat()}",
+        f"naive_second_start={second['start_at'].isoformat()}",
     ]
     return result
 
@@ -344,8 +431,73 @@ def _compound_other_package(db: Session, workspace: Workspace, *, package_first:
     result.db_checks += [
         f"package_count={len(packages)}",
         f"expected_first_start={first['start_at'].isoformat()}",
-        f"expected_second_start={second['start_at'].isoformat()}",
+        f"naive_second_start={second['start_at'].isoformat()}",
         f"usage_links={[(str(row.appointment_id), str(row.patient_package_id), row.status) for row in usages]}",
+    ]
+    return result
+
+
+def _case_second_naive_slot_is_occupied(db: Session, workspace: Workspace):
+    patient = base._new_patient(db, workspace, "seq-occupied-main")
+    blocker_patient = base._new_patient(db, workspace, "seq-occupied-blocker")
+    first, second = _find_occupied_sequence_pair(db, workspace)
+    branch_id = workspace.primary_branch_id
+    if branch_id is None:
+        raise RuntimeError("Staging workspace has no primary branch")
+
+    blocker = create_appointment_operation(
+        db,
+        workspace=workspace,
+        patient_id=blocker_patient.id,
+        branch_id=branch_id,
+        doctor_id=UUID(str(second["doctor_id"])),
+        service_id=UUID(str(second["service_id"])),
+        requested_start_at=second["start_at"],
+        created_by_user_id=None,
+        patient_package_id=None,
+        source="ai",
+        laser_device_key=str(second["device_key"]) if second.get("device_key") else None,
+        idempotency_key=f"v2-compound-blocker:{blocker_patient.id}:{second['start_at'].isoformat()}",
+        actor_type="ai",
+    )
+
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    after_blocker = adapter.get_availability(
+        AvailabilityRequest(
+            branch_id=str(branch_id),
+            service_id=str(second["service_id"]),
+            booking_date=second["day"],
+            doctor_id=str(second["doctor_id"]),
+            laser_device_key=str(second["device_key"]) if second.get("device_key") else None,
+        )
+    )
+    next_slot = next(
+        (slot for slot in after_blocker.slots if slot.start_at > second["start_at"]),
+        None,
+    )
+    if next_slot is None:
+        raise RuntimeError("Occupied compound fixture has no later verified slot")
+
+    anchor = _local_time(first)
+    message = (
+        f"احجزلي {_service_phrase(first)} وبعدها {_service_phrase(second)} يوم {first['day'].isoformat()} "
+        f"من الساعة {anchor}. عايزهم ورا بعض ونفذ الحجزين"
+    )
+    result = _run_one_message(
+        db,
+        workspace,
+        patient,
+        "second_compound_slot_occupied_shift_next",
+        message,
+    )
+    result.db_checks += [
+        f"blocker_appointment_id={blocker.id}",
+        f"blocked_naive_second_start={second['start_at'].isoformat()}",
+        f"expected_next_verified_start={next_slot.start_at.isoformat()}",
+        f"first_resource_doctor={first['doctor_id']}",
+        f"second_resource_doctor={second['doctor_id']}",
+        f"first_device={first.get('device_key')}",
+        f"second_device={second.get('device_key')}",
     ]
     return result
 
@@ -357,6 +509,7 @@ CASES = [
     ("book_then_buy_same_service_dependency", _case_book_then_buy_same),
     ("service_then_other_package_same_anchor", lambda db, ws: _compound_other_package(db, ws, package_first=False)),
     ("package_then_other_service_same_anchor", lambda db, ws: _compound_other_package(db, ws, package_first=True)),
+    ("second_compound_slot_occupied_shift_next", _case_second_naive_slot_is_occupied),
 ]
 
 
