@@ -190,7 +190,10 @@ class TurnOperation(StrictContractModel):
             "to create/reserve a new appointment now, even when required booking details are still "
             "missing and Python will need to clarify them. Do not downgrade an incomplete booking "
             "request to availability. Use availability only when the customer is asking to inspect "
-            "possible appointment options without requesting creation of a new appointment."
+            "possible appointment options without requesting creation of a new appointment. Buying "
+            "a package and creating an appointment are separate actions: a request to buy a package "
+            "and book its first session requires a buy_package operation plus a separate book "
+            "operation; never encode the appointment only inside buy_package."
         )
     )
     entities: TurnEntities
@@ -215,7 +218,16 @@ class TurnOperation(StrictContractModel):
 class TiaTurnUnderstanding(StrictContractModel):
     """The only semantic result required from the V2 language-understanding model."""
 
-    operations: list[TurnOperation] = Field(default_factory=list)
+    operations: list[TurnOperation] = Field(
+        default_factory=list,
+        description=(
+            "Preserve every independently requested action as its own operation in customer order. "
+            "A package purchase does not include appointment creation. If the customer asks to buy "
+            "a package and book its first session, emit both buy_package and book. If the same turn "
+            "also requests another appointment, emit that additional book operation too. Do not "
+            "collapse purchase-plus-booking or multiple requested appointments into fewer actions."
+        ),
+    )
     safety_signals: list[SafetySignal] = Field(default_factory=list)
 
     @model_validator(mode="after")
