@@ -296,3 +296,27 @@ def test_different_requested_anchors_are_not_retimed() -> None:
 
     assert [str(_time(step)["start_time"]) for step in normalized.steps] == ["12:00", "14:00"]
     assert all("compound_visit_sequenced" not in step.facts for step in normalized.steps)
+
+
+def test_package_first_keeps_dependent_and_other_booking_in_same_compound_visit() -> None:
+    plan = TurnPlan(
+        steps=[
+            _purchase(0, "service-a", device_key="prime"),
+            _booking(1, "service-a", device_key="prime"),
+            _booking(2, "service-b", device_key="candela"),
+        ]
+    )
+
+    normalized = normalize_compound_turn_plan(plan, catalog=_catalog())
+
+    assert [step.operation_index for step in normalized.steps] == [0, 1, 2]
+    bookings = [step for step in normalized.steps if step.write_intent and step.write_intent.kind == "booking"]
+    assert len(bookings) == 2
+    dependent, other = bookings
+    assert dependent.write_intent is not None
+    assert dependent.write_intent.parameters["package_usage"] == "use_existing"
+    assert dependent.facts["depends_on_package_purchase_operation_index"] == 0
+    assert _time(dependent)["mode"] == "exact"
+    assert _time(dependent)["start_time"] == "12:00"
+    assert _time(other)["mode"] == "after"
+    assert _time(other)["start_time"] == "12:30"
