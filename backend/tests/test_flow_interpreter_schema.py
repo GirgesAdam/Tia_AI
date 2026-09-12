@@ -1,5 +1,4 @@
-from app.agents.flow_interpreter import FlowTurnDecision
-from app.agents.semantic_router import empty_entity_hints
+from app.agents.turn_models import FlowTurnDecision, empty_entity_hints
 
 
 def test_flow_turn_can_represent_structured_selection_without_keywords() -> None:

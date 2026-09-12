@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
-from app.agents.flow_interpreter import FlowTurnDecision
-from app.agents.semantic_router import SemanticEntityHints
+from app.agents.turn_models import FlowTurnDecision, SemanticEntityHints
 from app.services.agent_chat import _merge_flow_entity_state, _turn_is_local_side_read
 
 

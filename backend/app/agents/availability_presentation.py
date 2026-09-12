@@ -48,6 +48,31 @@ def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
     return metadata.device_key or "", metadata.device_name or ""
 
 
+def _regular_start_range(
+    intervals: list[tuple[datetime, datetime]],
+) -> tuple[datetime, datetime] | None:
+    """Summarize a regular sequence of available start-times without hiding real gaps.
+
+    Example: 18:00, 19:00, 20:00 becomes the customer-facing start range 18:00–20:00.
+    We require at least three starts with one consistent cadence no larger than one hour. A missing
+    middle slot breaks the cadence, so genuinely interrupted availability remains split.
+    """
+
+    starts = sorted({start for start, _end in intervals})
+    if len(starts) < 3:
+        return None
+    deltas = [
+        int((current - previous).total_seconds())
+        for previous, current in zip(starts, starts[1:], strict=False)
+    ]
+    if not deltas or len(set(deltas)) != 1:
+        return None
+    cadence = deltas[0]
+    if cadence <= 0 or cadence > 60 * 60:
+        return None
+    return starts[0], starts[-1]
+
+
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
@@ -75,6 +100,26 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
                 continue
             if end > merged[-1][1]:
                 merged[-1][1] = end
+
+        # Some booking engines expose a regular grid of valid appointment start-times rather than
+        # one continuous free interval. Presenting 18:00, 19:00, 20:00 separately is noisy; when the
+        # cadence itself proves there is no missing grid point, expose the compact start range 18–20.
+        regular_range = _regular_start_range(intervals) if len(merged) > 1 else None
+        if regular_range is not None:
+            start, end = regular_range
+            windows.append(
+                {
+                    "doctor_id": doctor_id or None,
+                    "doctor_name": doctor_name,
+                    "laser_device_key": device_key or None,
+                    "laser_device_name": device_name or None,
+                    "start_local": start.isoformat(),
+                    "end_local": end.isoformat(),
+                    "start_time_24h": start.strftime("%H:%M"),
+                    "end_time_24h": end.strftime("%H:%M"),
+                }
+            )
+            continue
 
         for start, end in merged:
             windows.append(

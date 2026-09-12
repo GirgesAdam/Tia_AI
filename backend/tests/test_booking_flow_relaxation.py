@@ -1,8 +1,7 @@
 from types import SimpleNamespace
 
-from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_actions import format_verified_tool_fallback
-from app.agents.semantic_router import SemanticEntityHints
+from app.agents.turn_models import FlowTurnDecision, SemanticEntityHints
 from app.services.agent_chat import _merge_flow_entity_state
 
 
@@ -80,7 +79,6 @@ def test_omitted_fields_do_not_clear_known_requirements_without_semantic_clear()
     turn = _turn(hints=_hints(), clear_entity_fields=[])
 
     assert _merge_flow_entity_state(existing, turn) == existing
-
 
 
 def test_rejecting_presented_date_advances_next_availability_search() -> None:
@@ -176,7 +174,6 @@ def test_flow_decision_defaults_to_no_clear_for_backward_compatibility() -> None
         reason="continue",
     )
     assert turn.clear_entity_fields == []
-
 
 
 def test_exact_unavailable_time_handles_adapter_slots(monkeypatch) -> None:

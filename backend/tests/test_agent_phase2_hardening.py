@@ -7,12 +7,12 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.capability_policy import resolve_capability_policy
-from app.agents.flow_interpreter import FlowTurnDecision
-from app.agents.semantic_router import (
+from app.agents.turn_interpreter import _history_excerpt as turn_history_excerpt
+from app.agents.turn_models import (
+    FlowTurnDecision,
     SemanticCapabilityDecision,
     SemanticEntityHints,
 )
-from app.agents.turn_interpreter import _history_excerpt as turn_history_excerpt
 from app.services import agent_chat
 
 

@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     agent_max_tool_rounds: int = Field(default=2, ge=1, le=4)
     agent_prefetch_reads_enabled: bool = True
 
+    # Agent Core V2 is opt-in until cutover is explicitly enabled. Both HTTP and
+    # channel turns pass through the same live facade, so one flag controls them.
+    agent_v2_live_enabled: bool = False
+
     # PostgreSQL owns outbound retry state. n8n performs one provider attempt per
     # claimed dispatch, then reports the real provider result back here.
     channel_dispatch_max_attempts: int = Field(default=5, ge=1, le=20)

@@ -5,10 +5,7 @@ from app.agents.capability_policy import (
     authorize_tool_execution,
     resolve_capability_policy,
 )
-from app.agents.semantic_router import (
-    SemanticCapabilityDecision,
-    empty_entity_hints,
-)
+from app.agents.turn_models import SemanticCapabilityDecision, empty_entity_hints
 
 
 def decision(**kwargs):

@@ -6,9 +6,8 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 
 from app.agents import turn_interpreter
-from app.agents.flow_interpreter import FlowTurnDecision
 from app.agents.semantic_actions import format_verified_tool_fallback
-from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
+from app.agents.turn_models import FlowTurnDecision, SemanticCapabilityDecision, SemanticEntityHints
 from app.services.agent_chat import _uuid_from_metadata
 
 

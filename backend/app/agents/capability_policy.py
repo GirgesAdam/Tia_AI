@@ -3,11 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from app.agents.semantic_router import (
-    HandoffCategory,
-    Priority,
-    SemanticCapabilityDecision,
-)
+from app.agents.turn_models import HandoffCategory, Priority, SemanticCapabilityDecision
 
 CAPABILITY_TOOL_POLICY: dict[str, frozenset[str]] = {
     "service_information": frozenset({"search_services"}),

@@ -1,7 +1,4 @@
-from app.agents.semantic_router import (
-    SemanticCapabilityDecision,
-    empty_entity_hints,
-)
+from app.agents.turn_models import SemanticCapabilityDecision, empty_entity_hints
 
 
 def route(*, capabilities, risk_flags=None):

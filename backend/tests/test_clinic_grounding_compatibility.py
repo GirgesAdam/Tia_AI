@@ -2,7 +2,7 @@ from app.agents.clinic_grounding import (
     _annotate_catalog_relationships,
     validate_grounded_entity_ids,
 )
-from app.agents.semantic_router import SemanticEntityHints
+from app.agents.turn_models import SemanticEntityHints
 
 
 def _hints(**updates: object) -> SemanticEntityHints:

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from app.agents.capability_policy import resolve_capability_policy
 from app.agents.clinic_grounding import grounded_catalog_facts, validate_grounded_entity_ids
-from app.agents.semantic_router import SemanticCapabilityDecision, SemanticEntityHints
+from app.agents.turn_models import SemanticCapabilityDecision, SemanticEntityHints
 from app.services import agent_chat
 
 SERVICE_UNDERARM = "11111111-1111-4111-8111-111111111111"

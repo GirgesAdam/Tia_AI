@@ -16,7 +16,8 @@ from app.database.session import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.schemas.agent import AgentChatRequest, AgentChatResponse
-from app.services.agent_chat import AgentChatError, run_agent_chat
+from app.services.agent_chat import AgentChatError
+from app.services.agent_v2.live_chat import run_agent_chat
 from app.services.conversation_flows import FlowStateConflictError
 
 router = APIRouter()

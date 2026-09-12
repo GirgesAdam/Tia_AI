@@ -23,6 +23,16 @@ const DAYS = [
   { weekday: 4, label: "الجمعة" },
 ] as const;
 
+const KNOWLEDGE_EXAMPLE = `نحن عيادة متخصصة في الليزر والعناية بالبشرة والتجميل غير الجراحي. نقدم إزالة الشعر بالليزر لمناطق الجسم المختلفة، جلسات هيدرافيشل وتنظيف البشرة، جلسات فراكشنال، واستشارات جلدية وتجميلية حسب احتياج كل حالة.
+
+في إزالة الشعر بالليزر نستخدم جهازي Candela Gentle وPrime Lase. نستخدم Candela غالبًا للحالات التي تحتاج نبضات دقيقة مع نظام تبريد أثناء الجلسة، بينما Prime Lase مناسب أيضًا لإزالة الشعر ويتميز بسرعة تغطية المساحات الكبيرة. اختيار الجهاز الأنسب يتم حسب نوع البشرة والشعر والمنطقة وتقييم المختص، وليس لأن جهازًا واحدًا أفضل لكل الحالات.
+
+الهيدرافيشل جلسة عناية بالبشرة تساعد على التنظيف والترطيب وتحسين مظهر البشرة. الفراكشنال يستخدم لتحسين ملمس البشرة وآثار الحبوب والمسام حسب تقييم الطبيب وملاءمة الحالة.
+
+قبل جلسة إزالة الشعر بالليزر يُفضّل حلاقة المنطقة بالموس وتجنب إزالة الشعر من الجذور بالشمع أو الحلاوة قبل الجلسة. لو في التهاب شديد أو تهيج بالجلد أو استخدام أدوية أو علاجات جلدية حديثة، يجب إبلاغ المختص قبل الجلسة.
+
+لو العميل غير متأكد من الخدمة أو الجهاز الأنسب له، نرشح له حجز استشارة أو تقييم مع المختص قبل اختيار الجلسة.`;
+
 const statusLabel: Record<HistoricalBatch["status"], string> = {
   preview_ready: "تم الفحص",
   importing: "جاري الاستيراد",
@@ -80,7 +90,7 @@ export function ClinicSettingsPanel({
             {DAYS.map(({ weekday, label }) => {
               const row = byDay.get(weekday);
               return (
-                <div key={weekday} className="grid items-end gap-3 rounded-xl border border-[var(--border)] p-3 sm:grid-cols-[130px_1fr_1fr]">
+                <div key={weekday} className="grid items-end gap-3 rounded-xl border border-[var(--border)] p-3 sm:grid-cols-[130px_1fr_1fr] sm:items-end">
                   <label className="flex h-10 items-center gap-2 text-sm font-bold">
                     <input type="checkbox" name={`enabled_${weekday}`} defaultChecked={Boolean(row)} />
                     {label}
@@ -98,19 +108,31 @@ export function ClinicSettingsPanel({
       <Card id="tia-knowledge">
         <CardHeader>
           <CardTitle>معلومات Tia</CardTitle>
-          <CardDescription>اكتب في خانة واحدة كل المعلومات التي تريد Tia أن تعرفها وتشرحها للعملاء.</CardDescription>
+          <CardDescription>اكتب هنا فقط المعلومات التفسيرية التي تريد Tia أن تعرفها وتشرحها للعملاء: نبذة العيادة، شرح الخدمات، الفرق بين الأجهزة، التعليمات والسياسات والأسئلة الشائعة.</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={saveKnowledgeTextFormAction} className="space-y-4">
-            <textarea
-              name="content"
-              defaultValue={knowledgeText}
-              rows={14}
-              maxLength={6000}
-              placeholder="مثال: معلومات عن العيادة، شرح الخدمات، مميزات الأجهزة، تعليمات أو أسئلة شائعة..."
-              className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-            />
-            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا يستخدم للشرح فقط.</p>
+            <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4">
+              <div className="mb-2 text-sm font-bold text-teal-950">مثال حقيقي لمعلومات Tia</div>
+              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{KNOWLEDGE_EXAMPLE}</div>
+            </div>
+
+            <p className="text-xs leading-6 text-[var(--muted)]">
+              ملاحظة: المثال للتوضيح فقط. عدّل النص بما يناسب خدمات وأجهزة وتعليمات وسياسات عيادتك، واحذف أي معلومة لا تنطبق عليها.
+            </p>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-bold">معلومات عيادتك</span>
+              <textarea
+                name="content"
+                defaultValue={knowledgeText}
+                rows={14}
+                maxLength={6000}
+                placeholder="اكتب هنا معلومات عيادتك التي تريد Tia أن تستخدمها في الشرح للعملاء..."
+                className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              />
+            </label>
+            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
             <Button type="submit">حفظ معلومات Tia</Button>
           </form>
         </CardContent>

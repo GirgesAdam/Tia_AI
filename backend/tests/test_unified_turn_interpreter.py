@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.semantic_router import SemanticEntityHints
 from app.agents.turn_interpreter import (
     UnifiedTurnDecision,
     _interpreter_system_prompt,
@@ -12,6 +11,7 @@ from app.agents.turn_interpreter import (
     _normalize_active_booking_decision,
     _recent_conversation_excerpt,
 )
+from app.agents.turn_models import SemanticEntityHints
 from app.core.config import Settings
 
 BASE = {

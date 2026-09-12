@@ -25,10 +25,10 @@ def test_patient_customer_contract_has_no_email_field() -> None:
 def test_customer_email_agent_capability_is_retired() -> None:
     backend = Path(__file__).resolve().parent.parent
     tools = (backend / "app/agents/tools/clinic_tools.py").read_text(encoding="utf-8")
-    router = (backend / "app/agents/semantic_router.py").read_text(encoding="utf-8")
+    contracts = (backend / "app/agents/turn_models.py").read_text(encoding="utf-8")
     policy = (backend / "app/agents/capability_policy.py").read_text(encoding="utf-8")
     assert "send_email_to_customer" not in tools
-    assert "email_communication" not in router
+    assert "email_communication" not in contracts
     assert "email_communication" not in policy
 
 
@@ -77,7 +77,6 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert revisions["0034_drop_customer_email"] == "0033_sync_authority"
     assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
     assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
-
 
 
 def test_drop_patient_email_migration_is_explicit() -> None:
