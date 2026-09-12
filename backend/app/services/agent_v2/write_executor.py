@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -100,8 +101,14 @@ def execute_write_ready_step(
     patient: Patient,
     step: PlanStep,
     idempotency_key: str | None = None,
+    commit: bool = True,
 ) -> dict[str, object]:
-    """Execute one already-verified V2 write. Raw customer text is intentionally absent."""
+    """Execute one already-verified V2 write. Raw customer text is intentionally absent.
+
+    Isolated callers retain the historical commit-owning behavior. Live turns pass
+    ``commit=False`` so the write runs inside a savepoint while the caller owns the
+    outer transaction containing state and outbound persistence.
+    """
     intent = step.write_intent
     if step.disposition != "write_ready" or intent is None or not intent.authorized:
         return _failure(
@@ -112,186 +119,190 @@ def execute_write_ready_step(
 
     parameters = dict(intent.parameters)
     try:
-        if intent.kind in {
-            "booking",
-            "confirm_appointment",
-            "cancel_appointment",
-            "reschedule",
-        }:
-            require_tia_workspace_domain_write(
-                db,
-                workspace_id=workspace.id,
-                domain="appointments",
-            )
+        write_scope = nullcontext() if commit else db.begin_nested()
+        with write_scope:
+            if intent.kind in {
+                "booking",
+                "confirm_appointment",
+                "cancel_appointment",
+                "reschedule",
+            }:
+                require_tia_workspace_domain_write(
+                    db,
+                    workspace_id=workspace.id,
+                    domain="appointments",
+                )
 
-        if intent.kind == "booking":
-            if patient.status == "blocked":
+            if intent.kind == "booking":
+                if patient.status == "blocked":
+                    return _failure(
+                        write_kind=intent.kind,
+                        code="patient_blocked",
+                        detail="Blocked patients cannot receive new appointments.",
+                    )
+                appointment = create_appointment_operation(
+                    db,
+                    workspace=workspace,
+                    patient_id=patient.id,
+                    branch_id=_uuid(parameters, "branch_id"),
+                    doctor_id=_uuid(parameters, "doctor_id"),
+                    service_id=_uuid(parameters, "service_id"),
+                    requested_start_at=_datetime(parameters, "start_at"),
+                    created_by_user_id=None,
+                    patient_package_id=_optional_uuid(parameters, "package_id"),
+                    source="ai",
+                    laser_device_key=(
+                        str(parameters["device_key"]) if parameters.get("device_key") else None
+                    ),
+                    idempotency_key=idempotency_key,
+                    actor_type="ai",
+                )
+                result: dict[str, object] = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "appointment_id": str(appointment.id),
+                    "status": appointment.status,
+                }
+            elif intent.kind == "confirm_appointment":
+                appointment = confirm_appointment_operation(
+                    db,
+                    workspace_id=workspace.id,
+                    appointment_id=_uuid(parameters, "appointment_id"),
+                    changed_by_user_id=None,
+                    patient_id=patient.id,
+                    actor_type="ai",
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "appointment_id": str(appointment.id),
+                    "status": appointment.status,
+                }
+            elif intent.kind == "cancel_appointment":
+                appointment = cancel_appointment_operation(
+                    db,
+                    workspace=workspace,
+                    appointment_id=_uuid(parameters, "appointment_id"),
+                    changed_by_user_id=None,
+                    patient_id=patient.id,
+                    reason="customer_requested_cancellation",
+                    override_policy=False,
+                    actor_is_admin=False,
+                    actor_type="ai",
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "appointment_id": str(appointment.id),
+                    "status": appointment.status,
+                }
+            elif intent.kind == "reschedule":
+                replacement, previous = reschedule_appointment_operation(
+                    db,
+                    workspace=workspace,
+                    appointment_id=_uuid(parameters, "appointment_id"),
+                    requested_start_at=_datetime(parameters, "start_at"),
+                    changed_by_user_id=None,
+                    branch_id=_uuid(parameters, "branch_id"),
+                    doctor_id=_uuid(parameters, "doctor_id"),
+                    service_id=_uuid(parameters, "service_id"),
+                    laser_device_key=(
+                        str(parameters["device_key"]) if parameters.get("device_key") else None
+                    ),
+                    patient_id=patient.id,
+                    idempotency_key=idempotency_key,
+                    actor_type="ai",
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "appointment_id": str(replacement.id),
+                    "previous_appointment_id": str(previous.id),
+                    "status": replacement.status,
+                }
+            elif intent.kind == "buy_package":
+                package = purchase_package_offer(
+                    db,
+                    workspace_id=workspace.id,
+                    patient_id=patient.id,
+                    offer_id=_uuid(parameters, "package_offer_id"),
+                    amount_paid_minor=0,
+                    payment_method="unknown",
+                    created_by_user_id=None,
+                    idempotency_key=idempotency_key,
+                    actor_type="ai",
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "patient_package_id": str(package.id),
+                    "status": package.status,
+                    "amount_paid_minor": 0,
+                }
+            elif intent.kind == "follow_up":
+                due_at = _datetime(parameters, "follow_up_at_local")
+                task = create_crm_task(
+                    db,
+                    workspace_id=workspace.id,
+                    patient_id=patient.id,
+                    title="Customer follow-up",
+                    due_at=due_at,
+                    task_type="follow_up",
+                    priority="normal",
+                    created_by_user_id=None,
+                    source="ai",
+                    execution_mode="ai",
+                    dedupe_key=idempotency_key,
+                    commit=False,
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "crm_task_id": str(task.id),
+                    "status": task.status,
+                    "due_at": task.due_at.isoformat(),
+                }
+            elif intent.kind == "marketing_update":
+                require_tia_patient_fields_writable(
+                    db,
+                    workspace_id=workspace.id,
+                    patient_id=patient.id,
+                    fields={"marketing_consent"},
+                )
+                consent = bool(_required(parameters, "marketing_consent"))
+                patient.marketing_consent = consent
+                patient.marketing_consent_at = datetime.now(UTC) if consent else None
+                record_activity_event(
+                    db,
+                    workspace_id=workspace.id,
+                    actor_type="ai",
+                    actor_user_id=None,
+                    action="patient.marketing_consent_updated",
+                    entity_type="patient",
+                    entity_id=patient.id,
+                    summary="Patient marketing consent updated",
+                    metadata={"marketing_consent": consent},
+                )
+                db.flush()
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "patient_id": str(patient.id),
+                    "marketing_consent": consent,
+                }
+            else:
                 return _failure(
                     write_kind=intent.kind,
-                    code="patient_blocked",
-                    detail="Blocked patients cannot receive new appointments.",
+                    code="unsupported_write_kind",
+                    detail=f"V2 real-write execution is not enabled for {intent.kind}.",
                 )
-            appointment = create_appointment_operation(
-                db,
-                workspace=workspace,
-                patient_id=patient.id,
-                branch_id=_uuid(parameters, "branch_id"),
-                doctor_id=_uuid(parameters, "doctor_id"),
-                service_id=_uuid(parameters, "service_id"),
-                requested_start_at=_datetime(parameters, "start_at"),
-                created_by_user_id=None,
-                patient_package_id=_optional_uuid(parameters, "package_id"),
-                source="ai",
-                laser_device_key=(
-                    str(parameters["device_key"]) if parameters.get("device_key") else None
-                ),
-                idempotency_key=idempotency_key,
-                actor_type="ai",
-            )
-            result: dict[str, object] = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "appointment_id": str(appointment.id),
-                "status": appointment.status,
-            }
-        elif intent.kind == "confirm_appointment":
-            appointment = confirm_appointment_operation(
-                db,
-                workspace_id=workspace.id,
-                appointment_id=_uuid(parameters, "appointment_id"),
-                changed_by_user_id=None,
-                patient_id=patient.id,
-                actor_type="ai",
-            )
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "appointment_id": str(appointment.id),
-                "status": appointment.status,
-            }
-        elif intent.kind == "cancel_appointment":
-            appointment = cancel_appointment_operation(
-                db,
-                workspace=workspace,
-                appointment_id=_uuid(parameters, "appointment_id"),
-                changed_by_user_id=None,
-                patient_id=patient.id,
-                reason="customer_requested_cancellation",
-                override_policy=False,
-                actor_is_admin=False,
-                actor_type="ai",
-            )
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "appointment_id": str(appointment.id),
-                "status": appointment.status,
-            }
-        elif intent.kind == "reschedule":
-            replacement, previous = reschedule_appointment_operation(
-                db,
-                workspace=workspace,
-                appointment_id=_uuid(parameters, "appointment_id"),
-                requested_start_at=_datetime(parameters, "start_at"),
-                changed_by_user_id=None,
-                branch_id=_uuid(parameters, "branch_id"),
-                doctor_id=_uuid(parameters, "doctor_id"),
-                service_id=_uuid(parameters, "service_id"),
-                laser_device_key=(
-                    str(parameters["device_key"]) if parameters.get("device_key") else None
-                ),
-                patient_id=patient.id,
-                idempotency_key=idempotency_key,
-                actor_type="ai",
-            )
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "appointment_id": str(replacement.id),
-                "previous_appointment_id": str(previous.id),
-                "status": replacement.status,
-            }
-        elif intent.kind == "buy_package":
-            package = purchase_package_offer(
-                db,
-                workspace_id=workspace.id,
-                patient_id=patient.id,
-                offer_id=_uuid(parameters, "package_offer_id"),
-                amount_paid_minor=0,
-                payment_method="unknown",
-                created_by_user_id=None,
-                idempotency_key=idempotency_key,
-                actor_type="ai",
-            )
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "patient_package_id": str(package.id),
-                "status": package.status,
-                "amount_paid_minor": 0,
-            }
-        elif intent.kind == "follow_up":
-            due_at = _datetime(parameters, "follow_up_at_local")
-            task = create_crm_task(
-                db,
-                workspace_id=workspace.id,
-                patient_id=patient.id,
-                title="Customer follow-up",
-                due_at=due_at,
-                task_type="follow_up",
-                priority="normal",
-                created_by_user_id=None,
-                source="ai",
-                execution_mode="ai",
-                dedupe_key=idempotency_key,
-                commit=False,
-            )
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "crm_task_id": str(task.id),
-                "status": task.status,
-                "due_at": task.due_at.isoformat(),
-            }
-        elif intent.kind == "marketing_update":
-            require_tia_patient_fields_writable(
-                db,
-                workspace_id=workspace.id,
-                patient_id=patient.id,
-                fields={"marketing_consent"},
-            )
-            consent = bool(_required(parameters, "marketing_consent"))
-            patient.marketing_consent = consent
-            patient.marketing_consent_at = datetime.now(UTC) if consent else None
-            record_activity_event(
-                db,
-                workspace_id=workspace.id,
-                actor_type="ai",
-                actor_user_id=None,
-                action="patient.marketing_consent_updated",
-                entity_type="patient",
-                entity_id=patient.id,
-                summary="Patient marketing consent updated",
-                metadata={"marketing_consent": consent},
-            )
-            db.flush()
-            result = {
-                "ok": True,
-                "write_kind": intent.kind,
-                "patient_id": str(patient.id),
-                "marketing_consent": consent,
-            }
-        else:
-            return _failure(
-                write_kind=intent.kind,
-                code="unsupported_write_kind",
-                detail=f"V2 real-write execution is not enabled for {intent.kind}.",
-            )
 
-        db.commit()
+        if commit:
+            db.commit()
         return result
     except ClinicIntegrationAuthorityError as exc:
-        db.rollback()
+        if commit:
+            db.rollback()
         return _failure(
             write_kind=intent.kind,
             code="authority_conflict",
@@ -303,7 +314,8 @@ def execute_write_ready_step(
         AppointmentOperationForbidden,
         AppointmentServiceChangeRequiresHuman,
     ) as exc:
-        db.rollback()
+        if commit:
+            db.rollback()
         return _failure(
             write_kind=intent.kind,
             code="staff_review_required",
@@ -318,7 +330,8 @@ def execute_write_ready_step(
         WriteExecutionError,
         IntegrityError,
     ) as exc:
-        db.rollback()
+        if commit:
+            db.rollback()
         return _failure(
             write_kind=intent.kind,
             code="write_failed",
