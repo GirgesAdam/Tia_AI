@@ -150,7 +150,7 @@ def verified_read_semantic_view(
     *,
     context: SemanticContext,
 ) -> dict[str, object]:
-    """Expose only the immediately previous verified read scope using ephemeral refs."""
+    """Expose only the immediately previous verified read scope and safe result summary."""
     if not isinstance(read_context, dict):
         return {}
     operation_type = read_context.get("operation_type")
@@ -158,6 +158,10 @@ def verified_read_semantic_view(
         return {}
     safe: dict[str, object] = {"operation_type": operation_type}
     safe.update(_safe_constraints(read_context, context))
+    option_count = read_context.get("availability_option_count")
+    if isinstance(option_count, int) and option_count >= 0:
+        safe["availability_option_count"] = option_count
+        safe["availability_found"] = option_count > 0
     return safe
 
 
