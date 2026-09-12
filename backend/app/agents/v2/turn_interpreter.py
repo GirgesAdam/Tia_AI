@@ -13,7 +13,12 @@ from app.agents.model_provider import (
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
 from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
-from app.agents.v2.turn_contract import TiaTurnUnderstanding
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    EntityReference,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+)
 from app.agents.v2.turn_normalization import dedupe_exact_operations
 from app.core.config import settings
 
@@ -59,11 +64,21 @@ the customer, choose tools, perform writes, calculate money, or invent clinic fa
 
 SEMANTIC PRINCIPLES
 - Interpret meaning from the latest customer turn, the native recent dialogue, the active task,
-  pending choice, and supplied semantic catalog references. Do not route by lexical triggers,
-  memorized keywords, or phrase matching.
+  pending choice, recent_verified_read, and supplied semantic catalog references. Do not route by
+  lexical triggers, memorized keywords, or phrase matching.
 - Select only supplied entity references. If one entity is clearly intended, set ref. If multiple
-  supplied entities remain genuinely possible, leave ref null and use candidate_refs. Never invent
+  supplied entities remain genuinely possible because the identity is unclear, leave ref null, use
+  candidate_refs, and candidate_mode=ambiguous. If the customer intentionally refers to several
+  entities as a group to inspect or compare, use candidate_refs with candidate_mode=set. Never invent
   a reference.
+- Set continues_previous=true only when the new operation clearly continues recent_verified_read.
+  When true, include only constraints the customer newly states or changes; deterministic Python
+  inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
+  same dimension.
+- execution_intent describes whether the customer authorizes an action now. Use execute only when
+  the customer is actually asking Tia to perform the action now. Questions, comparisons,
+  hypotheticals, "should I" choices, and requests to inspect consequences/options are informational,
+  even if they mention booking, cancellation, rescheduling, or purchasing.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
@@ -72,10 +87,9 @@ SEMANTIC PRINCIPLES
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
-- Use native recent dialogue to resolve elliptical follow-ups. If the immediately relevant dialogue
-  established exactly one unambiguous service, doctor, device, appointment, or package and the new
-  turn clearly continues that subject while omitting its name, carry that entity into the new
-  operation. Do not carry an entity when more than one candidate remains plausible.
+- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read when
+  it is supplied because that scope was verified by Python. Do not reconstruct stale constraints
+  from assistant prose when a verified read scope exists.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -141,6 +155,8 @@ DATE/TIME REPRESENTATION
 - after/before constraints: mode=after or mode=before with start_time. After/from a time includes the
   boundary itself; Python treats this lower bound as inclusive.
 - time range: mode=range with start_time/end_time.
+- nearest time: mode=nearest. Supply start_time only when the customer gives an anchor in this turn;
+  on a continuation Python may inherit the previous verified exact-time anchor.
 
 Clinic timezone: {timezone_name}
 Clinic local time: {local_now.isoformat()}
@@ -181,6 +197,93 @@ def _build_interpreter_messages(
         latest_customer_index=latest_index,
     )
     return [system, context, *recent, HumanMessage(content=latest_text)]
+
+
+def _reference_from_verified(
+    verified: dict[str, object],
+    *,
+    single_key: str,
+    set_key: str | None = None,
+) -> EntityReference | None:
+    single = verified.get(single_key)
+    if isinstance(single, str) and single:
+        return EntityReference(text=None, ref=single, candidate_refs=[], candidate_mode="ambiguous")
+    if set_key is not None:
+        raw = verified.get(set_key)
+        if isinstance(raw, list):
+            refs = [str(item) for item in raw if isinstance(item, str) and item]
+            if refs:
+                return EntityReference(text=None, ref=None, candidate_refs=refs, candidate_mode="set")
+    return None
+
+
+def merge_verified_read_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Merge only explicitly-declared continuations with the previous verified read scope."""
+    raw = semantic_context.model_input.get("recent_verified_read")
+    if not isinstance(raw, dict) or not raw:
+        return turn
+
+    previous_date = None
+    previous_time = None
+    if isinstance(raw.get("date"), dict):
+        try:
+            previous_date = DateConstraint.model_validate(raw["date"])
+        except ValueError:
+            previous_date = None
+    if isinstance(raw.get("time"), dict):
+        try:
+            previous_time = TimeConstraint.model_validate(raw["time"])
+        except ValueError:
+            previous_time = None
+
+    operations = []
+    for operation in turn.operations:
+        if not operation.continues_previous:
+            operations.append(operation)
+            continue
+
+        entities = operation.entities
+        updates: dict[str, object] = {}
+        inherited = (
+            ("service", _reference_from_verified(raw, single_key="service_ref")),
+            (
+                "doctor",
+                _reference_from_verified(
+                    raw,
+                    single_key="doctor_ref",
+                    set_key="doctor_refs",
+                ),
+            ),
+            ("device", _reference_from_verified(raw, single_key="device_ref")),
+        )
+        for field, value in inherited:
+            if getattr(entities, field) is None and value is not None:
+                updates[field] = value
+        if entities.date is None and previous_date is not None:
+            updates["date"] = previous_date
+        if entities.time is None and previous_time is not None:
+            updates["time"] = previous_time
+        elif (
+            entities.time is not None
+            and entities.time.mode == "nearest"
+            and entities.time.start_time is None
+            and previous_time is not None
+            and previous_time.mode == "exact"
+            and previous_time.start_time is not None
+        ):
+            updates["time"] = entities.time.model_copy(
+                update={
+                    "start_time": previous_time.start_time,
+                    "start_time_ambiguity": previous_time.start_time_ambiguity,
+                }
+            )
+        if updates:
+            entities = entities.model_copy(update=updates)
+        operations.append(operation.model_copy(update={"entities": entities}))
+    return turn.model_copy(update={"operations": operations})
 
 
 def interpret_customer_turn_v2(
@@ -234,6 +337,7 @@ def interpret_customer_turn_v2(
         operation="v2-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    grounded = ground_turn_references(invocation.value, semantic_context)
+    continued = merge_verified_read_context(invocation.value, semantic_context)
+    grounded = ground_turn_references(continued, semantic_context)
     resolved = resolve_turn_times_by_clinic_hours(grounded, semantic_context)
     return dedupe_exact_operations(resolved)
