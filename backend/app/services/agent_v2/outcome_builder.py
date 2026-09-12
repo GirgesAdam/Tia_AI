@@ -187,8 +187,11 @@ def _service_catalog_facts(result: ReadResult, requested_details: set[str]) -> d
         for key in ("price", "currency"):
             if service.get(key) not in (None, ""):
                 shaped[key] = service[key]
-    if "duration" in requested_details and service.get("customer_duration_text") not in (None, ""):
-        shaped["customer_duration_text"] = service["customer_duration_text"]
+    if "duration" in requested_details:
+        if service.get("customer_duration_text") not in (None, ""):
+            shaped["customer_duration_text"] = service["customer_duration_text"]
+        elif service.get("duration_minutes") not in (None, ""):
+            shaped["duration_minutes"] = service["duration_minutes"]
     if "description" in requested_details and service.get("description") not in (None, ""):
         shaped["description"] = service["description"]
     if "devices" in requested_details and service.get("laser_devices") not in (None, [], {}):
