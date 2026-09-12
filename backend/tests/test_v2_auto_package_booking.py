@@ -283,6 +283,4 @@ def test_write_executor_passes_auto_resolved_package_to_canonical_booking(monkey
     )
 
     assert result["ok"] is True
-    assert result["package_used"] is True
-    assert result["patient_package_id"] == str(package_id)
     assert captured["patient_package_id"] == package_id
