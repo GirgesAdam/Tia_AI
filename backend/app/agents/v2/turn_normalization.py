@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Hashable
 
-from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    EntityReference,
+    TiaTurnUnderstanding,
+    TurnOperation,
+)
 
 
 def _entity_identity(entity: EntityReference | None) -> Hashable:
@@ -11,14 +16,37 @@ def _entity_identity(entity: EntityReference | None) -> Hashable:
     if entity.ref is not None:
         return ("ref", entity.ref)
     if entity.candidate_refs:
-        return ("candidates", tuple(entity.candidate_refs))
+        return ("candidates", entity.candidate_mode, tuple(entity.candidate_refs))
     return ("ungrounded_text", entity.text)
+
+
+def _default_read_availability_date(operation: TurnOperation) -> TurnOperation:
+    """Make an undated availability read mean the nearest upcoming availability.
+
+    Availability is intrinsically read-only, so this default can improve useful discovery without
+    authorizing or approximating any write. Booking/reschedule operations keep their stricter date
+    requirements and are intentionally untouched here.
+    """
+    if operation.type != "availability" or operation.entities.date is not None:
+        return operation
+    entities = operation.entities.model_copy(
+        update={
+            "date": DateConstraint(
+                mode="next_available",
+                start_date=None,
+                end_date=None,
+            )
+        }
+    )
+    return operation.model_copy(update={"entities": entities})
 
 
 def _operation_identity(operation: TurnOperation) -> Hashable:
     entities = operation.entities
     return (
         operation.type,
+        operation.execution_intent,
+        operation.continues_previous,
         _entity_identity(entities.service),
         _entity_identity(entities.doctor),
         _entity_identity(entities.device),
@@ -36,21 +64,22 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
 
 
 def dedupe_exact_operations(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
-    """Drop exact semantic duplicates while preserving the first operation and customer order.
+    """Normalize safe read defaults, then drop exact duplicates in customer order.
 
     This works only on the structured interpreter contract. It never inspects raw customer text and
-    never merges operations whose grounded entities or constraints differ.
+    never merges operations whose grounded entities, execution intent, or constraints differ.
     """
 
     seen: set[Hashable] = set()
     operations: list[TurnOperation] = []
-    for operation in turn.operations:
+    for raw_operation in turn.operations:
+        operation = _default_read_availability_date(raw_operation)
         identity = _operation_identity(operation)
         if identity in seen:
             continue
         seen.add(identity)
         operations.append(operation)
 
-    if len(operations) == len(turn.operations):
+    if operations == turn.operations:
         return turn
     return turn.model_copy(update={"operations": operations})
