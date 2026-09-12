@@ -6,7 +6,10 @@ on:
       - agent-core-v2-semantic-contract
     paths:
       - .github/workflows/v2-only-live-matrix.yml
-      - backend/scripts/run_v2_realistic_round3.py
+      - backend/app/agents/v2/**
+      - backend/app/services/agent_v2/**
+      - backend/scripts/run_v2_only_chat.py
+      - backend/scripts/run_v2_kb_smoke.py
   workflow_dispatch:
 
 permissions:
@@ -16,7 +19,7 @@ jobs:
   v2-matrix:
     name: Run V2-only live clinic matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment: staging
     defaults:
       run:
@@ -60,14 +63,7 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
           test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
-      - name: Rerun conflicting-time conversation
-        env:
-          AGENT_V2_LIVE_ENABLED: "true"
-        run: python scripts/run_v2_realistic_round3.py --case conflicting_time_constraints --report artifacts/v2-realistic-round3-conflict.json
-      - name: Upload conflicting-time artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: v2-realistic-round3-conflict
-          path: backend/artifacts/v2-realistic-round3-conflict.json
-          if-no-files-found: warn
+      - name: Run V2-only matrix
+        run: python scripts/run_v2_only_chat.py --matrix
+      - name: Run V2 knowledge smoke
+        run: python scripts/run_v2_kb_smoke.py
