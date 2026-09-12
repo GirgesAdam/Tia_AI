@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan
+from app.services.agent_v2.planner import PlanStep, TurnPlan
 
 _PACKAGE_DEPENDENCY_FACT = "depends_on_package_purchase_operation_index"
 _COMPOUND_SEQUENCE_FACT = "compound_visit_sequenced"
@@ -38,19 +38,27 @@ def _tag_and_order_package_dependencies(steps: list[PlanStep]) -> list[PlanStep]
     tagged: list[PlanStep] = []
     dependencies: dict[int, int] = {}
     for step in steps:
-        if _write_kind(step) != "booking":
+        if _write_kind(step) != "booking" or step.write_intent is None:
             tagged.append(step)
             continue
         matches = [purchase for purchase in purchases if _same_package_scope(purchase, step)]
         if len(matches) == 1:
             dependency = matches[0]
             dependencies[step.operation_index] = dependency.operation_index
+            parameters = {
+                **step.write_intent.parameters,
+                # If the same turn is buying the entitlement that this booking uses,
+                # never silently fall back to standalone if the purchase cannot complete.
+                "package_usage": "use_existing",
+            }
             step = step.model_copy(
                 update={
+                    "write_intent": step.write_intent.model_copy(update={"parameters": parameters}),
                     "facts": {
                         **step.facts,
+                        "package_usage": "use_existing",
                         _PACKAGE_DEPENDENCY_FACT: dependency.operation_index,
-                    }
+                    },
                 }
             )
         tagged.append(step)
@@ -220,39 +228,3 @@ def normalize_compound_turn_plan(
     steps = _tag_and_order_package_dependencies(list(plan.steps))
     steps = _sequence_shared_anchor_bookings(steps, catalog=catalog)
     return plan.model_copy(update={"steps": steps})
-
-
-def apply_completed_package_dependency(
-    step: PlanStep,
-    *,
-    completed_write_results: dict[int, dict[str, object]],
-) -> tuple[PlanStep, bool]:
-    """Attach the exact package created earlier in this turn to its dependent booking.
-
-    Returns ``(step, dependency_ready)``. A missing/failed dependency is fail-closed so
-    the booking cannot silently become a standalone session.
-    """
-    raw_dependency = step.facts.get(_PACKAGE_DEPENDENCY_FACT)
-    if raw_dependency is None or _write_kind(step) != "booking" or step.write_intent is None:
-        return step, True
-    try:
-        dependency_index = int(raw_dependency)
-    except (TypeError, ValueError):
-        return step, False
-    result = completed_write_results.get(dependency_index)
-    if result is None or result.get("ok") is not True:
-        return step, False
-    package_id = result.get("patient_package_id")
-    if not package_id:
-        return step, False
-    parameters = {
-        **step.write_intent.parameters,
-        "package_id": str(package_id),
-        "package_usage": "use_existing",
-    }
-    return step.model_copy(
-        update={
-            "write_intent": step.write_intent.model_copy(update={"parameters": parameters}),
-            "facts": {**step.facts, "package_usage": "use_existing"},
-        }
-    ), True
