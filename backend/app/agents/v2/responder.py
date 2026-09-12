@@ -98,6 +98,52 @@ def _native_recent_messages(
     return selected[-limit:]
 
 
+def _verified_doctor_names(outcomes: list[TurnOutcome]) -> list[str]:
+    """Return the complete verified doctor list for pure doctor-list answers."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for outcome in outcomes:
+        if outcome.status != "answered" or outcome.response_goal != "answer_doctor":
+            continue
+        payload = outcome.facts.get("doctors")
+        if not isinstance(payload, dict):
+            continue
+        rows = payload.get("doctors")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_name = row.get("name")
+            if not isinstance(raw_name, str):
+                continue
+            name = raw_name.strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _ensure_verified_doctor_list(
+    text: str,
+    *,
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> str:
+    """Prevent the language layer from silently dropping verified doctors from a list answer."""
+    names = _verified_doctor_names(outcomes)
+    if len(names) < 2 or all(name in text for name in names):
+        return text
+
+    latest_index = _latest_customer_index(history)
+    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
+    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
+    prefix = "الدكاترة اللي بيقدموا الخدمة كلهم: " if arabic else "All doctors who provide the service: "
+    grounded_list = prefix + "، ".join(names) + "."
+    return f"{text.rstrip()}\n{grounded_list}"
+
+
 def _system_prompt(*, clinic_name: str, timezone_name: str, local_now: datetime) -> str:
     return f"""You are Tia, the customer-facing assistant for an aesthetic clinic.
 Write one natural, concise reply that continues the actual conversation. If the latest customer
@@ -278,4 +324,5 @@ def compose_v2_customer_reply(
             "V2 responder returned no customer-visible text.",
             retryable=False,
         )
+    text = _ensure_verified_doctor_list(text, history=history, outcomes=outcomes)
     return text, model_label(invocation.model_name)
