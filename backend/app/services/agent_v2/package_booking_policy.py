@@ -82,14 +82,16 @@ def resolve_booking_package(
 
     The LLM never selects a database package id. Python resolves eligible packages from
     canonical patient/package data and the canonical appointment service/device/date.
-    Explicit standalone intent is authoritative even when the semantic turn also contains
-    a package reference from a negative mention such as "do not use my package".
     """
     usage_mode = package_usage or "unspecified"
     if usage_mode not in {"unspecified", "use_existing", "avoid_existing"}:
         raise BookingPackagePolicyError("Unsupported package usage policy for booking.")
 
     if usage_mode == "avoid_existing":
+        if requested_package_id is not None:
+            raise BookingPackagePolicyError(
+                "Standalone booking cannot also require an existing package."
+            )
         return BookingPackageResolution(
             package_id=None,
             package_name=None,
