@@ -179,14 +179,6 @@ def execute_write_ready_step(
                     "write_kind": intent.kind,
                     "appointment_id": str(appointment.id),
                     "status": appointment.status,
-                    "patient_package_id": (
-                        str(package_resolution.package_id)
-                        if package_resolution.package_id is not None
-                        else None
-                    ),
-                    "package_used": package_resolution.package_used,
-                    "package_name": package_resolution.package_name,
-                    "package_usage_mode": package_resolution.usage_mode,
                 }
             elif intent.kind == "confirm_appointment":
                 appointment = confirm_appointment_operation(
