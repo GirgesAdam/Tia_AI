@@ -82,6 +82,11 @@ SEMANTIC PRINCIPLES
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
+- Package purchase and appointment creation are separate independently meaningful actions. If the
+  customer asks to buy a package and book its first session in the same turn, emit buy_package plus
+  a separate book operation for that session; the booking should use package_usage=use_existing when
+  the customer intends it to consume the newly purchased package. If the same turn requests another
+  appointment too, emit that as another separate book operation rather than collapsing any action.
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
