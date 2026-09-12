@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.clinic_grounding import build_clinic_catalog
 from app.core.config import settings
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.conversation import Conversation
@@ -47,8 +49,6 @@ def _get_patient_v2(db: Session, *, workspace_id: UUID, patient_id: UUID) -> Pat
     )
     if patient is None:
         raise AgentChatError("Patient not found in this workspace.")
-    # Do not reject blocked patients globally. V2's verified write executor blocks
-    # new bookings while still allowing cancellation/reschedule of existing visits.
     return patient
 
 
@@ -70,6 +70,79 @@ def _v2_handoff_ack_allowed(handoff: object | None, *, created_this_turn: bool) 
         and getattr(handoff, "status", None) == "pending"
         and getattr(handoff, "assigned_user_id", None) is None
     )
+
+
+def _recent_verified_read_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Return context only from the immediately preceding message in this conversation."""
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if previous is None or previous.sender_type != "ai" or previous.direction != "outbound":
+        return None
+    metadata = dict(previous.metadata_json or {})
+    if metadata.get("runtime") != "v2":
+        return None
+    value = metadata.get("v2_read_context")
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _verified_read_context_from_turn(
+    db: Session,
+    *,
+    workspace: Workspace,
+    turn: V2OrchestratedTurn,
+) -> dict[str, Any] | None:
+    """Keep only the last read-only canonical scope; writes/tasks keep their own state."""
+    for step in reversed(turn.plan.steps):
+        if step.disposition != "read" or step.write_intent is not None or not step.reads:
+            continue
+        context: dict[str, Any] = {"operation_type": step.operation_type}
+        for key in (
+            "service_id",
+            "doctor_id",
+            "doctor_ids",
+            "device_key",
+            "date",
+            "time",
+            "package_usage",
+        ):
+            value = step.facts.get(key)
+            if value not in (None, "", [], {}):
+                context[key] = value
+
+        # A doctor-list read establishes a verified set even though the customer did
+        # not enumerate every doctor. Recreate that exact set from canonical catalog
+        # relationships so a later "which of them" comparison never depends on prose.
+        if step.operation_type == "doctor_info" and context.get("service_id") and not (
+            context.get("doctor_id") or context.get("doctor_ids")
+        ):
+            service_id = str(context["service_id"])
+            doctors = build_clinic_catalog(db, workspace).get("doctors")
+            if isinstance(doctors, list):
+                ids = [
+                    str(row["id"])
+                    for row in doctors
+                    if isinstance(row, dict)
+                    and row.get("id")
+                    and isinstance(row.get("service_ids"), list)
+                    and service_id in {str(item) for item in row["service_ids"]}
+                ]
+                if ids:
+                    context["doctor_ids"] = ids
+        return context
+    return None
 
 
 def _run_v2_after_inbound(
@@ -103,6 +176,11 @@ def _run_v2_after_inbound(
     history = _history_from_db(db, conversation)
     timezone_name, local_now = _workspace_clock(workspace)
     adapter = get_clinic_adapter(db=db, workspace=workspace)
+    recent_read_context = _recent_verified_read_context(
+        db,
+        conversation=conversation,
+        inbound=inbound,
+    )
 
     def live_write(step):
         return execute_write_ready_step(
@@ -127,6 +205,7 @@ def _run_v2_after_inbound(
         adapter=adapter,
         turn_id=str(inbound.id),
         write_executor=live_write,
+        recent_read_context=recent_read_context,
     )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
@@ -147,9 +226,6 @@ def _run_v2_after_inbound(
             commit=False,
         )
 
-    # A staff member may take ownership while the model is running. Re-lock and
-    # re-check immediately before creating the outbound message. The one exception
-    # is the acknowledgement for a handoff created by this V2 turn itself.
     locked_conversation = lock_conversation_ownership(
         db,
         workspace_id=workspace.id,
@@ -168,8 +244,6 @@ def _run_v2_after_inbound(
         created_this_turn=created_handoff_this_turn,
     )
     if (not agent_can_reply(conversation) or active_handoff is not None) and not handoff_ack_allowed:
-        # Roll back the entire V2 turn so a staff takeover cannot leave a clinic write
-        # committed without the state/outbound part of the same turn.
         db.rollback()
         return AgentChatResponse(
             run_id=run_id,
@@ -182,6 +256,11 @@ def _run_v2_after_inbound(
             model=None,
         )
 
+    verified_read_context = _verified_read_context_from_turn(
+        db,
+        workspace=workspace,
+        turn=turn,
+    )
     outbound_now = datetime.now(UTC)
     outbound = Message(
         workspace_id=workspace.id,
@@ -201,6 +280,7 @@ def _run_v2_after_inbound(
             "in_reply_to_message_id": str(inbound.id),
             "dispatch_required": outbound_delivery_status == "queued",
             "handoff_ack": handoff_ack_allowed,
+            "v2_read_context": verified_read_context,
         },
     )
     conversation.last_message_at = outbound_now
@@ -258,6 +338,7 @@ def run_agent_chat(
     db.refresh(inbound)
     db.refresh(conversation)
     db.refresh(patient)
+
     return _run_v2_after_inbound(
         db=db,
         workspace=workspace,
