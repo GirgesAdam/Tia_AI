@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -51,7 +50,7 @@ def _slot_interval_minutes(results: list[AvailabilityResult]) -> int:
     differences: list[int] = []
     for result in results:
         starts = sorted({slot.start_at for slot in result.slots})
-        for left, right in zip(starts, starts[1:]):
+        for left, right in zip(starts, starts[1:], strict=False):
             minutes = int((right - left).total_seconds() // 60)
             if minutes > 0:
                 differences.append(minutes)
