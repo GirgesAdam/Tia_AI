@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Focused realistic V2 review for read continuity, entity sets, and execution intent.
 
-The suite uses the same staging clinic data and live agent surface as run_live_agent_ux_review.
-Every conversation owns an outer SQL transaction that is rolled back. No WhatsApp/n8n delivery is
-invoked. The script reports transcripts plus deterministic DB-safety checks; reply quality is meant
-to be reviewed from the transcript rather than reduced to brittle phrase matching.
+The suite uses the same staging clinic data as run_live_agent_ux_review but enters through the
+shared V2 live facade explicitly. Every conversation owns an outer SQL transaction that is rolled
+back. No WhatsApp/n8n delivery is invoked. The script reports transcripts plus deterministic
+DB-safety checks; reply quality is meant to be reviewed from the transcript rather than reduced to
+brittle phrase matching.
 """
 
 import argparse
@@ -13,6 +14,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -28,6 +30,7 @@ from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.workspace import Workspace
+from app.services.agent_v2.live_chat import run_agent_chat as run_agent_chat_v2
 
 
 OLD_CASES = (
@@ -80,6 +83,22 @@ def _appointment_count(db: Session, workspace: Workspace, patient: Patient) -> i
     )
 
 
+def _send_v2(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    message: str,
+    conversation_id: UUID | None,
+):
+    started = perf_counter()
+    response = run_agent_chat_v2(
+        db=db,
+        workspace=workspace,
+        payload=base._payload(patient.id, message, conversation_id),
+    )
+    return response, int((perf_counter() - started) * 1000)
+
+
 def _run_messages(
     db: Session,
     workspace: Workspace,
@@ -87,7 +106,11 @@ def _run_messages(
     first: str,
     second: str,
 ) -> list[base.Turn]:
-    return base._run_two_turns(db, workspace, patient, first, second)
+    one, d1 = _send_v2(db, workspace, patient, first, None)
+    turns = [base.Turn(first, one.reply, one.model, d1)]
+    two, d2 = _send_v2(db, workspace, patient, second, one.conversation_id)
+    turns.append(base.Turn(second, two.reply, two.model, d2))
+    return turns
 
 
 def _old_case(
@@ -303,6 +326,10 @@ def _execute(engine, slug: str, name: str) -> ReviewResult:
 
 def main() -> int:
     args = _args()
+    if not settings.agent_v2_live_enabled:
+        raise RuntimeError(
+            "Focused V2 live review requires AGENT_V2_LIVE_ENABLED=true; refusing to fall back to V1."
+        )
     names = tuple(args.cases or DEFAULT_CASES)
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     results: list[ReviewResult] = []
@@ -320,6 +347,7 @@ def main() -> int:
         "started_at": datetime.now(UTC).isoformat(),
         "workspace_slug": args.workspace_slug,
         "conversation_count": len(results),
+        "runtime": "v2",
         "database_writes_persisted": False,
         "whatsapp_or_n8n_used": False,
         "results": [asdict(item) for item in results],
