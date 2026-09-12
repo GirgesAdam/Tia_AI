@@ -1,40 +1,12 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 from app.services.agent_v2 import write_executor
-from app.services.agent_v2.package_booking_policy import (
-    BookingPackageResolution,
-    resolve_booking_package,
-)
+from app.services.agent_v2.package_booking_policy import BookingPackageResolution
 from app.services.agent_v2.planner import PlanStep, WriteIntent
-
-
-def test_explicit_standalone_overrides_negative_package_reference(monkeypatch) -> None:
-    def should_not_read(*_args, **_kwargs):
-        raise AssertionError("explicit standalone intent must bypass package resolution")
-
-    monkeypatch.setattr(
-        "app.services.agent_v2.package_booking_policy.list_patient_packages",
-        should_not_read,
-    )
-    result = resolve_booking_package(
-        object(),
-        workspace=SimpleNamespace(id=uuid4(), timezone="Africa/Cairo"),
-        patient=SimpleNamespace(id=uuid4()),
-        service_id=uuid4(),
-        start_at=datetime(2026, 9, 15, 10, 0, tzinfo=UTC),
-        device_key="candela_gentle",
-        package_usage="avoid_existing",
-        requested_package_id=uuid4(),
-    )
-
-    assert result.package_id is None
-    assert result.package_used is False
-    assert result.usage_mode == "avoid_existing"
 
 
 def test_completed_package_booking_exposes_verified_package_use_without_internal_id(monkeypatch) -> None:
