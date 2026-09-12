@@ -303,6 +303,20 @@ def _slot_payload(row: dict[str, object]) -> dict[str, object]:
     return payload
 
 
+def _booking_slot_payload(
+    row: dict[str, object],
+    *,
+    state: ActiveTaskState,
+    step: PlanStep,
+) -> dict[str, object]:
+    payload = _slot_payload(row)
+    if isinstance(state, BookingTaskState):
+        payload["package_usage"] = state.constraints.package_usage
+        if step.facts.get("package_id") not in (None, ""):
+            payload["package_id"] = step.facts["package_id"]
+    return payload
+
+
 def _slot_label(payload: dict[str, object]) -> str:
     parts = [
         str(payload.get("start_time_24h") or ""),
@@ -331,7 +345,10 @@ def _attach_availability_snapshot(
             label=_slot_label(payload),
             payload=payload,
         )
-        for index, payload in enumerate((_slot_payload(row) for row in slots), start=1)
+        for index, payload in enumerate(
+            (_booking_slot_payload(row, state=state, step=step) for row in slots),
+            start=1,
+        )
     ]
     updated = attach_option_snapshot(
         state,
