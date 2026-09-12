@@ -4,6 +4,7 @@ import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import httpx
 from sqlalchemy import select
@@ -863,17 +864,18 @@ def run_meta_transport_tick(
     *,
     limit_per_connection: int = 10,
     max_connections: int = 25,
+    workspace_id: UUID | None = None,
 ) -> dict[str, int]:
+    connection_stmt = select(ChannelConnection).where(
+        ChannelConnection.channel == "whatsapp",
+        ChannelConnection.provider == "meta_cloud",
+        ChannelConnection.status.in_(("active", "paused")),
+    )
+    if workspace_id is not None:
+        connection_stmt = connection_stmt.where(ChannelConnection.workspace_id == workspace_id)
     connections = list(
         db.scalars(
-            select(ChannelConnection)
-            .where(
-                ChannelConnection.channel == "whatsapp",
-                ChannelConnection.provider == "meta_cloud",
-                ChannelConnection.status.in_(("active", "paused")),
-            )
-            .order_by(ChannelConnection.created_at)
-            .limit(max_connections)
+            connection_stmt.order_by(ChannelConnection.created_at).limit(max_connections)
         )
     )
     sent = 0

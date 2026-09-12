@@ -52,6 +52,7 @@ from app.services.automations import (
     retry_automation_job,
 )
 from app.services.clinic_integration_sync_runtime import run_scheduled_sync_tick
+from app.services.meta_whatsapp_transport import run_meta_transport_tick
 
 router = APIRouter()
 
@@ -413,6 +414,15 @@ def automation_tick(
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationTickResponse:
     workspace_id = worker_access.worker.workspace_id
+    # The existing once-per-minute automation scheduler also drains this workspace's
+    # native Meta outbox. This keeps WhatsApp delivery alive without requiring a
+    # second external scheduler/workflow.
+    run_meta_transport_tick(
+        db,
+        workspace_id=workspace_id,
+        limit_per_connection=min(payload.limit, 50),
+        max_connections=25,
+    )
     planning = plan_automation_jobs(
         db,
         workspace_id=workspace_id,
@@ -461,6 +471,16 @@ def execute_automation_job(
         )
     except AutomationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Automation execution can enqueue a WhatsApp dispatch. Drain immediately so
+    # the user does not wait for the next minute tick; the next scheduler tick is
+    # still a durable fallback for any queued outbound work.
+    run_meta_transport_tick(
+        db,
+        workspace_id=worker_access.worker.workspace_id,
+        limit_per_connection=10,
+        max_connections=25,
+    )
 
     job = result.job
     return AutomationExecuteResponse(
