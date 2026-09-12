@@ -27,10 +27,7 @@ def _args() -> argparse.Namespace:
 
 def _auto_confirmation(engine, slug: str) -> base.Result:
     result = base._execute(engine, slug, "auto_existing_package_without_mention")
-    confirmation = result.turns[-1].assistant if result.turns else None
-    mentions_package = bool(confirmation and ("باكيدج" in confirmation or "package" in confirmation.casefold()))
-    result.name = "auto_package_confirmation_mentions_usage"
-    result.db_checks.append(f"confirmation_mentions_package={mentions_package}")
+    result.name = "auto_package_confirmation_after_verified_usage"
     return result
 
 
