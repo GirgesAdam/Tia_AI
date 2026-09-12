@@ -20,7 +20,11 @@ from app.services.agent_chat import (
     _history_from_db,
     _uuid_from_metadata,
     _workspace_clock,
+)
+from app.services.agent_chat import (
     run_agent_chat as run_agent_chat_v1,
+)
+from app.services.agent_chat import (
     run_agent_for_existing_inbound as run_agent_for_existing_inbound_v1,
 )
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
