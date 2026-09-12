@@ -6,16 +6,21 @@ from datetime import datetime
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.v2.semantic_context import (
+    SemanticContext,
     build_semantic_context,
     ground_turn_references,
 )
 from app.agents.v2.turn_contract import (
+    DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import _build_interpreter_messages
+from app.agents.v2.turn_interpreter import (
+    _build_interpreter_messages,
+    merge_verified_read_context,
+)
 
 
 def _catalog() -> dict[str, object]:
@@ -48,6 +53,43 @@ def _catalog() -> dict[str, object]:
             }
         ],
     }
+
+
+def _context_with_verified_availability(*, option_count: int) -> SemanticContext:
+    context = build_semantic_context(_catalog())
+    return SemanticContext(
+        model_input={
+            **context.model_input,
+            "recent_verified_read": {
+                "operation_type": "availability",
+                "service_ref": "S1",
+                "date": {
+                    "mode": "range",
+                    "start_date": "2026-09-12",
+                    "end_date": "2026-09-14",
+                },
+                "availability_option_count": option_count,
+                "availability_found": option_count > 0,
+            },
+        },
+        reference_map=context.reference_map,
+    )
+
+
+def _next_available_turn(*, condition: str) -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(date=DateConstraint(mode="next_available")),
+                selection=None,
+                package_usage="unspecified",
+                continues_previous=True,
+                continuation_condition=condition,
+            )
+        ],
+        safety_signals=[],
+    )
 
 
 def test_semantic_context_hides_canonical_ids_and_keeps_ephemeral_refs() -> None:
@@ -112,3 +154,38 @@ def test_invented_or_wrong_kind_refs_are_removed_without_text_recovery() -> None
     assert entity.text == "ليزر الإبط"
     assert entity.ref is None
     assert entity.candidate_refs == []
+
+
+def test_conditional_fallback_keeps_verified_date_when_previous_availability_succeeded() -> None:
+    merged = merge_verified_read_context(
+        _next_available_turn(condition="if_previous_no_availability"),
+        _context_with_verified_availability(option_count=2),
+    )
+
+    date = merged.operations[0].entities.date
+    assert date is not None
+    assert date.mode == "range"
+    assert date.start_date == "2026-09-12"
+    assert date.end_date == "2026-09-14"
+
+
+def test_conditional_fallback_activates_when_previous_availability_was_empty() -> None:
+    merged = merge_verified_read_context(
+        _next_available_turn(condition="if_previous_no_availability"),
+        _context_with_verified_availability(option_count=0),
+    )
+
+    date = merged.operations[0].entities.date
+    assert date is not None
+    assert date.mode == "next_available"
+
+
+def test_unconditional_nearest_request_is_not_suppressed_by_previous_success() -> None:
+    merged = merge_verified_read_context(
+        _next_available_turn(condition="always"),
+        _context_with_verified_availability(option_count=2),
+    )
+
+    date = merged.operations[0].entities.date
+    assert date is not None
+    assert date.mode == "next_available"

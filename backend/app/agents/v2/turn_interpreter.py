@@ -79,7 +79,9 @@ SEMANTIC PRINCIPLES
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
-  same dimension.
+  same dimension. Set continuation_condition=if_previous_no_availability only when the operation is
+  explicitly conditional on the immediately previous verified availability having no options; use
+  continuation_condition=always for ordinary continuations and unconditional nearest requests.
 - execution_intent describes whether the customer authorizes an action now. Use execute only when
   the customer is actually asking Tia to perform the action now. Questions, comparisons,
   hypotheticals, "should I" choices, and requests to inspect consequences/options are informational,
@@ -241,11 +243,25 @@ def _reference_from_verified(
     return None
 
 
+def _conditional_fallback_disproved(
+    verified: dict[str, object],
+    *,
+    continuation_condition: str,
+) -> bool:
+    if continuation_condition != "if_previous_no_availability":
+        return False
+    found = verified.get("availability_found")
+    option_count = verified.get("availability_option_count")
+    return found is True or (
+        isinstance(option_count, int) and not isinstance(option_count, bool) and option_count > 0
+    )
+
+
 def merge_verified_read_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
 ) -> TiaTurnUnderstanding:
-    """Merge only explicitly-declared continuations with the previous verified read scope."""
+    """Merge explicitly-declared continuations with the previous verified read scope."""
     raw = semantic_context.model_input.get("recent_verified_read")
     if not isinstance(raw, dict) or not raw:
         return turn
@@ -286,9 +302,19 @@ def merge_verified_read_context(
         for field, value in inherited:
             if getattr(entities, field) is None and value is not None:
                 updates[field] = value
-        if entities.date is None and previous_date is not None:
+
+        fallback_disproved = _conditional_fallback_disproved(
+            raw,
+            continuation_condition=operation.continuation_condition,
+        )
+        if fallback_disproved and previous_date is not None:
             updates["date"] = previous_date
-        if entities.time is None and previous_time is not None:
+        elif entities.date is None and previous_date is not None:
+            updates["date"] = previous_date
+
+        if fallback_disproved and previous_time is not None:
+            updates["time"] = previous_time
+        elif entities.time is None and previous_time is not None:
             updates["time"] = previous_time
         elif (
             entities.time is not None

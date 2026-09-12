@@ -125,13 +125,36 @@ def _verified_doctor_names(outcomes: list[TurnOutcome]) -> list[str]:
     return names
 
 
+def _deterministic_pure_doctor_list_reply(
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> str | None:
+    """Render a pure verified doctor-list answer once, without a generative append pass."""
+    if not outcomes or any(
+        outcome.status != "answered" or outcome.response_goal != "answer_doctor"
+        for outcome in outcomes
+    ):
+        return None
+
+    names = _verified_doctor_names(outcomes)
+    if not names:
+        return None
+
+    latest_index = _latest_customer_index(history)
+    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
+    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
+    if arabic:
+        return "الدكاترة اللي بيقدموا الخدمة كلهم: " + "، ".join(names) + "."
+    return "All doctors who provide the service: " + ", ".join(names) + "."
+
+
 def _ensure_verified_doctor_list(
     text: str,
     *,
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
 ) -> str:
-    """Prevent the language layer from silently dropping verified doctors from a list answer."""
+    """Prevent the language layer from silently dropping verified doctors from a compound answer."""
     names = _verified_doctor_names(outcomes)
     if len(names) < 2 or all(name in text for name in names):
         return text
@@ -284,6 +307,10 @@ def compose_v2_customer_reply(
     deterministic_medical = _deterministic_medical_handoff_reply(history, outcomes)
     if deterministic_medical is not None:
         return deterministic_medical, "deterministic:medical-handoff"
+
+    deterministic_doctors = _deterministic_pure_doctor_list_reply(history, outcomes)
+    if deterministic_doctors is not None:
+        return deterministic_doctors, "deterministic:doctor-list"
 
     messages = _build_responder_messages(
         clinic_name=clinic_name,

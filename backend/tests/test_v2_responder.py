@@ -33,6 +33,22 @@ def _price_outcome() -> TurnOutcome:
     )
 
 
+def _doctor_outcome() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="answer_doctor",
+        facts={
+            "doctors": {
+                "doctors": [
+                    {"name": "د. مريم"},
+                    {"name": "د. سارة"},
+                    {"name": "د. نور"},
+                ]
+            }
+        },
+    )
+
+
 def test_responder_preserves_native_dialogue_roles_and_keeps_latest_customer_last() -> None:
     history = [
         HumanMessage(content="عايزة ليزر إبط"),
@@ -128,6 +144,56 @@ def test_compose_v2_customer_reply_returns_one_model_reply(monkeypatch: pytest.M
 
     assert text == "ليزر الإبط سعره 500 جنيه، والمتاح بكرة من 6 لـ8 مساءً مع د. مريم."
     assert model == "openai:test-model"
+
+
+def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_if_built():
+        raise AssertionError("pure doctor discovery should not build the responder model")
+
+    monkeypatch.setattr(responder, "build_realtime_composer_model", fail_if_built)
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="مين الدكاترة اللي بيعملوا ليزر الإبط؟")],
+        outcomes=[_doctor_outcome()],
+    )
+
+    assert model == "deterministic:doctor-list"
+    assert text.count("د. مريم") == 1
+    assert text.count("د. سارة") == 1
+    assert text.count("د. نور") == 1
+
+
+def test_doctor_list_does_not_bypass_model_for_compound_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=AIMessage(
+                content="الدكاترة د. مريم ود. سارة ود. نور، وسعر ليزر الإبط 500 جنيه."
+            ),
+            model_name="test-model",
+        ),
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="مين الدكاترة والسعر كام؟")],
+        outcomes=[_doctor_outcome(), _price_outcome()],
+    )
+
+    assert model == "openai:test-model"
+    assert "500 جنيه" in text
+    assert text.count("د. مريم") == 1
+    assert text.count("د. سارة") == 1
+    assert text.count("د. نور") == 1
 
 
 def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

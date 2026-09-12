@@ -45,6 +45,7 @@ TimeAmbiguity = Literal["none", "twelve_hour"]
 SelectionKind = Literal["index", "time", "ref"]
 EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
+ContinuationCondition = Literal["always", "if_previous_no_availability"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -211,6 +212,15 @@ class TurnOperation(StrictContractModel):
             "True only when this operation continues recent_verified_read. Respect its verified "
             "result summary: a conditional fallback must not replace a successful prior read when "
             "availability_found=true. Python owns inheritance of omitted scope fields."
+        ),
+    )
+    continuation_condition: ContinuationCondition = Field(
+        default="always",
+        description=(
+            "Use if_previous_no_availability only when this operation is a conditional fallback "
+            "that should activate only if recent_verified_read found no availability. Use always "
+            "for ordinary continuations and unconditional nearest/next-available requests. Python "
+            "evaluates this condition against the verified previous result."
         ),
     )
 
