@@ -92,6 +92,10 @@ SEMANTIC PRINCIPLES
   a separate book operation for that session; the booking should use package_usage=use_existing when
   the customer intends it to consume the newly purchased package. If the same turn requests another
   appointment too, emit that as another separate book operation rather than collapsing any action.
+- When the customer explicitly compares using an owned package with paying for a standalone session
+  of the same service, keep the turn informational and emit both package_info and pricing operations
+  for that service so both sides of the comparison are grounded. Do not turn the comparison into a
+  booking or purchase request.
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
