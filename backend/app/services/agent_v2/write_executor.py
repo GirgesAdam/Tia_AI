@@ -15,6 +15,10 @@ from app.integrations.clinic.authority import (
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.services.activity import record_activity_event
+from app.services.agent_v2.package_booking_policy import (
+    BookingPackagePolicyError,
+    resolve_booking_package,
+)
 from app.services.agent_v2.planner import PlanStep
 from app.services.appointment_creation import create_appointment_operation
 from app.services.appointment_operations import (
@@ -140,20 +144,33 @@ def execute_write_ready_step(
                         code="patient_blocked",
                         detail="Blocked patients cannot receive new appointments.",
                     )
+                service_id = _uuid(parameters, "service_id")
+                start_at = _datetime(parameters, "start_at")
+                device_key = (
+                    str(parameters["device_key"]) if parameters.get("device_key") else None
+                )
+                package_resolution = resolve_booking_package(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    service_id=service_id,
+                    start_at=start_at,
+                    device_key=device_key,
+                    package_usage=str(parameters.get("package_usage") or "unspecified"),
+                    requested_package_id=_optional_uuid(parameters, "package_id"),
+                )
                 appointment = create_appointment_operation(
                     db,
                     workspace=workspace,
                     patient_id=patient.id,
                     branch_id=_uuid(parameters, "branch_id"),
                     doctor_id=_uuid(parameters, "doctor_id"),
-                    service_id=_uuid(parameters, "service_id"),
-                    requested_start_at=_datetime(parameters, "start_at"),
+                    service_id=service_id,
+                    requested_start_at=start_at,
                     created_by_user_id=None,
-                    patient_package_id=_optional_uuid(parameters, "package_id"),
+                    patient_package_id=package_resolution.package_id,
                     source="ai",
-                    laser_device_key=(
-                        str(parameters["device_key"]) if parameters.get("device_key") else None
-                    ),
+                    laser_device_key=device_key,
                     idempotency_key=idempotency_key,
                     actor_type="ai",
                 )
@@ -162,6 +179,14 @@ def execute_write_ready_step(
                     "write_kind": intent.kind,
                     "appointment_id": str(appointment.id),
                     "status": appointment.status,
+                    "patient_package_id": (
+                        str(package_resolution.package_id)
+                        if package_resolution.package_id is not None
+                        else None
+                    ),
+                    "package_used": package_resolution.package_used,
+                    "package_name": package_resolution.package_name,
+                    "package_usage_mode": package_resolution.usage_mode,
                 }
             elif intent.kind == "confirm_appointment":
                 appointment = confirm_appointment_operation(
@@ -300,6 +325,14 @@ def execute_write_ready_step(
         if commit:
             db.commit()
         return result
+    except BookingPackagePolicyError as exc:
+        if commit:
+            db.rollback()
+        return _failure(
+            write_kind=intent.kind,
+            code="package_unavailable",
+            detail=str(exc),
+        )
     except ClinicIntegrationAuthorityError as exc:
         if commit:
             db.rollback()
