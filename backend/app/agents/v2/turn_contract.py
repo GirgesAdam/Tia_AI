@@ -40,9 +40,11 @@ SafetySignal = Literal[
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
-TimeMode = Literal["exact", "after", "before", "range"]
+TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
 SelectionKind = Literal["index", "time", "ref"]
+EntityCandidateMode = Literal["ambiguous", "set"]
+ExecutionIntent = Literal["informational", "execute"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -64,6 +66,7 @@ class EntityReference(StrictContractModel):
     text: str | None = None
     ref: str | None = None
     candidate_refs: list[str] = Field(default_factory=list)
+    candidate_mode: EntityCandidateMode = "ambiguous"
 
 
 class DateConstraint(StrictContractModel):
@@ -111,6 +114,8 @@ class TimeConstraint(StrictContractModel):
                 raise ValueError("range time constraint requires start_time and end_time.")
             if parsed_end < parsed_start:
                 raise ValueError("time range end_time cannot be before start_time.")
+        # nearest may omit an anchor; Python can inherit the verified previous exact
+        # time on a continuation, or otherwise choose the earliest available slot.
         if parsed_start is None and self.start_time_ambiguity != "none":
             raise ValueError("start_time_ambiguity requires start_time.")
         if parsed_end is None and self.end_time_ambiguity != "none":
@@ -185,6 +190,12 @@ class TurnOperation(StrictContractModel):
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    # Required in provider schemas. The default preserves compatibility for direct
+    # internal/test construction; production structured output always supplies it.
+    execution_intent: ExecutionIntent = "execute"
+    # True only when this operation semantically continues the supplied verified
+    # one-turn read context. Python, not the model, owns the actual merge.
+    continues_previous: bool = False
 
 
 class TiaTurnUnderstanding(StrictContractModel):
