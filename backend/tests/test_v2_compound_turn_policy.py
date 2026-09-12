@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
+from datetime import datetime
+
+from app.services.agent_v2.compound_turn_policy import (
+    apply_compound_runtime_cursor,
+    normalize_compound_turn_plan,
+    resolve_compound_followup_after_reads,
+)
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 
 
 def _booking(index: int, service_id: str, *, device_key: str | None = None) -> PlanStep:
@@ -69,20 +76,42 @@ def _catalog() -> dict[str, object]:
     }
 
 
-def _start(step: PlanStep) -> str:
+def _time(step: PlanStep) -> dict[str, object]:
     assert step.write_intent is not None
     raw = step.write_intent.parameters["time"]
     assert isinstance(raw, dict)
-    return str(raw["start_time"])
+    return raw
 
 
-def _read_start(step: PlanStep) -> str:
+def _read_time(step: PlanStep) -> dict[str, object]:
     raw = step.reads[0].parameters["time"]
     assert isinstance(raw, dict)
-    return str(raw["start_time"])
+    return raw
 
 
-def test_same_anchor_bookings_are_scheduled_back_to_back_in_customer_order() -> None:
+def _slot(start: str, end: str, *, doctor_id: str = "doctor-1") -> dict[str, object]:
+    return {
+        "branch_id": "branch-1",
+        "branch_name": "Clinic",
+        "service_id": "service-b",
+        "service_name": "Service B",
+        "doctor_id": doctor_id,
+        "doctor_name": "Doctor",
+        "start_at": start,
+        "end_at": end,
+        "start_local": start,
+        "end_local": end,
+        "start_time_24h": datetime.fromisoformat(start).strftime("%H:%M"),
+        "end_time_24h": datetime.fromisoformat(end).strftime("%H:%M"),
+        "duration_minutes": 30,
+        "price_minor": 10000,
+        "currency": "EGP",
+        "laser_device_key": None,
+        "laser_device_name": None,
+    }
+
+
+def test_same_anchor_bookings_search_back_to_back_in_customer_order() -> None:
     plan = TurnPlan(
         steps=[
             _booking(0, "service-a"),
@@ -93,9 +122,89 @@ def test_same_anchor_bookings_are_scheduled_back_to_back_in_customer_order() -> 
 
     normalized = normalize_compound_turn_plan(plan, catalog=_catalog())
 
-    assert [_start(step) for step in normalized.steps] == ["12:00", "12:30", "13:15"]
-    assert [_read_start(step) for step in normalized.steps] == ["12:00", "12:30", "13:15"]
-    assert all(step.facts["compound_visit_sequenced"] is True for step in normalized.steps)
+    assert [str(_time(step)["start_time"]) for step in normalized.steps] == [
+        "12:00",
+        "12:30",
+        "13:15",
+    ]
+    assert [str(_time(step)["mode"]) for step in normalized.steps] == ["exact", "after", "after"]
+    assert [str(_read_time(step)["mode"]) for step in normalized.steps] == [
+        "exact",
+        "after",
+        "after",
+    ]
+    assert [step.facts["compound_visit_sequence_index"] for step in normalized.steps] == [0, 1, 2]
+
+
+def test_runtime_cursor_replaces_predicted_followup_start_with_actual_previous_end() -> None:
+    normalized = normalize_compound_turn_plan(
+        TurnPlan(steps=[_booking(0, "service-a"), _booking(1, "service-b")]),
+        catalog=_catalog(),
+    )
+    second = normalized.steps[1]
+
+    shifted = apply_compound_runtime_cursor(
+        second,
+        previous_end_at=datetime.fromisoformat("2026-09-20T15:10:00+03:00"),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert _time(shifted)["mode"] == "after"
+    assert _time(shifted)["start_time"] == "15:10"
+    assert _read_time(shifted)["start_time"] == "15:10"
+
+
+def test_followup_selects_earliest_live_verified_slot_and_narrows_outcome_read() -> None:
+    normalized = normalize_compound_turn_plan(
+        TurnPlan(steps=[_booking(0, "service-a"), _booking(1, "service-b")]),
+        catalog=_catalog(),
+    )
+    second = normalized.steps[1]
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=True,
+                payload={
+                    "slots": [
+                        _slot("2026-09-20T15:30:00+03:00", "2026-09-20T16:00:00+03:00"),
+                        _slot("2026-09-20T15:00:00+03:00", "2026-09-20T15:30:00+03:00"),
+                    ],
+                    "matching_slot_count": 2,
+                },
+            )
+        ]
+    )
+
+    advanced, narrowed, handled = resolve_compound_followup_after_reads(second, reads)
+
+    assert handled is True
+    assert advanced.disposition == "write_ready"
+    assert advanced.write_intent is not None
+    assert advanced.write_intent.parameters["start_at"] == "2026-09-20T15:00:00+03:00"
+    assert _time(advanced)["mode"] == "exact"
+    assert _time(advanced)["start_time"] == "15:00"
+    slots = narrowed.results[0].payload["slots"]
+    assert isinstance(slots, list)
+    assert len(slots) == 1
+    assert slots[0]["start_at"] == "2026-09-20T15:00:00+03:00"
+
+
+def test_followup_with_no_later_slot_blocks_instead_of_forcing_overlap() -> None:
+    normalized = normalize_compound_turn_plan(
+        TurnPlan(steps=[_booking(0, "service-a"), _booking(1, "service-b")]),
+        catalog=_catalog(),
+    )
+    second = normalized.steps[1]
+    reads = ReadExecutionBundle(
+        results=[ReadResult(kind="availability", ok=True, payload={"slots": []})]
+    )
+
+    advanced, _reads, handled = resolve_compound_followup_after_reads(second, reads)
+
+    assert handled is True
+    assert advanced.disposition == "blocked"
+    assert advanced.response_goal == "no_availability"
 
 
 def test_booking_before_same_package_purchase_is_reordered_and_made_package_required() -> None:
@@ -185,5 +294,5 @@ def test_different_requested_anchors_are_not_retimed() -> None:
         catalog=_catalog(),
     )
 
-    assert [_start(step) for step in normalized.steps] == ["12:00", "14:00"]
+    assert [str(_time(step)["start_time"]) for step in normalized.steps] == ["12:00", "14:00"]
     assert all("compound_visit_sequenced" not in step.facts for step in normalized.steps)
