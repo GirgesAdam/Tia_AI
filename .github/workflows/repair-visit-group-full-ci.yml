@@ -1,0 +1,178 @@
+name: Repair Visit Group Full CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/repair-visit-group-full-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+  MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+  SUPABASE_URL: https://example.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+  SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+  ENVIRONMENT: test
+  DEBUG: "false"
+  DOCS_ENABLED: "false"
+
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Apply narrow repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, *, expected: int = 1) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {count}: {old!r}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          orchestrator = "backend/app/services/agent_v2/orchestrator.py"
+          replace_exact(
+              orchestrator,
+              "from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan\n",
+              "from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan\n"
+              "from app.services.agent_v2.grouped_write_transaction import (\n"
+              "    begin_group_savepoint,\n"
+              "    release_group_savepoint,\n"
+              "    rollback_group_savepoint,\n"
+              ")\n",
+          )
+          replace_exact(orchestrator, "active_group_tx = db.begin_nested()", "active_group_tx = begin_group_savepoint(db)")
+          replace_exact(orchestrator, "active_group_tx.commit()", "release_group_savepoint(active_group_tx)")
+          replace_exact(
+              orchestrator,
+              "active_group_tx.rollback()",
+              "rollback_group_savepoint(active_group_tx)",
+              expected=3,
+          )
+
+          helper = Path("backend/app/services/agent_v2/grouped_write_transaction.py")
+          if helper.exists():
+              raise SystemExit(f"refusing to overwrite existing {helper}")
+          helper.write_text(
+              "from __future__ import annotations\n\n"
+              "from sqlalchemy.orm import Session, SessionTransaction\n\n\n"
+              "def begin_group_savepoint(db: Session) -> SessionTransaction:\n"
+              "    \"\"\"Open a savepoint while leaving the caller-owned outer transaction untouched.\"\"\"\n"
+              "    return db.begin_nested()\n\n\n"
+              "def release_group_savepoint(transaction: SessionTransaction) -> None:\n"
+              "    \"\"\"Release only the grouped-write savepoint, never the outer turn transaction.\"\"\"\n"
+              "    transaction.commit()\n\n\n"
+              "def rollback_group_savepoint(transaction: SessionTransaction) -> None:\n"
+              "    \"\"\"Rollback only the grouped-write savepoint.\"\"\"\n"
+              "    transaction.rollback()\n",
+              encoding="utf-8",
+          )
+
+          schema_files = (
+              "backend/tests/test_external_appointment_sync_phase62e.py",
+              "backend/tests/test_external_sync_engine_phase62c.py",
+              "backend/tests/test_historical_data_ai_retrieval_phase66.py",
+              "backend/tests/test_staff_analytics_bi_phase67.py",
+          )
+          for path in schema_files:
+              replace_exact(
+                  path,
+                  "service_id CHAR(32), patient_package_id CHAR(32), lead_id CHAR(32)",
+                  "service_id CHAR(32), patient_package_id CHAR(32), visit_group_id CHAR(32), lead_id CHAR(32)",
+              )
+          PY
+
+          git diff --check
+          git diff -- backend/app/services/agent_v2/orchestrator.py backend/app/services/agent_v2/grouped_write_transaction.py backend/tests/test_external_appointment_sync_phase62e.py backend/tests/test_external_sync_engine_phase62c.py backend/tests/test_historical_data_ai_retrieval_phase66.py backend/tests/test_staff_analytics_bi_phase67.py
+
+      - name: Ruff
+        working-directory: backend
+        run: ruff check app tests alembic
+
+      - name: Compile
+        working-directory: backend
+        run: python -m compileall -q app alembic tests
+
+      - name: Verify clean migrations
+        working-directory: backend
+        run: |
+          test "$(python -m alembic heads)" = "0068_visit_group_id (head)"
+          PGPASSWORD=ci_password psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+          python -m alembic upgrade head
+
+      - name: Full backend tests
+        working-directory: backend
+        run: python -m pytest -q
+
+      - name: Commit verified repair atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/repair-visit-group-full-ci.yml
+          rm -f .github/workflows/diagnose-v2-orchestrator.yml
+          git add backend/app/services/agent_v2/orchestrator.py \
+                  backend/app/services/agent_v2/grouped_write_transaction.py \
+                  backend/tests/test_external_appointment_sync_phase62e.py \
+                  backend/tests/test_external_sync_engine_phase62c.py \
+                  backend/tests/test_historical_data_ai_retrieval_phase66.py \
+                  backend/tests/test_staff_analytics_bi_phase67.py \
+                  .github/workflows/repair-visit-group-full-ci.yml \
+                  .github/workflows/diagnose-v2-orchestrator.yml
+          git diff --cached --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Repair visit-group CI transaction boundaries"
+          git push origin HEAD:main
