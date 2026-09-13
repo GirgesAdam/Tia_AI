@@ -49,39 +49,48 @@ def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
 
 
 def _bookable_start_runs(starts: list[datetime]) -> list[tuple[datetime, datetime]]:
-    """Compress verified appointment starts without turning the final visit end into availability.
+    """Compress verified appointment starts into conservative customer-facing start windows.
 
-    The customer-facing end of a range is the latest verified *bookable start*, not the end of the
-    final appointment. Runs are joined only when the observed start cadence proves the intermediate
-    grid points are present. Large or irregular gaps therefore remain separate windows.
+    The range end is the latest verified *bookable start*, never the end of the final appointment.
+    We first split obviously separate clusters (>1 hour apart), then infer cadence only inside each
+    cluster so a 15-minute grid earlier in the day cannot distort a later hourly grid. Irregular gaps
+    inside a cluster split the range rather than hiding an unverified start time.
     """
 
     ordered = sorted(set(starts))
     if not ordered:
         return []
-    if len(ordered) == 1:
-        return [(ordered[0], ordered[0])]
 
-    positive_deltas = sorted(
-        {
-            int((current - previous).total_seconds())
-            for previous, current in zip(ordered, ordered[1:], strict=False)
-            if current > previous
-        }
-    )
-    eligible = [delta for delta in positive_deltas if delta <= 60 * 60]
-    cadence = min(eligible) if eligible else None
-    if cadence is None:
-        return [(start, start) for start in ordered]
-
-    runs: list[list[datetime]] = [[ordered[0]]]
+    clusters: list[list[datetime]] = [[ordered[0]]]
     for previous, current in zip(ordered, ordered[1:], strict=False):
         delta = int((current - previous).total_seconds())
-        if delta == cadence:
-            runs[-1].append(current)
+        if delta > 60 * 60:
+            clusters.append([current])
         else:
-            runs.append([current])
-    return [(run[0], run[-1]) for run in runs]
+            clusters[-1].append(current)
+
+    runs: list[tuple[datetime, datetime]] = []
+    for cluster in clusters:
+        if len(cluster) <= 2:
+            runs.append((cluster[0], cluster[-1]))
+            continue
+
+        deltas = [
+            int((current - previous).total_seconds())
+            for previous, current in zip(cluster, cluster[1:], strict=False)
+        ]
+        cadence = min(delta for delta in deltas if delta > 0)
+        current_run = [cluster[0]]
+        for previous, current in zip(cluster, cluster[1:], strict=False):
+            delta = int((current - previous).total_seconds())
+            if delta == cadence:
+                current_run.append(current)
+            else:
+                runs.append((current_run[0], current_run[-1]))
+                current_run = [current]
+        runs.append((current_run[0], current_run[-1]))
+
+    return runs
 
 
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
