@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
     DateConstraint,
-    TimeConstraint,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
