@@ -9,6 +9,7 @@ from app.models.appointment import Appointment
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.patient_package import PackageUsage
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.models.staff import Staff
@@ -119,6 +120,7 @@ def build_patient_history_context(
     ).all()
     recent_ids = [row[0].id for row in recent_rows]
     net_by_appointment: dict[UUID, int] = {}
+    package_usage_by_appointment: dict[UUID, str] = {}
     if recent_ids:
         alloc_rows = db.execute(
             select(
@@ -133,6 +135,16 @@ def build_patient_history_context(
             .group_by(PaymentAllocation.appointment_id)
         ).all()
         net_by_appointment = {row.appointment_id: max(int(row.net or 0), 0) for row in alloc_rows}
+
+        usage_rows = db.execute(
+            select(PackageUsage.appointment_id, PackageUsage.status).where(
+                PackageUsage.workspace_id == workspace_id,
+                PackageUsage.appointment_id.in_(recent_ids),
+            )
+        ).all()
+        package_usage_by_appointment = {
+            row.appointment_id: str(row.status) for row in usage_rows
+        }
 
     return PatientHistoryContextRead(
         profile=PatientHistoryProfileRead(
@@ -179,6 +191,7 @@ def build_patient_history_context(
                 payment_status=appointment.payment_status,
                 payment_method=appointment.payment_method,
                 billing_context=appointment.billing_context,
+                package_usage_status=package_usage_by_appointment.get(appointment.id),
             )
             for appointment, service_name, branch_name, doctor_first, doctor_last in recent_rows
         ],
