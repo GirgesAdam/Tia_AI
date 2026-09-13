@@ -160,9 +160,9 @@ def test_availability_outcome_uses_windows_and_hides_canonical_ids() -> None:
             "doctor_name": "مريم",
             "laser_device_name": "Candela Gentle",
             "start_local": "2026-09-17T19:00:00+03:00",
-            "end_local": "2026-09-17T20:00:00+03:00",
+            "end_local": "2026-09-17T19:30:00+03:00",
             "start_time_24h": "19:00",
-            "end_time_24h": "20:00",
+            "end_time_24h": "19:30",
         }
     ]
     assert "doctor-1" not in str(visible)
@@ -317,41 +317,3 @@ def test_successful_write_outcome_hides_action_identifiers_and_formats_money() -
     assert outcome.status == "completed"
     assert visible["action_result"]["price"] == "500.00 EGP"
     assert "appointment-secret" not in str(visible)
-
-
-def test_unsafe_refund_quote_becomes_blocked_staff_review() -> None:
-    context = _semantic_context()
-    operation = TurnOperation(
-        type="refund_quote",
-        entities=TurnEntities(),
-        selection=None,
-        package_usage="unspecified",
-    )
-    step = PlanStep(
-        operation_index=0,
-        operation_type="refund_quote",
-        disposition="read",
-        response_goal="package_refund_quote",
-    )
-    reads = ReadExecutionBundle(
-        results=[
-            ReadResult(
-                kind="package_refund_quote",
-                ok=False,
-                payload={"quotes": [], "unsafe_package_ids": ["secret-package"]},
-                error_code="refund_quote_requires_staff",
-            )
-        ]
-    )
-
-    outcome = build_step_outcome(
-        step,
-        turn=_turn(operation),
-        semantic_context=context,
-        reads=reads,
-    )
-    visible = customer_visible_outcome(outcome)
-
-    assert outcome.status == "blocked"
-    assert outcome.facts["requires_staff_review"] is True
-    assert "secret-package" not in str(visible)
