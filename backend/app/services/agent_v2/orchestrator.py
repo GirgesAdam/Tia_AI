@@ -115,7 +115,9 @@ def _operation_for_step(
 
 
 def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep:
-    if step.write_intent is None or not step.reads:
+    if not step.reads:
+        return step
+    if step.write_intent is None and step.state_action != "start_reschedule":
         return step
     return advance_step_after_verification(step, reads.verification)
 
