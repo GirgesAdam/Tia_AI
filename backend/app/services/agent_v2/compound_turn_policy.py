@@ -11,6 +11,8 @@ _PACKAGE_DEPENDENCY_FACT = "depends_on_package_purchase_operation_index"
 _COMPOUND_SEQUENCE_FACT = "compound_visit_sequenced"
 _COMPOUND_SEQUENCE_INDEX_FACT = "compound_visit_sequence_index"
 _COMPOUND_ANCHOR_FACT = "compound_visit_anchor_local"
+_COMPOUND_WRITE_GROUP_FACT = "compound_write_group"
+_COMPOUND_GROUPED_FACT = "compound_visit_grouped"
 
 
 def _write_kind(step: PlanStep) -> str | None:
@@ -232,6 +234,45 @@ def _sequence_shared_anchor_bookings(
     return [replacements.get(step.operation_index, step) for step in steps]
 
 
+
+def _tag_compound_write_group(steps: list[PlanStep]) -> list[PlanStep]:
+    """Tag a multi-service booking and any package purchases it depends on as one write group."""
+    bookings = [step for step in steps if _write_kind(step) == "booking"]
+    service_ids = {
+        str(_write_parameters(step).get("service_id"))
+        for step in bookings
+        if _write_parameters(step).get("service_id")
+    }
+    if len(bookings) < 2 or len(service_ids) < 2:
+        return steps
+
+    group_key = "compound:" + ",".join(str(step.operation_index) for step in bookings)
+    purchase_indexes = {
+        int(step.facts[_PACKAGE_DEPENDENCY_FACT])
+        for step in bookings
+        if step.facts.get(_PACKAGE_DEPENDENCY_FACT) is not None
+    }
+    tagged: list[PlanStep] = []
+    for step in steps:
+        if step in bookings or step.operation_index in purchase_indexes:
+            step = step.model_copy(
+                update={
+                    "facts": {
+                        **step.facts,
+                        _COMPOUND_WRITE_GROUP_FACT: group_key,
+                        _COMPOUND_GROUPED_FACT: True,
+                    }
+                }
+            )
+        tagged.append(step)
+    return tagged
+
+
+def compound_write_group(step: PlanStep) -> str | None:
+    value = step.facts.get(_COMPOUND_WRITE_GROUP_FACT)
+    return str(value) if value not in (None, "") else None
+
+
 def normalize_compound_turn_plan(
     plan: TurnPlan,
     *,
@@ -249,6 +290,7 @@ def normalize_compound_turn_plan(
     if plan.handoff_category is not None or len(plan.steps) < 2:
         return plan
     steps = _tag_and_order_package_dependencies(list(plan.steps))
+    steps = _tag_compound_write_group(steps)
     steps = _sequence_shared_anchor_bookings(steps, catalog=catalog)
     return plan.model_copy(update={"steps": steps})
 

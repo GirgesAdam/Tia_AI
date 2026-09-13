@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from app.integrations.clinic.base import AvailabilityRequest, AvailabilityResult, AvailabilitySlot
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.service import Service
-from app.services.agent_v2.compound_turn_policy import compound_anchor_key, compound_sequence_index
+from app.services.agent_v2.compound_turn_policy import (
+    compound_anchor_key,
+    compound_sequence_index,
+    compound_write_group,
+)
 from app.services.agent_v2.planner import PlanStep, TurnPlan
 from app.services.agent_v2.read_executor import ReadExecutionContext
 
@@ -137,6 +141,7 @@ def _availability_for_day(
     *,
     booking_date: date,
     context: ReadExecutionContext,
+    forced_doctor_id: str | None = None,
 ) -> list[AvailabilityResult] | None:
     adapter = context.adapter or get_clinic_adapter(db=context.db, workspace=context.workspace)
     branch_default = context.workspace.primary_branch_id
@@ -144,7 +149,7 @@ def _availability_for_day(
     for step in steps:
         params = _params(step)
         service_id = params.get("service_id")
-        doctor_id = params.get("doctor_id")
+        doctor_id = forced_doctor_id or params.get("doctor_id")
         branch_id = params.get("branch_id") or branch_default
         if service_id is None or doctor_id is None or branch_id is None:
             return None
@@ -170,12 +175,18 @@ def _find_joint_chain(
     requested_anchor: datetime,
     context: ReadExecutionContext,
     timezone_name: str,
+    forced_doctor_id: str | None = None,
 ) -> tuple[list[AvailabilitySlot] | None, bool]:
     tz = ZoneInfo(timezone_name)
     anchor_aware = requested_anchor.replace(tzinfo=tz).astimezone(UTC)
     for offset in range(_SEARCH_DAYS):
         current_date = requested_anchor.date() + timedelta(days=offset)
-        results = _availability_for_day(steps, booking_date=current_date, context=context)
+        results = _availability_for_day(
+            steps,
+            booking_date=current_date,
+            context=context,
+            forced_doctor_id=forced_doctor_id,
+        )
         if results is None:
             return None, False
         first_slots = sorted(
@@ -289,11 +300,250 @@ def _suppress_group_write(step: PlanStep, *, requested_anchor: datetime) -> Plan
     )
 
 
+
+def _doctor_candidates(step: PlanStep, context: ReadExecutionContext) -> set[str]:
+    params = _params(step)
+    doctor_id = params.get("doctor_id")
+    if doctor_id:
+        return {str(doctor_id)}
+    raw_ids = params.get("doctor_ids")
+    if isinstance(raw_ids, list):
+        ids = {str(item) for item in raw_ids if item}
+        if ids:
+            return ids
+
+    service_id = params.get("service_id")
+    catalog = context.catalog if isinstance(context.catalog, dict) else {}
+    doctors = catalog.get("doctors") if isinstance(catalog, dict) else None
+    if service_id is None or not isinstance(doctors, list):
+        return set()
+    return {
+        str(row["id"])
+        for row in doctors
+        if isinstance(row, dict)
+        and row.get("id")
+        and isinstance(row.get("service_ids"), list)
+        and str(service_id) in {str(value) for value in row["service_ids"]}
+    }
+
+
+def _common_doctors(steps: list[PlanStep], context: ReadExecutionContext) -> list[str]:
+    candidate_sets = [_doctor_candidates(step, context) for step in steps]
+    if not candidate_sets or any(not values for values in candidate_sets):
+        return []
+    common = set.intersection(*candidate_sets)
+    return sorted(common)
+
+
+def _requested_group_anchor(
+    steps: list[PlanStep],
+    *,
+    context: ReadExecutionContext,
+    timezone_name: str,
+) -> tuple[datetime, str] | None:
+    compound_anchors = {
+        value
+        for step in steps
+        if (value := compound_anchor_key(step)) is not None
+    }
+    if len(compound_anchors) == 1:
+        try:
+            return datetime.fromisoformat(next(iter(compound_anchors))), "exact"
+        except ValueError:
+            return None
+
+    dates: list[dict[str, object]] = []
+    times: list[dict[str, object] | None] = []
+    for step in steps:
+        params = _params(step)
+        raw_date = params.get("date")
+        raw_time = params.get("time")
+        if not isinstance(raw_date, dict):
+            return None
+        dates.append(raw_date)
+        times.append(raw_time if isinstance(raw_time, dict) else None)
+
+    date_modes = {str(item.get("mode")) for item in dates}
+    tz = ZoneInfo(timezone_name)
+    if date_modes == {"next_available"}:
+        local_now = context.now.astimezone(tz)
+        return local_now.replace(tzinfo=None), "next_available"
+    if date_modes != {"exact"}:
+        return None
+
+    exact_dates = {str(item.get("start_date")) for item in dates if item.get("start_date")}
+    if len(exact_dates) != 1:
+        return None
+    day = date.fromisoformat(next(iter(exact_dates)))
+    exact_times = {
+        str(item.get("start_time"))
+        for item in times
+        if isinstance(item, dict) and item.get("mode") == "exact" and item.get("start_time")
+    }
+    if len(exact_times) == 1 and all(
+        isinstance(item, dict) and item.get("mode") == "exact" for item in times
+    ):
+        return datetime.combine(day, datetime.strptime(next(iter(exact_times)), "%H:%M").time()), "exact"
+    return datetime.combine(day, datetime.min.time()), "date_only"
+
+
+def _attach_visit_group(step: PlanStep, visit_group_id: str, doctor_id: str) -> PlanStep:
+    reads = []
+    for request in step.reads:
+        parameters = dict(request.parameters)
+        if request.kind == "availability":
+            parameters.pop("doctor_ids", None)
+            parameters["doctor_id"] = doctor_id
+        reads.append(request.model_copy(update={"parameters": parameters}))
+
+    write_intent = step.write_intent
+    if write_intent is not None:
+        parameters = dict(write_intent.parameters)
+        parameters.pop("doctor_ids", None)
+        parameters["doctor_id"] = doctor_id
+        parameters["visit_group_id"] = visit_group_id
+        write_intent = write_intent.model_copy(update={"parameters": parameters})
+
+    facts = dict(step.facts)
+    facts.pop("doctor_ids", None)
+    facts.update(
+        {
+            "doctor_id": doctor_id,
+            "visit_group_id": visit_group_id,
+            "compound_visit_auto_doctor": True,
+            "compound_visit_preflight_resolved": True,
+        }
+    )
+    return step.model_copy(update={"reads": reads, "write_intent": write_intent, "facts": facts})
+
+
+def _auto_resolve_grouped_visits(
+    plan: TurnPlan,
+    *,
+    context: ReadExecutionContext,
+    timezone_name: str,
+    visit_group_id: str | None,
+) -> TurnPlan:
+    groups: dict[str, list[PlanStep]] = {}
+    for step in plan.steps:
+        group = compound_write_group(step)
+        if group is not None and _write_kind(step) == "booking":
+            groups.setdefault(group, []).append(step)
+    if not groups:
+        return plan
+
+    replacements: dict[int, PlanStep] = {}
+    for _group_key, raw_group in groups.items():
+        ordered = sorted(raw_group, key=lambda step: step.operation_index)
+        if len(ordered) < 2:
+            continue
+        common_doctors = _common_doctors(ordered, context)
+        anchor = _requested_group_anchor(ordered, context=context, timezone_name=timezone_name)
+        if not common_doctors:
+            explicit_doctors = {
+                str(value)
+                for step in ordered
+                if (value := _params(step).get("doctor_id")) not in (None, "")
+            }
+            conflicting_explicit_doctors = (
+                len(explicit_doctors) > 1
+                and all(_params(step).get("doctor_id") not in (None, "") for step in ordered)
+            )
+            requested = (
+                anchor[0]
+                if anchor is not None
+                else context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            )
+            for step in ordered:
+                if conflicting_explicit_doctors:
+                    replacements[step.operation_index] = step.model_copy(
+                        update={
+                            "disposition": "clarify",
+                            "reads": [],
+                            "write_intent": None,
+                            "state_action": "none",
+                            "clarification_field": "doctor",
+                            "response_goal": "ask_doctor_choice",
+                            "facts": {
+                                **step.facts,
+                                "compound_visit_conflicting_doctors": True,
+                            },
+                        }
+                    )
+                else:
+                    blocked = _suppress_group_write(step, requested_anchor=requested)
+                    replacements[step.operation_index] = blocked.model_copy(
+                        update={
+                            "facts": {
+                                **blocked.facts,
+                                "compound_visit_no_common_doctor": True,
+                            }
+                        }
+                    )
+            continue
+        if anchor is None:
+            requested = context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            for step in ordered:
+                replacements[step.operation_index] = _suppress_group_write(
+                    step,
+                    requested_anchor=requested,
+                )
+            continue
+
+        requested_anchor, request_mode = anchor
+        best: tuple[datetime, str, list[AvailabilitySlot], bool] | None = None
+        for doctor_id in common_doctors:
+            chain, exact_fits = _find_joint_chain(
+                ordered,
+                requested_anchor=requested_anchor,
+                context=context,
+                timezone_name=timezone_name,
+                forced_doctor_id=doctor_id,
+            )
+            if chain is None:
+                continue
+            candidate = (chain[0].start_at, doctor_id, chain, exact_fits)
+            if best is None or candidate[:2] < best[:2]:
+                best = candidate
+
+        if best is None:
+            for step in ordered:
+                replacements[step.operation_index] = _suppress_group_write(
+                    step,
+                    requested_anchor=requested_anchor,
+                )
+            continue
+
+        _first_start, doctor_id, chain, exact_fits = best
+        allow_write = request_mode == "next_available" or (request_mode == "exact" and exact_fits)
+        group_id = visit_group_id or str(uuid4())
+        for step, slot in zip(ordered, chain, strict=True):
+            rewritten = _rewrite_step_for_slot(
+                step,
+                slot,
+                timezone_name=timezone_name,
+                requested_anchor=requested_anchor,
+                allow_write=allow_write,
+            )
+            replacements[step.operation_index] = _attach_visit_group(
+                rewritten,
+                group_id,
+                doctor_id,
+            )
+
+    if not replacements:
+        return plan
+    return plan.model_copy(
+        update={"steps": [replacements.get(step.operation_index, step) for step in plan.steps]}
+    )
+
+
 def preflight_compound_visit_plan(
     plan: TurnPlan,
     *,
     context: ReadExecutionContext,
     timezone_name: str,
+    visit_group_id: str | None = None,
 ) -> TurnPlan:
     """Resolve a same-visit booking group before any business write is allowed.
 
@@ -304,6 +554,12 @@ def preflight_compound_visit_plan(
     This prevents partial visits such as booking service A and only then discovering
     that service B cannot follow it.
     """
+    plan = _auto_resolve_grouped_visits(
+        plan,
+        context=context,
+        timezone_name=timezone_name,
+        visit_group_id=visit_group_id,
+    )
     groups: dict[str, list[PlanStep]] = {}
     for step in plan.steps:
         if _write_kind(step) != "booking":

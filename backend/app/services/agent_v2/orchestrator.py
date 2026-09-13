@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.messages import BaseMessage
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
     completed_compound_booking_end,
     compound_anchor_key,
+    compound_write_group,
     normalize_compound_turn_plan,
     resolve_compound_followup_after_reads,
 )
@@ -266,12 +267,16 @@ def orchestrate_v2_turn(
         catalog=canonical_catalog,
         adapter=adapter,
     )
+    resolved_turn_id = turn_id or str(run_id)
+    stable_visit_group_id = str(
+        uuid5(NAMESPACE_URL, f"tia-v2-visit:{workspace.id}:{resolved_turn_id}")
+    )
     plan = preflight_compound_visit_plan(
         plan,
         context=read_context,
         timezone_name=timezone_name,
+        visit_group_id=stable_visit_group_id,
     )
-    resolved_turn_id = turn_id or str(run_id)
     current_task = initial_task
     traces: list[V2RuntimeStepTrace] = []
     outcomes: list[TurnOutcome] = []
@@ -279,8 +284,17 @@ def orchestrate_v2_turn(
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
+    grouped_positions: dict[str, list[int]] = {}
+    for position, grouped_step in enumerate(plan.steps):
+        group = compound_write_group(grouped_step)
+        if group is not None:
+            grouped_positions.setdefault(group, []).append(position)
+    active_group_key: str | None = None
+    active_group_tx = None
+    active_group_outcome_start = 0
+    active_group_trace_start = 0
 
-    for planned_step in plan.steps:
+    for step_position, planned_step in enumerate(plan.steps):
         anchor_key = compound_anchor_key(planned_step)
         planned_step = apply_compound_runtime_cursor(
             planned_step,
@@ -299,6 +313,7 @@ def orchestrate_v2_turn(
             operation=operation,
             context=semantic_context,
         )
+        step_group_key = compound_write_group(effective_step) or compound_write_group(planned_step)
 
         if effective_step.state_action == "update_active":
             initial_transition = apply_step_state(
@@ -360,6 +375,12 @@ def orchestrate_v2_turn(
                 )
                 break
 
+            if step_group_key is not None and active_group_tx is None:
+                active_group_key = step_group_key
+                active_group_outcome_start = len(outcomes)
+                active_group_trace_start = len(traces)
+                active_group_tx = db.begin_nested()
+
             action_result = write_executor(advanced)
             outcome = build_step_outcome(
                 advanced,
@@ -382,6 +403,16 @@ def orchestrate_v2_turn(
             outcomes.append(outcome)
 
             if outcome.status == "completed":
+                if (
+                    step_group_key is not None
+                    and active_group_key == step_group_key
+                    and grouped_positions.get(step_group_key)
+                    and step_position == grouped_positions[step_group_key][-1]
+                    and active_group_tx is not None
+                ):
+                    active_group_tx.commit()
+                    active_group_tx = None
+                    active_group_key = None
                 write_kind = advanced.write_intent.kind if advanced.write_intent is not None else None
                 if write_kind == "booking" and anchor_key is not None:
                     verified_end = completed_compound_booking_end(reads)
@@ -400,8 +431,23 @@ def orchestrate_v2_turn(
                 if current_task is not None:
                     cancelled_existing_task = persisted is not None
                     current_task = None
-                break
-
+            if step_group_key is not None and active_group_key == step_group_key and active_group_tx is not None:
+                active_group_tx.rollback()
+                active_group_tx = None
+                active_group_key = None
+                outcomes = outcomes[:active_group_outcome_start]
+                traces = traces[:active_group_trace_start]
+                outcomes.append(outcome)
+                traces.append(
+                    V2RuntimeStepTrace(
+                        operation_index=advanced.operation_index,
+                        operation_type=advanced.operation_type,
+                        disposition_before=planned_step.disposition,
+                        disposition_after=advanced.disposition,
+                        read_kinds=tuple(result.kind for result in reads.results),
+                        outcome=outcome,
+                    )
+                )
             break
 
         outcome = build_step_outcome(
@@ -412,6 +458,12 @@ def orchestrate_v2_turn(
             action_result=None,
             active_task_summary=None,
         )
+        if step_group_key is not None and active_group_key == step_group_key and active_group_tx is not None:
+            active_group_tx.rollback()
+            active_group_tx = None
+            active_group_key = None
+            outcomes = outcomes[:active_group_outcome_start]
+            traces = traces[:active_group_trace_start]
         traces.append(
             V2RuntimeStepTrace(
                 operation_index=advanced.operation_index,
@@ -428,6 +480,13 @@ def orchestrate_v2_turn(
                 cancelled_existing_task = persisted is not None
                 current_task = None
             break
+
+    if active_group_tx is not None:
+        active_group_tx.rollback()
+        outcomes = outcomes[:active_group_outcome_start]
+        traces = traces[:active_group_trace_start]
+        active_group_tx = None
+        active_group_key = None
 
     persisted_after = _persist_final_task(
         db=db,

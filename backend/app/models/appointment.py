@@ -174,6 +174,8 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     patient_package_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    # Multiple service appointments that form one customer-visible visit share this id.
+    visit_group_id: Mapped[UUID | None] = mapped_column(nullable=True)
     lead_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

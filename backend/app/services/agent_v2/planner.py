@@ -403,7 +403,13 @@ def _informational_write_read(
     return None
 
 
-def _plan_operation(index: int, operation: TurnOperation, context: PlannerContext) -> PlanStep:
+def _plan_operation(
+    index: int,
+    operation: TurnOperation,
+    context: PlannerContext,
+    *,
+    compound_book: bool = False,
+) -> PlanStep:
     params, ambiguous = _base_parameters(operation, context)
 
     if operation.type == "human_support":
@@ -450,7 +456,7 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
 
     if ambiguous.get("service"):
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
-    if ambiguous.get("doctor"):
+    if ambiguous.get("doctor") and not (compound_book and operation.type == "book"):
         return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
     if ambiguous.get("device") and operation.type in {
         "doctor_info",
@@ -516,7 +522,9 @@ def _plan_operation(index: int, operation: TurnOperation, context: PlannerContex
         )
 
     if operation.type == "book":
-        if "doctor_ids" in params:
+        # A same-turn multi-service visit must select one common doctor deterministically.
+        # Single-service bookings keep the existing explicit doctor-choice behavior.
+        if "doctor_ids" in params and not compound_book:
             return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
@@ -690,8 +698,19 @@ def plan_turn(turn: TiaTurnUnderstanding, context: PlannerContext) -> TurnPlan:
         return safety
 
     steps: list[PlanStep] = []
+    executable_book_indexes = {
+        index
+        for index, operation in enumerate(turn.operations)
+        if operation.type == "book" and operation.execution_intent == "execute"
+    }
+    compound_booking = len(executable_book_indexes) >= 2
     for index, operation in enumerate(turn.operations):
-        step = _plan_operation(index, operation, context)
+        step = _plan_operation(
+            index,
+            operation,
+            context,
+            compound_book=compound_booking and index in executable_book_indexes,
+        )
         if step.disposition == "handoff":
             return TurnPlan(
                 steps=[step],

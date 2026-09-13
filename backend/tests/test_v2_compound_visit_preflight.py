@@ -161,15 +161,15 @@ def test_exact_anchor_executes_only_when_full_joint_window_fits() -> None:
             (SERVICE_B, DAY): _result(
                 SERVICE_B,
                 [
-                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
-                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T10:00:00+00:00", "2026-09-20T10:30:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T10:00:00+00:00", "2026-09-20T10:30:00+00:00"),
                 ],
             ),
         }
     )
 
     planned = preflight_compound_visit_plan(
-        _normalized(),
+        _normalized(same_doctor=True),
         context=_context(adapter),
         timezone_name="Africa/Cairo",
     )
@@ -193,15 +193,15 @@ def test_occupied_second_start_suppresses_all_writes_and_offers_next_joint_windo
             (SERVICE_B, DAY): _result(
                 SERVICE_B,
                 [
-                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T10:00:00+00:00", "2026-09-20T10:30:00+00:00"),
-                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T10:15:00+00:00", "2026-09-20T10:45:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T10:00:00+00:00", "2026-09-20T10:30:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T10:15:00+00:00", "2026-09-20T10:45:00+00:00"),
                 ],
             ),
         }
     )
 
     planned = preflight_compound_visit_plan(
-        _normalized(),
+        _normalized(same_doctor=True),
         context=_context(adapter),
         timezone_name="Africa/Cairo",
     )
@@ -248,7 +248,7 @@ def test_no_joint_window_blocks_every_booking_in_the_group() -> None:
     )
 
     planned = preflight_compound_visit_plan(
-        _normalized(),
+        _normalized(same_doctor=True),
         context=_context(adapter),
         timezone_name="Africa/Cairo",
     )
@@ -256,3 +256,19 @@ def test_no_joint_window_blocks_every_booking_in_the_group() -> None:
     assert [step.write_intent for step in planned.steps] == [None, None]
     assert [step.disposition for step in planned.steps] == ["blocked", "blocked"]
     assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
+
+
+
+def test_explicit_different_doctors_require_one_doctor_for_the_visit() -> None:
+    adapter = _Adapter({})
+
+    planned = preflight_compound_visit_plan(
+        _normalized(),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [step.write_intent for step in planned.steps] == [None, None]
+    assert [step.disposition for step in planned.steps] == ["clarify", "clarify"]
+    assert [step.clarification_field for step in planned.steps] == ["doctor", "doctor"]
+    assert all(step.facts["compound_visit_conflicting_doctors"] is True for step in planned.steps)

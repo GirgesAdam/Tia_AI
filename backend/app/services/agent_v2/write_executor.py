@@ -169,6 +169,7 @@ def execute_write_ready_step(
                     requested_start_at=start_at,
                     created_by_user_id=None,
                     patient_package_id=package_resolution.package_id,
+                    visit_group_id=_optional_uuid(parameters, "visit_group_id"),
                     source="ai",
                     laser_device_key=device_key,
                     idempotency_key=idempotency_key,
