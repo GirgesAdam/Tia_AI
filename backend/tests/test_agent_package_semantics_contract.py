@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.agents.v2.semantic_context import SemanticContext
@@ -38,7 +38,7 @@ def test_package_semantic_matrix_does_not_use_runtime_lexical_routing() -> None:
 def test_history_package_impact_prompt_preserves_both_semantic_domains() -> None:
     prompt = _interpreter_system_prompt(
         timezone_name="Africa/Cairo",
-        local_now=datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc),
+        local_now=datetime(2026, 9, 13, 12, 0, tzinfo=UTC),
     ).lower()
 
     assert "past appointment outcome" in prompt
@@ -65,7 +65,7 @@ def test_history_package_impact_plans_both_verified_reads_without_writes() -> No
     context = PlannerContext(
         semantic_context=SemanticContext(model_input={}, reference_map={}),
         active_task=None,
-        now=datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 9, 13, 12, 0, tzinfo=UTC),
     )
 
     plan = plan_turn(turn, context)
