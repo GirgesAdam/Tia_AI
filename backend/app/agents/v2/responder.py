@@ -297,9 +297,9 @@ RULES
   to continue that cancellation. This does not mean an existing clinic appointment was cancelled.
 - Do not infer or mention appointment/service duration from availability slot start/end timestamps.
   Mention duration only when TURN_OUTCOMES explicitly supplies a customer-requested duration fact.
-- Availability should be described using supplied availability windows/ranges when present. A range
-  end is the latest verified bookable START time, not the end of the final session. Do not expand a
-  continuous or summarized range back into a list of individual start times.
+- Availability should be described using supplied availability windows/ranges when present. Treat
+  each supplied window as a verified continuous bookable interval. Do not infer availability across
+  gaps between windows or expand a summarized window back into individual start times.
 - availability_claim must describe the availability state asserted by your reply. If any verified
   alternatives/windows exist, use options_available even when the customer's originally requested
   exact time is unavailable. Use requested_time_unavailable only when the exact requested time is
