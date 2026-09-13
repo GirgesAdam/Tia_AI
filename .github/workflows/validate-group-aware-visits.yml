@@ -9,6 +9,7 @@ on:
       - .github/implementation/group_aware_visit_patch.py
       - .github/implementation/fix_group_aware_builder_markers.py
       - .github/implementation/fix_group_aware_write_indent.py
+      - .github/implementation/fix_group_aware_runtime_edges.py
   workflow_dispatch:
 
 permissions:
@@ -62,6 +63,8 @@ jobs:
           python .github/implementation/fix_group_aware_builder_markers.py
           python .github/implementation/group_aware_visit_patch.py
           python .github/implementation/fix_group_aware_write_indent.py
+          python .github/implementation/fix_group_aware_runtime_edges.py
+          ruff check --fix backend/tests/test_v2_grouped_visits.py
           git diff --check
           git status --short
 
