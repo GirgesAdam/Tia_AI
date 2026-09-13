@@ -58,6 +58,145 @@ namespace = {
 }
 exec(compile(tail, "compound_visit_patch_tail.py", "exec"), namespace, namespace)
 
+# Normalization intentionally converts later items in an exact same-visit request
+# to `after`, but preserves the original shared anchor in structured facts. The
+# common-doctor resolver must prefer that canonical anchor instead of mistaking
+# the normalized cursor for a customer ambiguity.
+replace_once(
+    preflight,
+    '''def _requested_group_anchor(
+    steps: list[PlanStep],
+    *,
+    context: ReadExecutionContext,
+    timezone_name: str,
+) -> tuple[datetime, str] | None:
+    dates: list[dict[str, object]] = []
+''',
+    '''def _requested_group_anchor(
+    steps: list[PlanStep],
+    *,
+    context: ReadExecutionContext,
+    timezone_name: str,
+) -> tuple[datetime, str] | None:
+    compound_anchors = {
+        value
+        for step in steps
+        if (value := compound_anchor_key(step)) is not None
+    }
+    if len(compound_anchors) == 1:
+        try:
+            return datetime.fromisoformat(next(iter(compound_anchors))), "exact"
+        except ValueError:
+            return None
+
+    dates: list[dict[str, object]] = []
+''',
+)
+
+# Explicitly choosing different doctors for services in one requested visit is a
+# contradictory constraint, not a signal to silently split the visit. Unspecified
+# or candidate doctors still resolve automatically through the common intersection.
+replace_once(
+    preflight,
+    '''        common_doctors = _common_doctors(ordered, context)
+        anchor = _requested_group_anchor(ordered, context=context, timezone_name=timezone_name)
+        if not common_doctors or anchor is None:
+            requested = anchor[0] if anchor is not None else context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            for step in ordered:
+                blocked = _suppress_group_write(step, requested_anchor=requested)
+                blocked = blocked.model_copy(
+                    update={
+                        "facts": {
+                            **blocked.facts,
+                            "compound_visit_no_common_doctor": not bool(common_doctors),
+                        }
+                    }
+                )
+                replacements[step.operation_index] = blocked
+            continue
+
+        requested_anchor, request_mode = anchor
+''',
+    '''        common_doctors = _common_doctors(ordered, context)
+        anchor = _requested_group_anchor(ordered, context=context, timezone_name=timezone_name)
+        if not common_doctors:
+            explicit_doctors = {
+                str(value)
+                for step in ordered
+                if (value := _params(step).get("doctor_id")) not in (None, "")
+            }
+            conflicting_explicit_doctors = (
+                len(explicit_doctors) > 1
+                and all(_params(step).get("doctor_id") not in (None, "") for step in ordered)
+            )
+            requested = (
+                anchor[0]
+                if anchor is not None
+                else context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            )
+            for step in ordered:
+                if conflicting_explicit_doctors:
+                    replacements[step.operation_index] = step.model_copy(
+                        update={
+                            "disposition": "clarify",
+                            "reads": [],
+                            "write_intent": None,
+                            "state_action": "none",
+                            "clarification_field": "doctor",
+                            "response_goal": "ask_doctor_choice",
+                            "facts": {
+                                **step.facts,
+                                "compound_visit_conflicting_doctors": True,
+                            },
+                        }
+                    )
+                else:
+                    blocked = _suppress_group_write(step, requested_anchor=requested)
+                    replacements[step.operation_index] = blocked.model_copy(
+                        update={
+                            "facts": {
+                                **blocked.facts,
+                                "compound_visit_no_common_doctor": True,
+                            }
+                        }
+                    )
+            continue
+        if anchor is None:
+            requested = context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            for step in ordered:
+                replacements[step.operation_index] = _suppress_group_write(
+                    step,
+                    requested_anchor=requested,
+                )
+            continue
+
+        requested_anchor, request_mode = anchor
+''',
+)
+
+legacy_test = "backend/tests/test_v2_compound_visit_preflight.py"
+legacy = read(legacy_test)
+legacy = legacy.replace("_slot(SERVICE_B, DOCTOR_B,", "_slot(SERVICE_B, DOCTOR_A,")
+legacy = legacy.replace("        _normalized(),\n", "        _normalized(same_doctor=True),\n")
+legacy += r'''
+
+
+def test_explicit_different_doctors_require_one_doctor_for_the_visit() -> None:
+    adapter = _Adapter({})
+
+    planned = preflight_compound_visit_plan(
+        _normalized(),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [step.write_intent for step in planned.steps] == [None, None]
+    assert [step.disposition for step in planned.steps] == ["clarify", "clarify"]
+    assert [step.clarification_field for step in planned.steps] == ["doctor", "doctor"]
+    assert all(step.facts["compound_visit_conflicting_doctors"] is True for step in planned.steps)
+'''
+write(legacy_test, legacy)
+
 write(
     "backend/tests/test_v2_visit_group_write.py",
     r'''from __future__ import annotations
