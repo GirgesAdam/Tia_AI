@@ -2,18 +2,48 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.agents.llm_runtime import LLMProviderError, invoke_model, invoke_with_model_chain
+from app.agents.availability_presentation import format_availability_windows_reply
+from app.agents.llm_runtime import LLMProviderError, invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_composer_fallback_model,
     build_realtime_composer_model,
     model_label,
 )
+from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.core.config import settings
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import customer_visible_outcome
+
+AvailabilityClaim = Literal[
+    "not_applicable",
+    "options_available",
+    "requested_time_unavailable",
+    "no_availability",
+]
+
+
+class ResponderDraft(BaseModel):
+    """Natural customer reply plus the availability fact it claims."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reply: str = Field(
+        min_length=1,
+        description="The complete customer-facing reply, grounded only in TURN_OUTCOMES.",
+    )
+    availability_claim: AvailabilityClaim = Field(
+        description=(
+            "Semantic availability state asserted by the reply. Use options_available when verified "
+            "appointment options/windows exist, requested_time_unavailable when only the requested "
+            "exact time was verified unavailable, no_availability when the verified search has zero "
+            "options, and not_applicable when this reply makes no availability claim."
+        )
+    )
 
 
 def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
@@ -28,6 +58,12 @@ def _latest_customer_index(history: list[BaseMessage]) -> int | None:
         if isinstance(history[index], HumanMessage) and _message_text(history[index]):
             return index
     return None
+
+
+def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
+    latest_index = _latest_customer_index(history)
+    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
+    return any("\u0600" <= char <= "\u06ff" for char in latest_text)
 
 
 def _deterministic_medical_handoff_reply(
@@ -53,9 +89,7 @@ def _deterministic_medical_handoff_reply(
     if medical is None:
         return None
 
-    latest_index = _latest_customer_index(history)
-    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
-    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
+    arabic = _latest_customer_is_arabic(history)
     urgent = medical.facts.get("priority") == "urgent"
 
     if urgent:
@@ -140,10 +174,7 @@ def _deterministic_pure_doctor_list_reply(
     if not names:
         return None
 
-    latest_index = _latest_customer_index(history)
-    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
-    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
-    if arabic:
+    if _latest_customer_is_arabic(history):
         return "الدكاترة اللي بيقدموا الخدمة كلهم: " + "، ".join(names) + "."
     return "All doctors who provide the service: " + ", ".join(names) + "."
 
@@ -159,12 +190,79 @@ def _ensure_verified_doctor_list(
     if len(names) < 2 or all(name in text for name in names):
         return text
 
-    latest_index = _latest_customer_index(history)
-    latest_text = _message_text(history[latest_index]) if latest_index is not None else ""
-    arabic = any("\u0600" <= char <= "\u06ff" for char in latest_text)
+    arabic = _latest_customer_is_arabic(history)
     prefix = "الدكاترة اللي بيقدموا الخدمة كلهم: " if arabic else "All doctors who provide the service: "
     grounded_list = prefix + "، ".join(names) + "."
     return f"{text.rstrip()}\n{grounded_list}"
+
+
+def _availability_fact_payloads(outcomes: list[TurnOutcome]) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    for outcome in outcomes:
+        raw = outcome.facts.get("availability")
+        candidates = raw if isinstance(raw, list) else [raw]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                payloads.append(candidate)
+    return payloads
+
+
+def _verified_availability_claim(outcomes: list[TurnOutcome]) -> AvailabilityClaim:
+    """Derive availability truth only from deterministic outcomes, never from generated prose."""
+    payloads = _availability_fact_payloads(outcomes)
+    if any(
+        (isinstance(payload.get("available_option_count"), int) and payload["available_option_count"] > 0)
+        or bool(payload.get("availability_windows"))
+        for payload in payloads
+    ) or any(outcome.response_goal == "present_availability" for outcome in outcomes):
+        return "options_available"
+    if any(outcome.response_goal == "requested_time_unavailable" for outcome in outcomes):
+        return "requested_time_unavailable"
+    if any(outcome.response_goal == "no_availability" for outcome in outcomes):
+        return "no_availability"
+    return "not_applicable"
+
+
+def _deterministic_availability_guard_reply(
+    *,
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+    verified_claim: AvailabilityClaim,
+) -> str:
+    """Safe fallback used only when the responder's semantic claim contradicts verified facts."""
+    arabic = _latest_customer_is_arabic(history)
+    payloads = _availability_fact_payloads(outcomes)
+
+    if verified_claim == "options_available":
+        windows: list[object] = []
+        for payload in payloads:
+            raw_windows = payload.get("availability_windows")
+            if isinstance(raw_windows, list):
+                windows.extend(raw_windows)
+        rendered = format_availability_windows_reply(
+            {"ok": True, "availability_windows": windows},
+            booking_authorized=False,
+        )
+        if rendered:
+            return rendered
+        return (
+            "فيه مواعيد متاحة مؤكدة، لكن تفاصيل الفترة مش متاحة للعرض هنا."
+            if arabic
+            else "Verified appointment options are available, but the time window cannot be displayed here."
+        )
+
+    if verified_claim == "requested_time_unavailable":
+        return (
+            "الوقت اللي طلبته مش متاح حسب المواعيد المؤكدة. ممكن أشوفلك بديل."
+            if arabic
+            else "The time you requested is not available in the verified schedule. I can check an alternative."
+        )
+
+    return (
+        "مفيش مواعيد متاحة في البحث المؤكد الحالي."
+        if arabic
+        else "There are no available appointments in the current verified search."
+    )
 
 
 def _system_prompt(*, clinic_name: str, timezone_name: str, local_now: datetime) -> str:
@@ -199,8 +297,14 @@ RULES
   to continue that cancellation. This does not mean an existing clinic appointment was cancelled.
 - Do not infer or mention appointment/service duration from availability slot start/end timestamps.
   Mention duration only when TURN_OUTCOMES explicitly supplies a customer-requested duration fact.
-- Availability should be described using supplied availability windows/ranges when present. Do not
-  expand a continuous or summarized range back into a list of individual start times.
+- Availability should be described using supplied availability windows/ranges when present. A range
+  end is the latest verified bookable START time, not the end of the final session. Do not expand a
+  continuous or summarized range back into a list of individual start times.
+- availability_claim must describe the availability state asserted by your reply. If any verified
+  alternatives/windows exist, use options_available even when the customer's originally requested
+  exact time is unavailable. Use requested_time_unavailable only when the exact requested time is
+  verified unavailable and no verified alternative is supplied. Use no_availability only for an
+  explicit verified zero-option search. Otherwise use not_applicable.
 - The absence of a doctor, device, or other candidate from supplied availability windows is not
   evidence that the candidate has no future availability. For nearest/earliest comparisons, state
   the verified nearest option or winner from TURN_OUTCOMES, but do not claim another candidate has
@@ -223,14 +327,15 @@ RULES
 - Keep the reply in the customer's language except for grounded proper names or product/device names
   supplied by TURN_OUTCOMES. Never append unrelated translations, labels, evaluation notes,
   unexplained foreign-language text, or an extra question after the requested answer is complete.
-- Output only the customer-facing reply. End the reply as soon as the grounded answer or required
-  clarification/handoff message is complete.
 - Use recent dialogue for continuity. Do not restart the conversation, repeat a greeting, or use a
   stock opener/closer on every turn. Answer the customer's direct question before optional detail.
 - Combine multiple TURN_OUTCOMES into one coherent reply in customer-request order. Do not send one
   mini-reply per operation.
 - If the structured facts are insufficient, say so or ask the one required clarification instead of
   guessing.
+
+Return the customer-facing reply in the structured reply field and the matching semantic
+availability_claim. Do not place metadata or evaluation notes inside reply.
 
 Clinic: {clinic_name}
 Clinic timezone: {timezone_name}
@@ -279,22 +384,6 @@ def _build_responder_messages(
     ]
 
 
-def _extract_text(message: AIMessage) -> str:
-    if isinstance(message.content, str):
-        return message.content.strip()
-    parts: list[str] = []
-    if isinstance(message.content, list):
-        for block in message.content:
-            if isinstance(block, str):
-                parts.append(block)
-                continue
-            if isinstance(block, dict):
-                text = block.get("text") or block.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-    return "\n".join(part.strip() for part in parts if part.strip()).strip()
-
-
 def compose_v2_customer_reply(
     *,
     clinic_name: str,
@@ -325,16 +414,30 @@ def compose_v2_customer_reply(
     primary = build_realtime_composer_model()
     fallback_model = None
 
-    def primary_call() -> AIMessage:
-        return invoke_model(lambda: primary.invoke(messages))
+    def invoke_structured(model) -> ResponderDraft:
+        try:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=ResponderDraft,
+                messages=messages,
+            )
+        except StructuredOutputError:
+            return invoke_typed_structured_output(
+                model=model,
+                schema=ResponderDraft,
+                messages=messages,
+            )
 
-    def fallback_call() -> AIMessage:
+    def primary_call() -> ResponderDraft:
+        return invoke_structured(primary)
+
+    def fallback_call() -> ResponderDraft:
         nonlocal fallback_model
         if fallback_model is None:
             fallback_model = build_realtime_composer_fallback_model()
         if fallback_model is None:
             raise RuntimeError("V2 responder fallback model is not configured.")
-        return invoke_model(lambda: fallback_model.invoke(messages))
+        return invoke_structured(fallback_model)
 
     model_calls = [(primary_name, primary_call)]
     if fallback_name and fallback_name != primary_name:
@@ -345,11 +448,22 @@ def compose_v2_customer_reply(
         operation="v2-customer-responder",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    text = _extract_text(invocation.value)
+    draft = invocation.value
+    text = draft.reply.strip()
     if not text:
         raise LLMProviderError(
             "V2 responder returned no customer-visible text.",
             retryable=False,
         )
+
+    verified_claim = _verified_availability_claim(outcomes)
+    if verified_claim != "not_applicable" and draft.availability_claim != verified_claim:
+        text = _deterministic_availability_guard_reply(
+            history=history,
+            outcomes=outcomes,
+            verified_claim=verified_claim,
+        )
+        return text, f"deterministic:availability-guard:{model_label(invocation.model_name)}"
+
     text = _ensure_verified_doctor_list(text, history=history, outcomes=outcomes)
     return text, model_label(invocation.model_name)
