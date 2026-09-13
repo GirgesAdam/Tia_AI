@@ -171,7 +171,15 @@ class TurnEntities(StrictContractModel):
     package: EntityReference | None = None
     date: DateConstraint | None = None
     time: TimeConstraint | None = None
-    package_sessions: int | None = None
+    package_sessions: int | None = Field(
+        default=None,
+        description=(
+            "Exact session count explicitly associated with a multi-session package/course/bundle. "
+            "Preserve this count on pricing questions about that package so deterministic Python can "
+            "resolve the matching package offer instead of falling back to the single-session service "
+            "price. Do not calculate or invent a session count."
+        ),
+    )
     marketing_consent: bool | None = None
     follow_up_at_local: str | None = None
 
@@ -194,7 +202,9 @@ class TurnOperation(StrictContractModel):
             "possible appointment options without requesting creation of a new appointment. Buying "
             "a package and creating an appointment are separate actions: a request to buy a package "
             "and book its first session requires a buy_package operation plus a separate book "
-            "operation; never encode the appointment only inside buy_package."
+            "operation; never encode the appointment only inside buy_package. Use pricing for cost "
+            "questions, including package-offer pricing; when a multi-session package price is asked "
+            "and its session count is explicit, preserve that count in entities.package_sessions."
         )
     )
     entities: TurnEntities
