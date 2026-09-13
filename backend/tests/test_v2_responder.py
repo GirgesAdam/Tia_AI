@@ -129,7 +129,10 @@ def test_compose_v2_customer_reply_returns_one_model_reply(monkeypatch: pytest.M
         responder,
         "invoke_with_model_chain",
         lambda **_kwargs: SimpleNamespace(
-            value=AIMessage(content="ليزر الإبط سعره 500 جنيه، والمتاح بكرة من 6 لـ8 مساءً مع د. مريم."),
+            value=responder.ResponderDraft(
+                reply="ليزر الإبط سعره 500 جنيه، والمتاح بكرة من 6 لـ8 مساءً مع د. مريم.",
+                availability_claim="not_applicable",
+            ),
             model_name="test-model",
         ),
     )
@@ -174,8 +177,9 @@ def test_doctor_list_does_not_bypass_model_for_compound_answer(
         responder,
         "invoke_with_model_chain",
         lambda **_kwargs: SimpleNamespace(
-            value=AIMessage(
-                content="الدكاترة د. مريم ود. سارة ود. نور، وسعر ليزر الإبط 500 جنيه."
+            value=responder.ResponderDraft(
+                reply="الدكاترة د. مريم ود. سارة ود. نور، وسعر ليزر الإبط 500 جنيه.",
+                availability_claim="not_applicable",
             ),
             model_name="test-model",
         ),
@@ -201,7 +205,13 @@ def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         responder,
         "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(value=AIMessage(content="   "), model_name="test-model"),
+        lambda **_kwargs: SimpleNamespace(
+            value=responder.ResponderDraft(
+                reply="   ",
+                availability_claim="not_applicable",
+            ),
+            model_name="test-model",
+        ),
     )
 
     with pytest.raises(LLMProviderError):
