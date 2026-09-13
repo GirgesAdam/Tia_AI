@@ -36,6 +36,7 @@ class PatientHistoryAppointmentRead(BaseModel):
     payment_status: str
     payment_method: str
     billing_context: str
+    package_usage_status: str | None = None
 
 
 class PatientHistoryProfileRead(BaseModel):
