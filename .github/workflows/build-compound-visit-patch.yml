@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/implementation/compound_visit_patch.py
+      - .github/implementation/compound_visit_patch_finish.py
       - .github/workflows/build-compound-visit-patch.yml
   workflow_dispatch:
 
@@ -33,7 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
       - name: Apply patch in checkout only
-        run: python .github/implementation/compound_visit_patch.py
+        shell: bash
+        run: |
+          python .github/implementation/compound_visit_patch.py || true
+          python .github/implementation/compound_visit_patch_finish.py
       - name: Validate diff
         run: git diff --check
       - name: Compile changed runtime
