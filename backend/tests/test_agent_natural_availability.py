@@ -33,7 +33,7 @@ def _slot(
     }
 
 
-def test_touching_quarter_hour_slots_become_one_human_window() -> None:
+def test_quarter_hour_starts_become_one_bookable_start_window() -> None:
     slots = [
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:00", end="15:15"),
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:15", end="15:30"),
@@ -45,10 +45,33 @@ def test_touching_quarter_hour_slots_become_one_human_window() -> None:
 
     assert len(windows) == 1
     assert windows[0]["start_time_24h"] == "15:00"
-    assert windows[0]["end_time_24h"] == "16:00"
+    assert windows[0]["end_time_24h"] == "15:45"
 
 
-def test_existing_booking_splits_availability_into_two_windows() -> None:
+def test_five_half_hour_starts_are_presented_as_six_to_eight_window() -> None:
+    slots = [
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="18:00", end="18:30"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="18:30", end="19:00"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="19:00", end="19:30"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="19:30", end="20:00"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="20:00", end="20:30"),
+    ]
+
+    windows = availability_windows_from_slots(slots)
+    reply = format_availability_windows_reply(
+        {"ok": True, "availability_windows": windows},
+        booking_authorized=False,
+    )
+
+    assert [(row["start_time_24h"], row["end_time_24h"]) for row in windows] == [
+        ("18:00", "20:00")
+    ]
+    assert reply is not None
+    assert "من 6 م لـ8 م" in reply
+    assert "8:30" not in reply
+
+
+def test_existing_booking_splits_availability_into_two_start_windows() -> None:
     slots = [
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:00", end="16:00"),
         _slot(doctor_id="d1", doctor_name="د. مريم", start="16:00", end="17:00"),
@@ -60,9 +83,39 @@ def test_existing_booking_splits_availability_into_two_windows() -> None:
     windows = availability_windows_from_slots(slots)
 
     assert [(row["start_time_24h"], row["end_time_24h"]) for row in windows] == [
-        ("15:00", "18:00"),
-        ("19:00", "21:00"),
+        ("15:00", "17:00"),
+        ("19:00", "20:00"),
     ]
+
+
+def test_real_gap_is_not_hidden_inside_availability_range() -> None:
+    slots = [
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="18:00", end="18:30"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="18:30", end="19:00"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="19:00", end="19:30"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="21:00", end="21:30"),
+        _slot(doctor_id="d1", doctor_name="د. مريم", start="21:30", end="22:00"),
+    ]
+
+    windows = availability_windows_from_slots(slots)
+
+    assert [(row["start_time_24h"], row["end_time_24h"]) for row in windows] == [
+        ("18:00", "19:00"),
+        ("21:00", "21:30"),
+    ]
+
+
+def test_isolated_slot_is_presented_as_one_time_not_zero_length_range() -> None:
+    slots = [_slot(doctor_id="d1", doctor_name="د. مريم", start="18:00", end="18:30")]
+
+    reply = format_availability_windows_reply(
+        {"ok": True, "availability_windows": availability_windows_from_slots(slots)},
+        booking_authorized=False,
+    )
+
+    assert reply is not None
+    assert "الساعة 6 م" in reply
+    assert "من 6 م لـ6 م" not in reply
 
 
 def test_windows_never_merge_different_doctors() -> None:
@@ -77,7 +130,7 @@ def test_windows_never_merge_different_doctors() -> None:
     assert {row["doctor_id"] for row in windows} == {"d1", "d2"}
 
 
-def test_customer_reply_uses_ranges_not_quarter_hour_grid_or_branch() -> None:
+def test_customer_reply_uses_start_ranges_not_grid_or_branch() -> None:
     slots = [
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:00", end="15:15"),
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:15", end="15:30"),
@@ -97,7 +150,7 @@ def test_customer_reply_uses_ranges_not_quarter_hour_grid_or_branch() -> None:
     reply = format_availability_windows_reply(payload, booking_authorized=True)
 
     assert reply is not None
-    assert "المتاح مع د. مريم من 3 م لـ4 م، ومن 7 م لـ9 م." in reply
+    assert "المتاح مع د. مريم من 3 م لـ3:45 م، ومن 7 م لـ8 م." in reply
     assert "15:15" not in reply
     assert "15:30" not in reply
     assert "Internal Main Branch" not in reply
