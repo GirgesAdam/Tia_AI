@@ -14,23 +14,23 @@ def replace_exact(path: Path, old: str, new: str) -> None:
 grouped = Path("backend/app/services/agent_v2/grouped_visit_operations.py")
 replace_exact(
     grouped,
-    "            moved: list[tuple[Appointment, Appointment]] = []\n"
-    "            with db.begin_nested():\n"
-    "                for member in members:\n",
-    "            moved: list[tuple[Appointment, Appointment]] = []\n"
-    "            excluded_appointment_ids = set(appointment_ids)\n"
-    "            with db.begin_nested():\n"
-    "                for member in members:\n",
+    "    moved: list[tuple[Appointment, Appointment]] = []\n"
+    "    with db.begin_nested():\n"
+    "        for member in members:\n",
+    "    moved: list[tuple[Appointment, Appointment]] = []\n"
+    "    excluded_appointment_ids = set(appointment_ids)\n"
+    "    with db.begin_nested():\n"
+    "        for member in members:\n",
 )
 replace_exact(
     grouped,
-    "                        exclude_appointment_ids=appointment_ids,\n"
-    "                    )\n"
-    "                    moved.append((replacement, previous))\n",
-    "                        exclude_appointment_ids=tuple(excluded_appointment_ids),\n"
-    "                    )\n"
-    "                    excluded_appointment_ids.add(replacement.id)\n"
-    "                    moved.append((replacement, previous))\n",
+    "                exclude_appointment_ids=appointment_ids,\n"
+    "            )\n"
+    "            moved.append((replacement, previous))\n",
+    "                exclude_appointment_ids=tuple(excluded_appointment_ids),\n"
+    "            )\n"
+    "            excluded_appointment_ids.add(replacement.id)\n"
+    "            moved.append((replacement, previous))\n",
 )
 
 tests = Path("backend/tests/test_v2_grouped_visits.py")
