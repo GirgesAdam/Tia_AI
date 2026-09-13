@@ -48,36 +48,47 @@ def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
     return metadata.device_key or "", metadata.device_name or ""
 
 
-def _regular_start_range(
-    intervals: list[tuple[datetime, datetime]],
-) -> tuple[datetime, datetime] | None:
-    """Summarize a regular sequence of available start-times without hiding real gaps.
+def _bookable_start_runs(starts: list[datetime]) -> list[tuple[datetime, datetime]]:
+    """Compress verified appointment starts without turning the final visit end into availability.
 
-    Example: 18:00, 19:00, 20:00 becomes the customer-facing start range 18:00–20:00.
-    We require at least three starts with one consistent cadence no larger than one hour. A missing
-    middle slot breaks the cadence, so genuinely interrupted availability remains split.
+    The customer-facing end of a range is the latest verified *bookable start*, not the end of the
+    final appointment. Runs are joined only when the observed start cadence proves the intermediate
+    grid points are present. Large or irregular gaps therefore remain separate windows.
     """
 
-    starts = sorted({start for start, _end in intervals})
-    if len(starts) < 3:
-        return None
-    deltas = [
-        int((current - previous).total_seconds())
-        for previous, current in zip(starts, starts[1:], strict=False)
-    ]
-    if not deltas or len(set(deltas)) != 1:
-        return None
-    cadence = deltas[0]
-    if cadence <= 0 or cadence > 60 * 60:
-        return None
-    return starts[0], starts[-1]
+    ordered = sorted(set(starts))
+    if not ordered:
+        return []
+    if len(ordered) == 1:
+        return [(ordered[0], ordered[0])]
+
+    positive_deltas = sorted(
+        {
+            int((current - previous).total_seconds())
+            for previous, current in zip(ordered, ordered[1:], strict=False)
+            if current > previous
+        }
+    )
+    eligible = [delta for delta in positive_deltas if delta <= 60 * 60]
+    cadence = min(eligible) if eligible else None
+    if cadence is None:
+        return [(start, start) for start in ordered]
+
+    runs: list[list[datetime]] = [[ordered[0]]]
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        delta = int((current - previous).total_seconds())
+        if delta == cadence:
+            runs[-1].append(current)
+        else:
+            runs.append([current])
+    return [(run[0], run[-1]) for run in runs]
 
 
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
 
-    grouped: dict[tuple[str, str, str, str], list[tuple[datetime, datetime]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str], list[datetime]] = defaultdict(list)
     for slot in slots:
         if not isinstance(slot, dict):
             continue
@@ -88,40 +99,11 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         doctor_id = str(slot.get("doctor_id") or "")
         doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         device_key, device_name = _device_from_slot(slot)
-        grouped[(doctor_id, doctor_name, device_key, device_name)].append((start, end))
+        grouped[(doctor_id, doctor_name, device_key, device_name)].append(start)
 
     windows: list[dict[str, Any]] = []
-    for (doctor_id, doctor_name, device_key, device_name), intervals in grouped.items():
-        intervals.sort(key=lambda item: (item[0], item[1]))
-        merged: list[list[datetime]] = []
-        for start, end in intervals:
-            if not merged or start > merged[-1][1]:
-                merged.append([start, end])
-                continue
-            if end > merged[-1][1]:
-                merged[-1][1] = end
-
-        # Some booking engines expose a regular grid of valid appointment start-times rather than
-        # one continuous free interval. Presenting 18:00, 19:00, 20:00 separately is noisy; when the
-        # cadence itself proves there is no missing grid point, expose the compact start range 18–20.
-        regular_range = _regular_start_range(intervals) if len(merged) > 1 else None
-        if regular_range is not None:
-            start, end = regular_range
-            windows.append(
-                {
-                    "doctor_id": doctor_id or None,
-                    "doctor_name": doctor_name,
-                    "laser_device_key": device_key or None,
-                    "laser_device_name": device_name or None,
-                    "start_local": start.isoformat(),
-                    "end_local": end.isoformat(),
-                    "start_time_24h": start.strftime("%H:%M"),
-                    "end_time_24h": end.strftime("%H:%M"),
-                }
-            )
-            continue
-
-        for start, end in merged:
+    for (doctor_id, doctor_name, device_key, device_name), starts in grouped.items():
+        for start, end in _bookable_start_runs(starts):
             windows.append(
                 {
                     "doctor_id": doctor_id or None,
@@ -266,6 +248,7 @@ def format_availability_windows_reply(
         grouped[(doctor, device)].append(window)
 
     lines: list[str] = []
+    has_ranges = False
     for (doctor, device), group_windows in list(grouped.items())[:8]:
         ranges: list[str] = []
         for window in group_windows[:4]:
@@ -273,7 +256,11 @@ def format_availability_windows_reply(
             end = _parse_dt(window.get("end_local"))
             if start is None or end is None:
                 continue
-            ranges.append(f"من {_clock_ar(start)} لـ{_clock_ar(end)}")
+            if start == end:
+                ranges.append(f"الساعة {_clock_ar(start)}")
+            else:
+                has_ranges = True
+                ranges.append(f"من {_clock_ar(start)} لـ{_clock_ar(end)}")
         if not ranges:
             continue
         label = f"{device} مع {doctor}" if device else f"مع {doctor}"
@@ -305,7 +292,7 @@ def format_availability_windows_reply(
         _closing(
             reschedule=reschedule,
             booking_authorized=booking_authorized,
-            ranges=True,
+            ranges=has_ranges,
             has_devices=has_devices,
         ),
     ])
