@@ -7,7 +7,7 @@ from app.services.operational_readiness import (
 
 
 def test_release_gate_targets_current_schema_head() -> None:
-    assert EXPECTED_MIGRATION_HEAD == "0062_laser_device_scheduling"
+    assert EXPECTED_MIGRATION_HEAD == "0069_service_package_offers_rls"
 
 
 def test_stale_lock_threshold_matches_existing_worker_reclaim_window_or_later() -> None:
