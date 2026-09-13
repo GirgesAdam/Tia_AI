@@ -1,13 +1,9 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
-from app.agents.v2.semantic_context import SemanticContext, SemanticReferenceTarget
-from app.agents.v2.turn_contract import (
-    EntityReference,
-    TiaTurnUnderstanding,
-    TurnEntities,
-    TurnOperation,
-)
+from app.agents.v2.semantic_context import SemanticContext
+from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.planner import PlannerContext, plan_turn
 
@@ -20,14 +16,8 @@ def _pricing_context() -> PlannerContext:
         semantic_context=SemanticContext(
             model_input={},
             reference_map={
-                "S1": SemanticReferenceTarget(
-                    kind="service",
-                    canonical_id=UNDERARM_SERVICE_ID,
-                ),
-                "V1": SemanticReferenceTarget(
-                    kind="device",
-                    canonical_id="prime_lase",
-                ),
+                "S1": SimpleNamespace(kind="service", canonical_id=UNDERARM_SERVICE_ID),
+                "V1": SimpleNamespace(kind="device", canonical_id="prime_lase"),
             },
         ),
         active_task=None,
@@ -78,8 +68,8 @@ def test_six_session_package_pricing_uses_verified_package_offer_read() -> None:
             TurnOperation(
                 type="pricing",
                 entities=TurnEntities(
-                    service=EntityReference(ref="S1"),
-                    device=EntityReference(ref="V1"),
+                    service={"ref": "S1"},
+                    device={"ref": "V1"},
                     package_sessions=6,
                 ),
                 execution_intent="informational",
@@ -104,7 +94,7 @@ def test_single_session_pricing_stays_on_service_catalog_read() -> None:
         operations=[
             TurnOperation(
                 type="pricing",
-                entities=TurnEntities(service=EntityReference(ref="S1")),
+                entities=TurnEntities(service={"ref": "S1"}),
                 execution_intent="informational",
             )
         ]
