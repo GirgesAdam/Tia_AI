@@ -456,7 +456,9 @@ def _plan_operation(
 
     if ambiguous.get("service"):
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
-    if ambiguous.get("doctor") and not (compound_book and operation.type == "book"):
+    if ambiguous.get("doctor") and not (
+        operation.type == "availability" or (compound_book and operation.type == "book")
+    ):
         return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
     if ambiguous.get("device") and operation.type in {
         "doctor_info",

@@ -12,6 +12,7 @@ _COMPOUND_SEQUENCE_FACT = "compound_visit_sequenced"
 _COMPOUND_SEQUENCE_INDEX_FACT = "compound_visit_sequence_index"
 _COMPOUND_ANCHOR_FACT = "compound_visit_anchor_local"
 _COMPOUND_WRITE_GROUP_FACT = "compound_write_group"
+_COMPOUND_VISIT_GROUP_FACT = "compound_visit_group"
 _COMPOUND_GROUPED_FACT = "compound_visit_grouped"
 
 
@@ -260,6 +261,30 @@ def _tag_compound_write_group(steps: list[PlanStep]) -> list[PlanStep]:
                     "facts": {
                         **step.facts,
                         _COMPOUND_WRITE_GROUP_FACT: group_key,
+                        _COMPOUND_VISIT_GROUP_FACT: group_key,
+                        _COMPOUND_GROUPED_FACT: True,
+                    }
+                }
+            )
+        tagged.append(step)
+    return tagged
+
+
+def _tag_semantic_visit_groups(
+    steps: list[PlanStep],
+    operation_visit_groups: dict[int, str] | None,
+) -> list[PlanStep]:
+    if not operation_visit_groups:
+        return steps
+    tagged: list[PlanStep] = []
+    for step in steps:
+        group_key = operation_visit_groups.get(step.operation_index)
+        if group_key is not None:
+            step = step.model_copy(
+                update={
+                    "facts": {
+                        **step.facts,
+                        _COMPOUND_VISIT_GROUP_FACT: group_key,
                         _COMPOUND_GROUPED_FACT: True,
                     }
                 }
@@ -273,10 +298,18 @@ def compound_write_group(step: PlanStep) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
+def compound_visit_group(step: PlanStep) -> str | None:
+    value = step.facts.get(_COMPOUND_VISIT_GROUP_FACT)
+    if value in (None, ""):
+        return compound_write_group(step)
+    return str(value)
+
+
 def normalize_compound_turn_plan(
     plan: TurnPlan,
     *,
     catalog: dict[str, Any],
+    operation_visit_groups: dict[int, str] | None = None,
 ) -> TurnPlan:
     """Normalize dependencies and same-anchor bookings without inspecting customer text.
 
@@ -291,6 +324,7 @@ def normalize_compound_turn_plan(
         return plan
     steps = _tag_and_order_package_dependencies(list(plan.steps))
     steps = _tag_compound_write_group(steps)
+    steps = _tag_semantic_visit_groups(steps, operation_visit_groups)
     steps = _sequence_shared_anchor_bookings(steps, catalog=catalog)
     return plan.model_copy(update={"steps": steps})
 

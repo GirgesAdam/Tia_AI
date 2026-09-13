@@ -63,6 +63,7 @@ from app.services.agent_v2.state_persistence import (
     load_active_task,
     save_active_task,
 )
+from app.services.agent_v2.turn_normalization import expand_multi_service_operations
 
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
 
@@ -223,6 +224,7 @@ def orchestrate_v2_turn(
         timezone_name=timezone_name,
         local_now=local_now,
     )
+    understanding, semantic_visit_groups = expand_multi_service_operations(understanding)
     plan = plan_turn(
         understanding,
         PlannerContext(
@@ -231,7 +233,11 @@ def orchestrate_v2_turn(
             now=local_now,
         ),
     )
-    plan = normalize_compound_turn_plan(plan, catalog=canonical_catalog)
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=canonical_catalog,
+        operation_visit_groups=semantic_visit_groups,
+    )
 
     if plan.handoff_category is not None:
         outcome = build_handoff_outcome(plan)

@@ -69,7 +69,13 @@ def _plan() -> TurnPlan:
 
 def _patch_runtime(monkeypatch, plan: TurnPlan) -> None:
     understanding = SimpleNamespace(
-        operations=[SimpleNamespace(type=step.operation_type) for step in plan.steps],
+        operations=[
+    SimpleNamespace(
+        type=step.operation_type,
+        entities=SimpleNamespace(service=None),
+    )
+    for step in plan.steps
+],
         safety_signals=[],
     )
     semantic = SimpleNamespace(model_input={})

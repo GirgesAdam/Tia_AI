@@ -10,7 +10,7 @@ from app.models.service import Service
 from app.services.agent_v2.compound_turn_policy import (
     compound_anchor_key,
     compound_sequence_index,
-    compound_write_group,
+    compound_visit_group,
 )
 from app.services.agent_v2.planner import PlanStep, TurnPlan
 from app.services.agent_v2.read_executor import ReadExecutionContext
@@ -31,7 +31,12 @@ def _write_kind(step: PlanStep) -> str | None:
 
 
 def _params(step: PlanStep) -> dict[str, object]:
-    return dict(step.write_intent.parameters) if step.write_intent is not None else {}
+    if step.write_intent is not None:
+        return dict(step.write_intent.parameters)
+    for request in step.reads:
+        if request.kind == "availability":
+            return dict(request.parameters)
+    return dict(step.facts)
 
 
 def _strip_sequence_facts(facts: dict[str, object]) -> dict[str, object]:
@@ -426,8 +431,9 @@ def _auto_resolve_grouped_visits(
 ) -> TurnPlan:
     groups: dict[str, list[PlanStep]] = {}
     for step in plan.steps:
-        group = compound_write_group(step)
-        if group is not None and _write_kind(step) == "booking":
+        group = compound_visit_group(step)
+        has_availability_read = any(request.kind == "availability" for request in step.reads)
+        if group is not None and (_write_kind(step) == "booking" or has_availability_read):
             groups.setdefault(group, []).append(step)
     if not groups:
         return plan
