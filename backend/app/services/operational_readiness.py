@@ -25,7 +25,7 @@ from app.models.service import Service
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.operations import OperationalCheck, WorkspaceOperationalReadiness
 
-EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"
+EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"
 STALE_LOCK_MINUTES = 15
 AUTOMATION_WORKER_HEARTBEAT_MINUTES = 5
 TEST_RULE_KEY_PREFIXES = ("staging_regression_", "final_gate_")
