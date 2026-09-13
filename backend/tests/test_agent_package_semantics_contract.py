@@ -2,14 +2,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import (
-    TiaTurnUnderstanding,
-    TurnEntities,
-    TurnOperation,
-)
+from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.planner import PlannerContext, plan_turn
-
 
 UNDERARM_SERVICE_ID = "3e5f1909-c8d2-5985-a116-8f7379399635"
 
