@@ -480,7 +480,19 @@ def _plan_operation(
     if ambiguous.get("package"):
         return _clarify(index=index, operation=operation, field="package", goal="ask_package_choice")
 
-    if operation.type in {"service_info", "pricing"}:
+    if operation.type == "pricing":
+        package_pricing = "package_sessions" in params or "package_id" in params
+        if package_pricing:
+            if "service_id" not in params and "package_id" not in params:
+                return _clarify(index=index, operation=operation, field="service")
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=[ReadRequest(kind="package_offers", parameters=params)],
+                response_goal="answer_price",
+                facts=params,
+            )
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
         return PlanStep(
@@ -488,7 +500,19 @@ def _plan_operation(
             operation_type=operation.type,
             disposition="read",
             reads=[ReadRequest(kind="service_catalog", parameters={"service_id": params["service_id"]})],
-            response_goal="answer_price" if operation.type == "pricing" else "answer_service",
+            response_goal="answer_price",
+            facts=params,
+        )
+
+    if operation.type == "service_info":
+        if "service_id" not in params:
+            return _clarify(index=index, operation=operation, field="service")
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="service_catalog", parameters={"service_id": params["service_id"]})],
+            response_goal="answer_service",
             facts=params,
         )
 
