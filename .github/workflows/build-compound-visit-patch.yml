@@ -45,6 +45,21 @@ jobs:
       - name: Compile changed runtime
         working-directory: backend
         run: python -m compileall -q app tests
+      - name: Ruff changed runtime
+        working-directory: backend
+        run: |
+          python -m ruff check \
+            app/models/appointment.py \
+            app/services/appointment_creation.py \
+            app/services/agent_v2/planner.py \
+            app/services/agent_v2/compound_turn_policy.py \
+            app/services/agent_v2/compound_visit_preflight.py \
+            app/services/agent_v2/orchestrator.py \
+            app/services/agent_v2/write_executor.py \
+            tests/test_v2_same_visit_booking.py \
+            tests/test_v2_visit_group_write.py \
+            tests/test_v2_compound_atomicity.py \
+            tests/test_v2_compound_visit_preflight.py
       - name: Run focused compound tests
         working-directory: backend
         env:
@@ -77,4 +92,5 @@ jobs:
             backend/tests/test_v2_same_visit_booking.py
             backend/tests/test_v2_visit_group_write.py
             backend/tests/test_v2_compound_atomicity.py
+            backend/tests/test_v2_compound_visit_preflight.py
           if-no-files-found: error
