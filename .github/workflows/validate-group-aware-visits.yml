@@ -84,9 +84,11 @@ jobs:
         working-directory: backend
         run: python -m pytest -q
 
-      - name: Build patch artifact
+      - name: Build complete patch artifact
         if: success()
-        run: git diff --binary > group-aware-visits.patch
+        run: |
+          git add -N backend/app/services/agent_v2/grouped_visit_operations.py backend/tests/test_v2_grouped_visits.py
+          git diff --binary > group-aware-visits.patch
 
       - name: Upload patch artifact
         if: success()
