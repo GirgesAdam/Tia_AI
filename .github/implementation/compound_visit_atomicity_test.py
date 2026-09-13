@@ -24,7 +24,7 @@ RUN_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 
 class _Nested:
-    def __init__(self, db: "_Db") -> None:
+    def __init__(self, db: _Db) -> None:
         self.db = db
         self.snapshot = list(db.effects)
 
