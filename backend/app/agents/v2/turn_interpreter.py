@@ -108,6 +108,10 @@ SEMANTIC PRINCIPLES
   of the same service, keep the turn informational and emit both package_info and pricing operations
   for that service so both sides of the comparison are grounded. Do not turn the comparison into a
   booking or purchase request.
+- When a request asks both about a past appointment outcome and its effect on the customer's
+  owned-package balance or current owned-package state, preserve both concerns as separate semantic
+  operations: customer_history for the historical event and package_info for current package state.
+  Do not infer current package balance from customer_history alone.
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
