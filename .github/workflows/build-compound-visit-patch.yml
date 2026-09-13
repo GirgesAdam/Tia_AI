@@ -48,10 +48,10 @@ jobs:
         run: |
           pytest -q \
             tests/test_v2_same_visit_booking.py \
+            tests/test_v2_visit_group_write.py \
             tests/test_v2_compound_turn_policy.py \
             tests/test_v2_compound_visit_preflight.py \
-            tests/test_v2_planner.py \
-            tests/test_v2_write_executor.py
+            tests/test_v2_planner.py
       - name: Save patch diff
         if: always()
         run: git diff -- backend > compound-visit.patch
@@ -70,4 +70,5 @@ jobs:
             backend/app/services/agent_v2/orchestrator.py
             backend/app/services/agent_v2/write_executor.py
             backend/tests/test_v2_same_visit_booking.py
+            backend/tests/test_v2_visit_group_write.py
           if-no-files-found: error
