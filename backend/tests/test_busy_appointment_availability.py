@@ -9,10 +9,9 @@ from app.services.booking import _overlaps_existing
 def test_active_booking_is_excluded_before_customer_windows_are_built() -> None:
     """Customer-facing ranges must be built only from bookable starts.
 
-    A one-hour booking from 18:00 to 19:00 for the requested doctor should split
-    an otherwise continuous 15:00-22:00 day into 15:00-18:00 and 19:00-22:00.
-    The occupied hour and every service start that would overlap it are removed
-    before the presentation layer receives the slots.
+    A one-hour booking from 18:00 to 19:00 for the requested doctor removes every
+    service start that would overlap it. With 15-minute verified starts, the last
+    bookable start before the busy hour is 17:00 and the next one is 19:00.
     """
     doctor_id = "doctor-mariam"
     busy_start = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
@@ -54,7 +53,7 @@ def test_active_booking_is_excluded_before_customer_windows_are_built() -> None:
     assert [
         (window["start_time_24h"], window["end_time_24h"])
         for window in windows
-    ] == [("15:00", "18:00"), ("19:00", "22:00")]
+    ] == [("15:00", "17:00"), ("19:00", "21:00")]
 
 
 def test_booking_engine_filters_active_appointments_before_appending_slots() -> None:
