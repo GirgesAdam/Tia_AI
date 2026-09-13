@@ -119,6 +119,9 @@ def build_patient_history_context(
         .limit(recent_limit)
     ).all()
     recent_ids = [row[0].id for row in recent_rows]
+    package_backed_recent_ids = [
+        row[0].id for row in recent_rows if row[0].patient_package_id is not None
+    ]
     net_by_appointment: dict[UUID, int] = {}
     package_usage_by_appointment: dict[UUID, str] = {}
     if recent_ids:
@@ -136,10 +139,11 @@ def build_patient_history_context(
         ).all()
         net_by_appointment = {row.appointment_id: max(int(row.net or 0), 0) for row in alloc_rows}
 
+    if package_backed_recent_ids:
         usage_rows = db.execute(
             select(PackageUsage.appointment_id, PackageUsage.status).where(
                 PackageUsage.workspace_id == workspace_id,
-                PackageUsage.appointment_id.in_(recent_ids),
+                PackageUsage.appointment_id.in_(package_backed_recent_ids),
             )
         ).all()
         package_usage_by_appointment = {
