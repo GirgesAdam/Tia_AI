@@ -123,7 +123,7 @@ def _create_schema(engine) -> None:
         """
         CREATE TABLE appointments (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), branch_id CHAR(32),
-            doctor_id CHAR(32), doctor_assignment_known BOOLEAN DEFAULT 1, service_id CHAR(32), patient_package_id CHAR(32), lead_id CHAR(32), created_by_user_id CHAR(32),
+            doctor_id CHAR(32), doctor_assignment_known BOOLEAN DEFAULT 1, service_id CHAR(32), patient_package_id CHAR(32), visit_group_id CHAR(32), lead_id CHAR(32), created_by_user_id CHAR(32),
             rescheduled_from_appointment_id CHAR(32), status VARCHAR(20), source VARCHAR(20),
             start_at DATETIME, end_at DATETIME, busy_start_at DATETIME, busy_end_at DATETIME,
             duration_minutes INTEGER, price_minor INTEGER, currency VARCHAR(3), laser_device_key VARCHAR(40), laser_device_name VARCHAR(120), payment_status VARCHAR(16),

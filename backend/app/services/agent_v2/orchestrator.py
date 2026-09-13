@@ -32,6 +32,11 @@ from app.services.agent_v2.compound_turn_policy import (
     resolve_compound_followup_after_reads,
 )
 from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
+from app.services.agent_v2.grouped_write_transaction import (
+    begin_group_savepoint,
+    release_group_savepoint,
+    rollback_group_savepoint,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -379,7 +384,7 @@ def orchestrate_v2_turn(
                 active_group_key = step_group_key
                 active_group_outcome_start = len(outcomes)
                 active_group_trace_start = len(traces)
-                active_group_tx = db.begin_nested()
+                active_group_tx = begin_group_savepoint(db)
 
             action_result = write_executor(advanced)
             outcome = build_step_outcome(
@@ -410,7 +415,7 @@ def orchestrate_v2_turn(
                     and step_position == grouped_positions[step_group_key][-1]
                     and active_group_tx is not None
                 ):
-                    active_group_tx.commit()
+                    release_group_savepoint(active_group_tx)
                     active_group_tx = None
                     active_group_key = None
                 write_kind = advanced.write_intent.kind if advanced.write_intent is not None else None
@@ -432,7 +437,7 @@ def orchestrate_v2_turn(
                     cancelled_existing_task = persisted is not None
                     current_task = None
             if step_group_key is not None and active_group_key == step_group_key and active_group_tx is not None:
-                active_group_tx.rollback()
+                rollback_group_savepoint(active_group_tx)
                 active_group_tx = None
                 active_group_key = None
                 outcomes = outcomes[:active_group_outcome_start]
@@ -459,7 +464,7 @@ def orchestrate_v2_turn(
             active_task_summary=None,
         )
         if step_group_key is not None and active_group_key == step_group_key and active_group_tx is not None:
-            active_group_tx.rollback()
+            rollback_group_savepoint(active_group_tx)
             active_group_tx = None
             active_group_key = None
             outcomes = outcomes[:active_group_outcome_start]
@@ -482,7 +487,7 @@ def orchestrate_v2_turn(
             break
 
     if active_group_tx is not None:
-        active_group_tx.rollback()
+        rollback_group_savepoint(active_group_tx)
         outcomes = outcomes[:active_group_outcome_start]
         traces = traces[:active_group_trace_start]
         active_group_tx = None
