@@ -60,6 +60,38 @@ jobs:
         run: |
           python .github/implementation/multi_service_semantic_patch.py
           python .github/implementation/fix_multi_service_import_order.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/app/services/agent_v2/turn_normalization.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''def _service_set(operation: TurnOperation) -> list[str]:
+              service = operation.entities.service
+              if (
+                  operation.type not in _EXPANDABLE_OPERATION_TYPES
+                  or service is None
+                  or service.ref is not None
+                  or service.candidate_mode != "set"
+              ):
+                  return []
+              return list(dict.fromkeys(ref for ref in service.candidate_refs if ref))
+          '''
+          new = '''def _service_set(operation: TurnOperation) -> list[str]:
+              if operation.type not in _EXPANDABLE_OPERATION_TYPES:
+                  return []
+              service = operation.entities.service
+              if (
+                  service is None
+                  or service.ref is not None
+                  or service.candidate_mode != "set"
+              ):
+                  return []
+              return list(dict.fromkeys(ref for ref in service.candidate_refs if ref))
+          '''
+          if text.count(old) != 1:
+              raise RuntimeError(f"Expected one normalizer guard marker; found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           ruff check --fix backend/app/services/agent_v2/turn_normalization.py backend/tests/test_v2_multi_service_visit_semantics.py
           git diff --check
           git status --short
@@ -74,7 +106,7 @@ jobs:
 
       - name: Focused semantic tests
         working-directory: backend
-        run: python -m pytest -q tests/test_v2_multi_service_visit_semantics.py tests/test_v2_compound_visit_preflight.py tests/test_v2_compound_turn_policy.py tests/test_agent_v2_orchestrator.py
+        run: python -m pytest -q tests/test_v2_multi_service_visit_semantics.py tests/test_v2_compound_visit_preflight.py tests/test_v2_compound_turn_policy.py tests/test_v2_compound_atomicity.py tests/test_agent_v2_orchestrator.py
 
       - name: Bootstrap Supabase compatibility roles
         env:
