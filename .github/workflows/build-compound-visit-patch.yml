@@ -37,9 +37,23 @@ jobs:
       - name: Apply patch in checkout only
         shell: bash
         run: |
-          python .github/implementation/compound_visit_patch.py || true
+          set +e
+          patch_output="$(python .github/implementation/compound_visit_patch.py 2>&1)"
+          patch_status=$?
+          set -e
+          printf '%s\n' "$patch_output"
+          if [ "$patch_status" -ne 0 ]; then
+            expected="expected one match in backend/app/services/agent_v2/compound_visit_preflight.py: '    groups: dict[str, list[PlanStep]] = {}\\n'; got 2"
+            if [[ "$patch_output" != *"$expected"* ]]; then
+              exit "$patch_status"
+            fi
+            echo "Verified expected stage-one handoff to finish script."
+          fi
           python .github/implementation/compound_visit_patch_finish.py
           python .github/implementation/compound_visit_atomicity_test.py
+          python -m ruff check --fix \
+            backend/tests/test_v2_same_visit_booking.py \
+            backend/tests/test_v2_compound_atomicity.py
       - name: Validate diff
         run: git diff --check
       - name: Compile changed runtime
