@@ -59,6 +59,7 @@ jobs:
       - name: Apply deterministic patch
         run: |
           python .github/implementation/group_aware_visit_patch.py
+          python .github/implementation/fix_group_aware_write_indent.py
           git diff --check
           git status --short
 
@@ -82,6 +83,7 @@ jobs:
         run: |
           rm -f .github/workflows/build-group-aware-visits.yml
           rm -f .github/implementation/group_aware_visit_patch.py
+          rm -f .github/implementation/fix_group_aware_write_indent.py
           git add -A
           git diff --cached --check
           git config user.name "github-actions[bot]"
