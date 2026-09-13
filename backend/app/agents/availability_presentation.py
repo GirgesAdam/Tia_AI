@@ -48,56 +48,38 @@ def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
     return metadata.device_key or "", metadata.device_name or ""
 
 
-def _bookable_start_runs(starts: list[datetime]) -> list[tuple[datetime, datetime]]:
-    """Compress verified appointment starts into conservative customer-facing start windows.
+def _merge_verified_slot_intervals(
+    intervals: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """Merge only verified overlapping or touching appointment intervals.
 
-    The range end is the latest verified *bookable start*, never the end of the final appointment.
-    We first split obviously separate clusters (>1 hour apart), then infer cadence only inside each
-    cluster so a 15-minute grid earlier in the day cannot distort a later hourly grid. Irregular gaps
-    inside a cluster split the range rather than hiding an unverified start time.
+    Customer-facing windows represent continuous time covered by at least one
+    verified bookable slot. Real gaps remain separate instead of being inferred
+    away from start-time cadence.
     """
 
-    ordered = sorted(set(starts))
+    ordered = sorted(set(intervals), key=lambda interval: (interval[0], interval[1]))
     if not ordered:
         return []
 
-    clusters: list[list[datetime]] = [[ordered[0]]]
-    for previous, current in zip(ordered, ordered[1:], strict=False):
-        delta = int((current - previous).total_seconds())
-        if delta > 60 * 60:
-            clusters.append([current])
-        else:
-            clusters[-1].append(current)
-
-    runs: list[tuple[datetime, datetime]] = []
-    for cluster in clusters:
-        if len(cluster) <= 2:
-            runs.append((cluster[0], cluster[-1]))
+    merged: list[tuple[datetime, datetime]] = []
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end:
+            if end > current_end:
+                current_end = end
             continue
-
-        deltas = [
-            int((current - previous).total_seconds())
-            for previous, current in zip(cluster, cluster[1:], strict=False)
-        ]
-        cadence = min(delta for delta in deltas if delta > 0)
-        current_run = [cluster[0]]
-        for previous, current in zip(cluster, cluster[1:], strict=False):
-            delta = int((current - previous).total_seconds())
-            if delta == cadence:
-                current_run.append(current)
-            else:
-                runs.append((current_run[0], current_run[-1]))
-                current_run = [current]
-        runs.append((current_run[0], current_run[-1]))
-
-    return runs
+        merged.append((current_start, current_end))
+        current_start, current_end = start, end
+    merged.append((current_start, current_end))
+    return merged
 
 
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
 
-    grouped: dict[tuple[str, str, str, str], list[datetime]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str], list[tuple[datetime, datetime]]] = defaultdict(list)
     for slot in slots:
         if not isinstance(slot, dict):
             continue
@@ -108,11 +90,11 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         doctor_id = str(slot.get("doctor_id") or "")
         doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         device_key, device_name = _device_from_slot(slot)
-        grouped[(doctor_id, doctor_name, device_key, device_name)].append(start)
+        grouped[(doctor_id, doctor_name, device_key, device_name)].append((start, end))
 
     windows: list[dict[str, Any]] = []
-    for (doctor_id, doctor_name, device_key, device_name), starts in grouped.items():
-        for start, end in _bookable_start_runs(starts):
+    for (doctor_id, doctor_name, device_key, device_name), intervals in grouped.items():
+        for start, end in _merge_verified_slot_intervals(intervals):
             windows.append(
                 {
                     "doctor_id": doctor_id or None,
