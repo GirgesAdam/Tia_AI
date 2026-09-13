@@ -45,8 +45,10 @@ jobs:
         run: python -m compileall -q app tests
       - name: Run focused compound tests
         working-directory: backend
+        env:
+          PYTHONPATH: .
         run: |
-          pytest -q \
+          python -m pytest -q \
             tests/test_v2_same_visit_booking.py \
             tests/test_v2_visit_group_write.py \
             tests/test_v2_compound_turn_policy.py \
