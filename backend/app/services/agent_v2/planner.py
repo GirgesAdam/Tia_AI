@@ -611,7 +611,16 @@ def _plan_operation(
             field: ClarificationField = "appointment" if "appointment_ids" in params else "doctor"
             return _clarify(index=index, operation=operation, field=field)
         if "date" not in params:
-            return _clarify(index=index, operation=operation, field="date")
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="clarify",
+                reads=[ReadRequest(kind="appointments", parameters=params)],
+                state_action="start_reschedule",
+                response_goal="clarification",
+                clarification_field="date",
+                facts=params,
+            )
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
         requires_device = _service_requires_laser_device(operation, context)
         return PlanStep(
@@ -752,7 +761,28 @@ def advance_step_after_verification(
     verification: VerificationFacts,
 ) -> PlanStep:
     """Promote an authorized semantic write only after deterministic verification."""
-    if step.write_intent is None or not step.write_intent.authorized:
+    if step.write_intent is None:
+        if step.state_action != "start_reschedule":
+            return step
+        appointment_count = verification.appointment_match_count
+        if appointment_count == 1:
+            return step.model_copy(
+                update={"facts": {**step.facts, **verification.verified_parameters}}
+            )
+        if appointment_count == 0:
+            return step.model_copy(
+                update={"disposition": "blocked", "response_goal": "clarification"}
+            )
+        if appointment_count is not None and appointment_count > 1:
+            return step.model_copy(
+                update={
+                    "disposition": "clarify",
+                    "clarification_field": "appointment",
+                    "response_goal": "ask_appointment_choice",
+                }
+            )
+        return step
+    if not step.write_intent.authorized:
         return step
     if verification.requires_human:
         return step.model_copy(
