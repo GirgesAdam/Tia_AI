@@ -1,10 +1,38 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.semantic_context import SemanticContext, SemanticReferenceTarget
+from app.agents.v2.turn_contract import (
+    EntityReference,
+    TiaTurnUnderstanding,
+    TurnEntities,
+    TurnOperation,
+)
 from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.planner import PlannerContext, plan_turn
+
+
+UNDERARM_SERVICE_ID = "3e5f1909-c8d2-5985-a116-8f7379399635"
+
+
+def _pricing_context() -> PlannerContext:
+    return PlannerContext(
+        semantic_context=SemanticContext(
+            model_input={},
+            reference_map={
+                "S1": SemanticReferenceTarget(
+                    kind="service",
+                    canonical_id=UNDERARM_SERVICE_ID,
+                ),
+                "V1": SemanticReferenceTarget(
+                    kind="device",
+                    canonical_id="prime_lase",
+                ),
+            },
+        ),
+        active_task=None,
+        now=datetime(2026, 9, 13, 12, 0, tzinfo=UTC),
+    )
 
 
 def test_semantic_matrix_covers_package_session_intent_contract() -> None:
@@ -33,6 +61,63 @@ def test_package_semantic_matrix_does_not_use_runtime_lexical_routing() -> None:
     assert "re.compile" not in source
     assert "re.search" not in source
     assert "re.match" not in source
+
+
+def test_package_session_contract_preserves_offer_dimension_for_pricing() -> None:
+    schema = TurnEntities.model_json_schema()
+    description = str(schema["properties"]["package_sessions"].get("description") or "").lower()
+
+    assert "multi-session" in description
+    assert "pricing questions" in description
+    assert "single-session service price" in description
+
+
+def test_six_session_package_pricing_uses_verified_package_offer_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    device=EntityReference(ref="V1"),
+                    package_sessions=6,
+                ),
+                execution_intent="informational",
+            )
+        ]
+    )
+
+    plan = plan_turn(turn, _pricing_context())
+
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == ["package_offers"]
+    assert step.reads[0].parameters["service_id"] == UNDERARM_SERVICE_ID
+    assert step.reads[0].parameters["device_key"] == "prime_lase"
+    assert step.reads[0].parameters["package_sessions"] == 6
+
+
+def test_single_session_pricing_stays_on_service_catalog_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                entities=TurnEntities(service=EntityReference(ref="S1")),
+                execution_intent="informational",
+            )
+        ]
+    )
+
+    plan = plan_turn(turn, _pricing_context())
+
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.reads[0].parameters == {"service_id": UNDERARM_SERVICE_ID}
 
 
 def test_history_package_impact_prompt_preserves_both_semantic_domains() -> None:
