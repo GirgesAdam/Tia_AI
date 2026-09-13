@@ -1,0 +1,119 @@
+name: Promote Multi-Service Visit Semantics V3
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/promote-multi-service-semantics-v3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+  MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+  SUPABASE_URL: https://example.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+  SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+  ENVIRONMENT: test
+  DEBUG: "false"
+  DOCS_ENABLED: "false"
+
+jobs:
+  patch-test-promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Apply deterministic patch
+        run: |
+          python .github/implementation/multi_service_semantic_patch.py
+          python .github/implementation/fix_multi_service_import_order.py
+          ruff check --fix backend/app/services/agent_v2/turn_normalization.py backend/tests/test_v2_multi_service_visit_semantics.py
+          git diff --check
+          git status --short
+
+      - name: Ruff
+        working-directory: backend
+        run: ruff check app tests alembic
+
+      - name: Compile
+        working-directory: backend
+        run: python -m compileall -q app alembic tests
+
+      - name: Focused semantic tests
+        working-directory: backend
+        run: python -m pytest -q tests/test_v2_multi_service_visit_semantics.py tests/test_v2_compound_visit_preflight.py tests/test_v2_compound_turn_policy.py tests/test_agent_v2_orchestrator.py
+
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Clean migration test
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Full backend suite
+        working-directory: backend
+        run: python -m pytest -q
+
+      - name: Commit verified runtime patch
+        run: |
+          rm -f .github/workflows/promote-multi-service-semantics.yml
+          rm -f .github/workflows/promote-multi-service-semantics-v2.yml
+          rm -f .github/workflows/promote-multi-service-semantics-v3.yml
+          rm -f .github/implementation/multi_service_semantic_patch.py
+          rm -f .github/implementation/fix_multi_service_import_order.py
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Resolve multi-service visits before planning"
+          git push origin HEAD:main
