@@ -23,6 +23,7 @@ class PatientServiceHistoryRead(BaseModel):
 
 class PatientHistoryAppointmentRead(BaseModel):
     appointment_id: UUID
+    visit_group_id: UUID | None = None
     status: str
     start_at: datetime
     end_at: datetime

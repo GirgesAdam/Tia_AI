@@ -205,6 +205,11 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             request.exclude_appointment_id,
             "exclude_appointment_id",
         )
+        exclude_appointment_ids = tuple(
+            parsed
+            for item in request.exclude_appointment_ids
+            if (parsed := self._native_uuid(item, "exclude_appointment_ids")) is not None
+        )
         assert branch_id is not None
         assert service_id is not None
 
@@ -235,6 +240,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             booking_date=request.booking_date,
             doctor_id=doctor_id,
             exclude_appointment_id=exclude_appointment_id,
+            exclude_appointment_ids=exclude_appointment_ids,
             now=request.now,
             laser_device_key=request.laser_device_key,
             preloaded_branch=branch,
@@ -375,6 +381,9 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             ),
             laser_device_key=getattr(appointment, "laser_device_key", None),
             laser_device_name=getattr(appointment, "laser_device_name", None),
+            visit_group_id=(
+                str(appointment.visit_group_id) if appointment.visit_group_id else None
+            ),
         )
 
     def _add_status_history(

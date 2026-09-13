@@ -260,6 +260,7 @@ def _appointment_payload(row: AppointmentRecord) -> dict[str, object]:
         tz = ZoneInfo("UTC")
     return {
         "appointment_id": row.appointment_id,
+        "visit_group_id": row.visit_group_id,
         "status": row.status,
         "service_id": row.service_id,
         "service_name": row.service_name,
@@ -282,6 +283,59 @@ def _appointment_payload(row: AppointmentRecord) -> dict[str, object]:
         "package_external_id": row.package_external_id,
         "laser_device_key": row.laser_device_key,
         "laser_device_name": row.laser_device_name,
+    }
+
+
+def _group_appointment_rows(
+    rows: list[AppointmentRecord],
+) -> list[list[AppointmentRecord]]:
+    groups: dict[str, list[AppointmentRecord]] = {}
+    for row in rows:
+        key = (
+            f"visit:{row.visit_group_id}"
+            if row.visit_group_id
+            else f"appointment:{row.appointment_id}"
+        )
+        groups.setdefault(key, []).append(row)
+    return [
+        sorted(group, key=lambda item: (item.start_at, item.appointment_id))
+        for group in groups.values()
+    ]
+
+
+def _common(values: list[str | None]) -> str | None:
+    unique = {value for value in values if value is not None}
+    return next(iter(unique)) if len(unique) == 1 else None
+
+
+def _visit_payload(rows: list[AppointmentRecord]) -> dict[str, object]:
+    ordered = sorted(rows, key=lambda item: (item.start_at, item.appointment_id))
+    statuses = {row.status for row in ordered}
+    currencies = {row.currency for row in ordered}
+    return {
+        "visit_group_id": _common([row.visit_group_id for row in ordered]),
+        "appointment_ids": [row.appointment_id for row in ordered],
+        "status": next(iter(statuses)) if len(statuses) == 1 else "mixed",
+        "start_at": min(row.start_at for row in ordered).isoformat(),
+        "end_at": max(row.end_at for row in ordered).isoformat(),
+        "branch_id": _common([row.branch_id for row in ordered]),
+        "branch_name": _common([row.branch_name for row in ordered]),
+        "doctor_id": _common([row.doctor_id for row in ordered]),
+        "doctor_name": _common([row.doctor_name for row in ordered]),
+        "currency": next(iter(currencies)) if len(currencies) == 1 else None,
+        "price_minor": sum(int(row.price_minor) for row in ordered),
+        "services": [
+            {
+                "appointment_id": row.appointment_id,
+                "service_id": row.service_id,
+                "service_name": row.service_name,
+                "start_at": row.start_at.isoformat(),
+                "end_at": row.end_at.isoformat(),
+                "laser_device_key": row.laser_device_key,
+                "laser_device_name": row.laser_device_name,
+            }
+            for row in ordered
+        ],
     }
 
 
@@ -510,12 +564,182 @@ def _read_availability(
     )
 
 
+def _read_group_reschedule_availability(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+    *,
+    appointments: list[AppointmentRecord],
+) -> tuple[ReadResult, VerificationFacts]:
+    ordered = sorted(appointments, key=lambda item: (item.start_at, item.appointment_id))
+    anchor = ordered[0]
+    if len({row.branch_id for row in ordered}) != 1 or len({row.doctor_id for row in ordered}) != 1:
+        return (
+            ReadResult(kind=request.kind, ok=False, error_code="invalid_visit_group"),
+            VerificationFacts(exact_slot_match_count=0),
+        )
+
+    params = dict(request.parameters)
+    date_values, truncated, stop_on_first = _constraint_dates(
+        params.get("date"),
+        now_date=context.now.astimezone(ZoneInfo(context.workspace.timezone)).date(),
+    )
+    if not date_values:
+        return (
+            ReadResult(kind=request.kind, ok=False, error_code="missing_date"),
+            VerificationFacts(),
+        )
+
+    target_branch_id = str(params.get("branch_id") or anchor.branch_id)
+    target_doctor_id = str(params.get("doctor_id") or anchor.doctor_id)
+    excluded_ids = tuple(row.appointment_id for row in ordered)
+    adapter = _adapter(context)
+    adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
+    slots: list[dict[str, object]] = []
+    checked_dates: list[str] = []
+    service_meta: dict[str, object] = {}
+
+    for booking_date in date_values:
+        checked_dates.append(booking_date.isoformat())
+        anchor_availability = adapter.get_availability(
+            AvailabilityRequest(
+                branch_id=target_branch_id,
+                service_id=anchor.service_id,
+                booking_date=booking_date,
+                doctor_id=target_doctor_id,
+                exclude_appointment_ids=excluded_ids,
+                now=context.now,
+                laser_device_key=anchor.laser_device_key,
+            )
+        )
+        if not service_meta:
+            service_meta = {
+                "service_id": anchor_availability.service_id,
+                "service_name": anchor_availability.service_name,
+                "branch_id": anchor_availability.branch_id,
+                "branch_name": anchor_availability.branch_name,
+                "timezone": anchor_availability.timezone,
+            }
+        anchor_matches = [
+            slot
+            for slot in anchor_availability.slots
+            if _slot_matches_time(
+                slot,
+                timezone_name=anchor_availability.timezone,
+                constraint=params.get("time"),
+            )
+        ]
+        date_matches: list[dict[str, object]] = []
+        for anchor_slot in anchor_matches:
+            delta = anchor_slot.start_at - anchor.start_at
+            component_targets: list[dict[str, object]] = []
+            group_available = True
+            for row in ordered:
+                target_start = row.start_at + delta
+                if row.appointment_id == anchor.appointment_id:
+                    matched_slot = anchor_slot
+                else:
+                    target_date = target_start.astimezone(
+                        ZoneInfo(anchor_availability.timezone)
+                    ).date()
+                    component_availability = adapter.get_availability(
+                        AvailabilityRequest(
+                            branch_id=target_branch_id,
+                            service_id=row.service_id,
+                            booking_date=target_date,
+                            doctor_id=anchor_slot.doctor_id,
+                            exclude_appointment_ids=excluded_ids,
+                            now=context.now,
+                            laser_device_key=row.laser_device_key,
+                        )
+                    )
+                    matched_slot = next(
+                        (
+                            slot
+                            for slot in component_availability.slots
+                            if slot.start_at == target_start
+                        ),
+                        None,
+                    )
+                    if matched_slot is None:
+                        group_available = False
+                        break
+                component_target: dict[str, object] = {
+                    "appointment_id": row.appointment_id,
+                    "branch_id": matched_slot.branch_id,
+                    "service_id": matched_slot.service_id,
+                    "doctor_id": matched_slot.doctor_id,
+                    "start_at": matched_slot.start_at.isoformat(),
+                }
+                if matched_slot.laser_device_key:
+                    component_target["device_key"] = matched_slot.laser_device_key
+                component_targets.append(component_target)
+            if group_available:
+                payload = _slot_payload(
+                    anchor_slot,
+                    timezone_name=anchor_availability.timezone,
+                )
+                payload.update(
+                    {
+                        "visit_group_id": anchor.visit_group_id,
+                        "appointment_ids": list(excluded_ids),
+                        "reschedule_components": component_targets,
+                    }
+                )
+                date_matches.append(payload)
+
+        unique: dict[tuple[str, str], dict[str, object]] = {}
+        for slot in date_matches:
+            key = (str(slot.get("doctor_id") or ""), str(slot.get("start_at") or ""))
+            unique[key] = slot
+        date_matches = list(unique.values())
+        slots.extend(date_matches)
+        if date_matches and stop_on_first:
+            break
+
+    mode, start, _end = _time_constraint(params.get("time"))
+    if mode == "nearest":
+        slots = _nearest_payloads(slots, anchor=start)
+    exact_count = len(slots) if mode == "exact" else None
+    verified: dict[str, object] = {}
+    if exact_count == 1:
+        slot = slots[0]
+        verified = {
+            "appointment_id": anchor.appointment_id,
+            "appointment_ids": list(excluded_ids),
+            "visit_group_id": anchor.visit_group_id,
+            "branch_id": slot["branch_id"],
+            "service_id": slot["service_id"],
+            "doctor_id": slot["doctor_id"],
+            "start_at": slot["start_at"],
+            "reschedule_components": slot["reschedule_components"],
+        }
+
+    return (
+        ReadResult(
+            kind=request.kind,
+            ok=True,
+            payload={
+                **service_meta,
+                "checked_dates": checked_dates,
+                "slots": slots,
+                "matching_slot_count": len(slots),
+                "search_truncated": truncated,
+                "presentation_unit": "visit",
+            },
+        ),
+        VerificationFacts(
+            exact_slot_match_count=exact_count,
+            verified_parameters=verified,
+        ),
+    )
+
+
 def _read_appointments(
     request: ReadRequest,
     context: ReadExecutionContext,
     *,
     operation_type: str,
-) -> tuple[ReadResult, VerificationFacts, AppointmentRecord | None]:
+) -> tuple[ReadResult, VerificationFacts, list[AppointmentRecord] | None]:
     adapter = _adapter(context)
     adapter.require_capability(ClinicCapability.APPOINTMENTS_READ)
     response = adapter.get_patient_appointments(
@@ -533,7 +757,10 @@ def _read_appointments(
 
     params = request.parameters
     if params.get("appointment_id") is not None:
-        rows = [row for row in rows if row.appointment_id == str(params["appointment_id"])]
+        rows = [
+            row for row in rows
+            if row.appointment_id == str(params["appointment_id"])
+        ]
     if params.get("service_id") is not None:
         rows = [row for row in rows if row.service_id == str(params["service_id"])]
     if params.get("doctor_id") is not None:
@@ -545,27 +772,57 @@ def _read_appointments(
             if _appointment_matches_date(row, params["date"], now=context.now)
         ]
 
-    unique = rows[0] if len(rows) == 1 else None
+    component_scoped = (
+        params.get("appointment_id") is not None
+        or params.get("service_id") is not None
+        or operation_type == "confirm_appointment"
+    )
+    logical_groups = (
+        [[row] for row in rows]
+        if component_scoped
+        else _group_appointment_rows(rows)
+    )
+    selected = logical_groups[0] if len(logical_groups) == 1 else None
     verified: dict[str, object] = {}
-    if unique is not None:
+    if selected is not None:
+        anchor = selected[0]
         verified = {
-            "appointment_id": unique.appointment_id,
-            "branch_id": unique.branch_id,
-            "service_id": unique.service_id,
-            "doctor_id": unique.doctor_id,
+            "appointment_id": anchor.appointment_id,
+            "branch_id": anchor.branch_id,
+            "doctor_id": anchor.doctor_id,
         }
-        if unique.laser_device_key:
-            verified["device_key"] = unique.laser_device_key
+        if len(selected) == 1:
+            verified["service_id"] = anchor.service_id
+            if anchor.laser_device_key:
+                verified["device_key"] = anchor.laser_device_key
+        else:
+            verified["appointment_ids"] = [row.appointment_id for row in selected]
+            if anchor.visit_group_id:
+                verified["visit_group_id"] = anchor.visit_group_id
 
-    count = len(rows) if operation_type != "appointment_list" else None
+    if operation_type == "appointment_list":
+        count = None
+    elif operation_type == "confirm_appointment":
+        count = len(rows)
+    else:
+        count = len(logical_groups)
+    visits = [_visit_payload(group) for group in _group_appointment_rows(rows)]
     return (
         ReadResult(
             kind=request.kind,
             ok=True,
-            payload={"appointments": [_appointment_payload(row) for row in rows]},
+            payload={
+                "appointments": [_appointment_payload(row) for row in rows],
+                "visits": visits,
+                "visit_count": len(visits),
+                "presentation_unit": "visit",
+            },
         ),
-        VerificationFacts(appointment_match_count=count, verified_parameters=verified),
-        unique,
+        VerificationFacts(
+            appointment_match_count=count,
+            verified_parameters=verified,
+        ),
+        selected,
     )
 
 
@@ -586,14 +843,72 @@ def _read_customer_profile(request: ReadRequest, context: ReadExecutionContext) 
     )
 
 
-def _read_customer_history(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
+def _read_customer_history(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+) -> ReadResult:
     history = build_patient_history_context(
         context.db,
         workspace_id=context.workspace.id,
         patient=context.patient,
         recent_limit=20,
     )
-    return ReadResult(kind=request.kind, ok=True, payload={"history": history.model_dump(mode="json")})
+    payload = history.model_dump(mode="json")
+    recent = payload.get("recent_appointments")
+    if isinstance(recent, list):
+        grouped: dict[str, list[dict[str, object]]] = {}
+        for item in recent:
+            if not isinstance(item, dict):
+                continue
+            group_id = item.get("visit_group_id")
+            appointment_id = item.get("appointment_id")
+            key = (
+                f"visit:{group_id}"
+                if group_id
+                else f"appointment:{appointment_id}"
+            )
+            grouped.setdefault(key, []).append(item)
+        visits: list[dict[str, object]] = []
+        for items in grouped.values():
+            ordered = sorted(
+                items,
+                key=lambda item: str(item.get("start_at") or ""),
+            )
+            statuses = {str(item.get("status") or "") for item in ordered}
+            visits.append(
+                {
+                    "visit_group_id": ordered[0].get("visit_group_id"),
+                    "appointment_ids": [
+                        item.get("appointment_id") for item in ordered
+                    ],
+                    "status": (
+                        next(iter(statuses)) if len(statuses) == 1 else "mixed"
+                    ),
+                    "start_at": min(
+                        str(item.get("start_at") or "") for item in ordered
+                    ),
+                    "end_at": max(
+                        str(item.get("end_at") or "") for item in ordered
+                    ),
+                    "services": [item.get("service_name") for item in ordered],
+                    "branch_name": ordered[0].get("branch_name"),
+                    "doctor_name": ordered[0].get("doctor_name"),
+                    "price_minor": sum(
+                        int(item.get("price_minor") or 0) for item in ordered
+                    ),
+                    "net_paid_minor": sum(
+                        int(item.get("net_paid_minor") or 0) for item in ordered
+                    ),
+                }
+            )
+        payload["recent_visits"] = visits
+        payload["recent_visit_count"] = len(visits)
+        payload["presentation_unit"] = "visit"
+    return ReadResult(
+        kind=request.kind,
+        ok=True,
+        payload={"history": payload},
+    )
 
 
 def _package_filters(request: ReadRequest) -> tuple[UUID | None, str | None, int | None, UUID | None]:
@@ -714,11 +1029,14 @@ def _merge_verification(base: VerificationFacts, extra: VerificationFacts) -> Ve
     )
 
 
-def execute_step_reads(step: PlanStep, context: ReadExecutionContext) -> ReadExecutionBundle:
+def execute_step_reads(
+    step: PlanStep,
+    context: ReadExecutionContext,
+) -> ReadExecutionBundle:
     """Execute one planner step's verified reads without performing any write action."""
     results: list[ReadResult] = []
     verification = VerificationFacts()
-    unique_appointment: AppointmentRecord | None = None
+    selected_appointments: list[AppointmentRecord] | None = None
 
     for request in step.reads:
         if request.kind == "service_catalog":
@@ -734,27 +1052,43 @@ def execute_step_reads(step: PlanStep, context: ReadExecutionContext) -> ReadExe
         elif request.kind == "doctors":
             results.append(_read_doctors(request, context))
         elif request.kind == "appointments":
-            result, verified, unique = _read_appointments(
+            result, verified, selected = _read_appointments(
                 request,
                 context,
                 operation_type=step.operation_type,
             )
             results.append(result)
             verification = _merge_verification(verification, verified)
-            if unique is not None:
-                unique_appointment = unique
+            if selected is not None:
+                selected_appointments = selected
         elif request.kind == "availability":
-            inherited: dict[str, object] = {}
-            if step.operation_type == "reschedule" and unique_appointment is not None:
-                inherited = {
-                    "appointment_id": unique_appointment.appointment_id,
-                    "branch_id": unique_appointment.branch_id,
-                    "service_id": unique_appointment.service_id,
-                    "doctor_id": unique_appointment.doctor_id,
-                    "device_key": unique_appointment.laser_device_key,
-                    "reschedule": True,
-                }
-            result, verified = _read_availability(request, context, inherited=inherited)
+            if (
+                step.operation_type == "reschedule"
+                and selected_appointments is not None
+                and len(selected_appointments) > 1
+            ):
+                result, verified = _read_group_reschedule_availability(
+                    request,
+                    context,
+                    appointments=selected_appointments,
+                )
+            else:
+                inherited: dict[str, object] = {}
+                if step.operation_type == "reschedule" and selected_appointments:
+                    appointment = selected_appointments[0]
+                    inherited = {
+                        "appointment_id": appointment.appointment_id,
+                        "branch_id": appointment.branch_id,
+                        "service_id": appointment.service_id,
+                        "doctor_id": appointment.doctor_id,
+                        "device_key": appointment.laser_device_key,
+                        "reschedule": True,
+                    }
+                result, verified = _read_availability(
+                    request,
+                    context,
+                    inherited=inherited,
+                )
             results.append(result)
             verification = _merge_verification(verification, verified)
         elif request.kind == "customer_profile":

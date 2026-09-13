@@ -166,6 +166,7 @@ def build_patient_history_context(
         recent_appointments=[
             PatientHistoryAppointmentRead(
                 appointment_id=appointment.id,
+                visit_group_id=appointment.visit_group_id,
                 status=appointment.status,
                 start_at=appointment.start_at,
                 end_at=appointment.end_at,

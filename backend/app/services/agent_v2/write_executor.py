@@ -15,6 +15,10 @@ from app.integrations.clinic.authority import (
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.services.activity import record_activity_event
+from app.services.agent_v2.grouped_visit_operations import (
+    cancel_visit_group_operation,
+    reschedule_visit_group_operation,
+)
 from app.services.agent_v2.package_booking_policy import (
     BookingPackagePolicyError,
     resolve_booking_package,
@@ -66,6 +70,24 @@ def _optional_uuid(parameters: dict[str, object], key: str) -> UUID | None:
         return UUID(str(value))
     except (TypeError, ValueError) as exc:
         raise WriteExecutionError(f"Verified write has an invalid {key}.") from exc
+
+
+def _uuid_sequence(
+    parameters: dict[str, object],
+    key: str,
+) -> tuple[UUID, ...]:
+    raw = parameters.get(key)
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    values: list[UUID] = []
+    for item in raw:
+        try:
+            values.append(item if isinstance(item, UUID) else UUID(str(item)))
+        except (TypeError, ValueError) as exc:
+            raise WriteExecutionError(
+                f"Verified write has an invalid {key}."
+            ) from exc
+    return tuple(values)
 
 
 def _datetime(parameters: dict[str, object], key: str) -> datetime:
@@ -200,48 +222,105 @@ def execute_write_ready_step(
                     "appointment_id": str(appointment.id),
                     "status": appointment.status,
                 }
+
             elif intent.kind == "cancel_appointment":
-                appointment = cancel_appointment_operation(
-                    db,
-                    workspace=workspace,
-                    appointment_id=_uuid(parameters, "appointment_id"),
-                    changed_by_user_id=None,
-                    patient_id=patient.id,
-                    reason="customer_requested_cancellation",
-                    override_policy=False,
-                    actor_is_admin=False,
-                    actor_type="ai",
-                )
-                result = {
-                    "ok": True,
-                    "write_kind": intent.kind,
-                    "appointment_id": str(appointment.id),
-                    "status": appointment.status,
-                }
+                appointment_ids = _uuid_sequence(parameters, "appointment_ids")
+                visit_group_id = _optional_uuid(parameters, "visit_group_id")
+                if len(appointment_ids) > 1 and visit_group_id is not None:
+                    appointments = cancel_visit_group_operation(
+                        db,
+                        workspace=workspace,
+                        patient_id=patient.id,
+                        visit_group_id=visit_group_id,
+                        appointment_ids=appointment_ids,
+                    )
+                    result = {
+                        "ok": True,
+                        "write_kind": intent.kind,
+                        "appointment_ids": [str(item.id) for item in appointments],
+                        "visit_group_id": str(visit_group_id),
+                        "status": "cancelled",
+                    }
+                else:
+                    appointment = cancel_appointment_operation(
+                        db,
+                        workspace=workspace,
+                        appointment_id=_uuid(parameters, "appointment_id"),
+                        changed_by_user_id=None,
+                        patient_id=patient.id,
+                        reason="customer_requested_cancellation",
+                        override_policy=False,
+                        actor_is_admin=False,
+                        actor_type="ai",
+                    )
+                    result = {
+                        "ok": True,
+                        "write_kind": intent.kind,
+                        "appointment_id": str(appointment.id),
+                        "status": appointment.status,
+                    }
+
             elif intent.kind == "reschedule":
-                replacement, previous = reschedule_appointment_operation(
-                    db,
-                    workspace=workspace,
-                    appointment_id=_uuid(parameters, "appointment_id"),
-                    requested_start_at=_datetime(parameters, "start_at"),
-                    changed_by_user_id=None,
-                    branch_id=_uuid(parameters, "branch_id"),
-                    doctor_id=_uuid(parameters, "doctor_id"),
-                    service_id=_uuid(parameters, "service_id"),
-                    laser_device_key=(
-                        str(parameters["device_key"]) if parameters.get("device_key") else None
-                    ),
-                    patient_id=patient.id,
-                    idempotency_key=idempotency_key,
-                    actor_type="ai",
+                appointment_ids = _uuid_sequence(parameters, "appointment_ids")
+                visit_group_id = _optional_uuid(parameters, "visit_group_id")
+                raw_components = parameters.get("reschedule_components")
+                components = (
+                    [dict(item) for item in raw_components if isinstance(item, dict)]
+                    if isinstance(raw_components, list)
+                    else []
                 )
-                result = {
-                    "ok": True,
-                    "write_kind": intent.kind,
-                    "appointment_id": str(replacement.id),
-                    "previous_appointment_id": str(previous.id),
-                    "status": replacement.status,
-                }
+                if (
+                    len(appointment_ids) > 1
+                    and visit_group_id is not None
+                    and components
+                ):
+                    moved = reschedule_visit_group_operation(
+                        db,
+                        workspace=workspace,
+                        patient_id=patient.id,
+                        visit_group_id=visit_group_id,
+                        appointment_ids=appointment_ids,
+                        components=components,
+                        idempotency_key=idempotency_key,
+                    )
+                    result = {
+                        "ok": True,
+                        "write_kind": intent.kind,
+                        "appointment_ids": [
+                            str(replacement.id) for replacement, _ in moved
+                        ],
+                        "previous_appointment_ids": [
+                            str(previous.id) for _, previous in moved
+                        ],
+                        "visit_group_id": str(visit_group_id),
+                        "status": moved[0][0].status if moved else "rescheduled",
+                    }
+                else:
+                    replacement, previous = reschedule_appointment_operation(
+                        db,
+                        workspace=workspace,
+                        appointment_id=_uuid(parameters, "appointment_id"),
+                        requested_start_at=_datetime(parameters, "start_at"),
+                        changed_by_user_id=None,
+                        branch_id=_uuid(parameters, "branch_id"),
+                        doctor_id=_uuid(parameters, "doctor_id"),
+                        service_id=_uuid(parameters, "service_id"),
+                        laser_device_key=(
+                            str(parameters["device_key"])
+                            if parameters.get("device_key")
+                            else None
+                        ),
+                        patient_id=patient.id,
+                        idempotency_key=idempotency_key,
+                        actor_type="ai",
+                    )
+                    result = {
+                        "ok": True,
+                        "write_kind": intent.kind,
+                        "appointment_id": str(replacement.id),
+                        "previous_appointment_id": str(previous.id),
+                        "status": replacement.status,
+                    }
             elif intent.kind == "buy_package":
                 package = purchase_package_offer(
                     db,

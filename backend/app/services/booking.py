@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
@@ -160,6 +161,7 @@ def calculate_availability(
     preloaded_branch: Branch | None = None,
     preloaded_service: Service | None = None,
     laser_device_key: str | None = None,
+    exclude_appointment_ids: Collection[UUID] = (),
 ) -> tuple[str, list[SlotCandidate]]:
     if preloaded_branch is not None:
         if (
@@ -286,6 +288,10 @@ def calculate_availability(
     conflict_start_utc = (day_start_local - before).astimezone(UTC)
     conflict_end_utc = (day_end_local + duration + after).astimezone(UTC)
 
+    excluded_appointment_ids = set(exclude_appointment_ids)
+    if exclude_appointment_id is not None:
+        excluded_appointment_ids.add(exclude_appointment_id)
+
     appointment_stmt = select(Appointment).where(
         Appointment.workspace_id == workspace.id,
         Appointment.doctor_id.in_(doctor_ids),
@@ -293,8 +299,10 @@ def calculate_availability(
         Appointment.busy_start_at < conflict_end_utc,
         Appointment.busy_end_at > conflict_start_utc,
     )
-    if exclude_appointment_id is not None:
-        appointment_stmt = appointment_stmt.where(Appointment.id != exclude_appointment_id)
+    if excluded_appointment_ids:
+        appointment_stmt = appointment_stmt.where(
+            Appointment.id.notin_(tuple(excluded_appointment_ids))
+        )
     existing = list(db.scalars(appointment_stmt))
     by_doctor: dict[UUID, list[Appointment]] = {doctor: [] for doctor in doctor_ids}
     for appointment in existing:
@@ -309,8 +317,10 @@ def calculate_availability(
             Appointment.busy_start_at < conflict_end_utc,
             Appointment.busy_end_at > conflict_start_utc,
         )
-        if exclude_appointment_id is not None:
-            device_stmt = device_stmt.where(Appointment.id != exclude_appointment_id)
+        if excluded_appointment_ids:
+            device_stmt = device_stmt.where(
+                Appointment.id.notin_(tuple(excluded_appointment_ids))
+            )
         device_existing = list(db.scalars(device_stmt))
 
     minimum_start_utc = now_utc + timedelta(minutes=settings.minimum_notice_minutes)
@@ -447,6 +457,7 @@ def find_exact_slot(
     requested_start_at: datetime,
     exclude_appointment_id: UUID | None = None,
     laser_device_key: str | None = None,
+    exclude_appointment_ids: Collection[UUID] = (),
 ) -> SlotCandidate:
     requested_utc = requested_start_at.astimezone(UTC)
 
@@ -471,6 +482,7 @@ def find_exact_slot(
         doctor_id=doctor_id,
         exclude_appointment_id=exclude_appointment_id,
         laser_device_key=laser_device_key,
+        exclude_appointment_ids=exclude_appointment_ids,
     )
     for slot in slots:
         if slot.start_at == requested_utc:

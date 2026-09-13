@@ -58,6 +58,7 @@ class AvailabilityRequest:
     booking_date: date
     doctor_id: str | None = None
     exclude_appointment_id: str | None = None
+    exclude_appointment_ids: tuple[str, ...] = ()
     now: datetime | None = None
     laser_device_key: str | None = None
 
@@ -178,6 +179,7 @@ class AppointmentRecord:
     patient_package_id: str | None = None
     laser_device_key: str | None = None
     laser_device_name: str | None = None
+    visit_group_id: str | None = None
 
 
 @dataclass(frozen=True)

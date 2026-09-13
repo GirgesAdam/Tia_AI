@@ -349,6 +349,7 @@ def reschedule_appointment_operation(
     idempotency_key: str | None = None,
     actor_type: ActivityActorType = "staff",
     now: datetime | None = None,
+    exclude_appointment_ids: tuple[UUID, ...] = (),
 ) -> tuple[Appointment, Appointment]:
     if idempotency_key:
         existing = db.scalar(
@@ -435,6 +436,7 @@ def reschedule_appointment_operation(
             doctor_id=new_doctor_id,
             requested_start_at=requested_start_at,
             exclude_appointment_id=current.id,
+            exclude_appointment_ids=exclude_appointment_ids,
             laser_device_key=new_laser_device_key,
         )
     except BookingRuleError as exc:
@@ -451,6 +453,7 @@ def reschedule_appointment_operation(
         doctor_id=new_doctor_id,
         service_id=new_service_id,
         patient_package_id=current.patient_package_id,
+        visit_group_id=current.visit_group_id,
         lead_id=current.lead_id,
         created_by_user_id=changed_by_user_id,
         rescheduled_from_appointment_id=current.id,
