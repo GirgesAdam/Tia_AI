@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - .github/workflows/fix5-no-show-package-live-verification.yml
+      - backend/app/schemas/patient_history.py
+      - backend/app/services/patient_history.py
+      - backend/scripts/run_fix5_no_show_package_live_verification.py
   workflow_dispatch:
 
 permissions:
