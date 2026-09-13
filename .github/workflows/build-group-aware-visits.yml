@@ -56,10 +56,13 @@ jobs:
         working-directory: backend
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Apply deterministic patch
+      - name: Apply deterministic validated patch
         run: |
+          python .github/implementation/fix_group_aware_builder_markers.py
           python .github/implementation/group_aware_visit_patch.py
           python .github/implementation/fix_group_aware_write_indent.py
+          python .github/implementation/fix_group_aware_runtime_edges.py
+          ruff check --fix backend/tests/test_v2_grouped_visits.py
           git diff --check
           git status --short
 
@@ -82,8 +85,11 @@ jobs:
       - name: Commit fully verified runtime patch
         run: |
           rm -f .github/workflows/build-group-aware-visits.yml
+          rm -f .github/workflows/validate-group-aware-visits.yml
           rm -f .github/implementation/group_aware_visit_patch.py
+          rm -f .github/implementation/fix_group_aware_builder_markers.py
           rm -f .github/implementation/fix_group_aware_write_indent.py
+          rm -f .github/implementation/fix_group_aware_runtime_edges.py
           git add -A
           git diff --cached --check
           git config user.name "github-actions[bot]"
