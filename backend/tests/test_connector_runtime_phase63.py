@@ -127,7 +127,6 @@ def db_workspace(monkeypatch):
 
 class OnePatientSource:
     sync_domains = frozenset({ClinicSyncDomain.PATIENTS})
-
     def __init__(self) -> None:
         self.calls: list[str | None] = []
 
@@ -446,7 +445,6 @@ def test_manual_subset_does_not_require_unrequested_connector_domains(
     assert cycle.status == "succeeded"
     assert [item.domain for item in cycle.domains] == ["patients"]
     assert source.calls == [None]
-
 def test_phase63_migration_runtime_and_n8n_contracts_are_deterministic() -> None:
     backend = Path(__file__).resolve().parent.parent
     root = backend.parent
@@ -462,7 +460,7 @@ def test_phase63_migration_runtime_and_n8n_contracts_are_deterministic() -> None
     assert 'revision: str = "0036_sync_runtime"' in migration
     assert len("0036_sync_runtime") <= 32
     assert "clinic_integration_sync_schedules" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
     assert '"/integration/sync/run"' in clinic_routes
     assert '"/integration/sync/schedule"' in clinic_routes
     assert '"/adapter/clinic-sync/tick"' in automation_routes
