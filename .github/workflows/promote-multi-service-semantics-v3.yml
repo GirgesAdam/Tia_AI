@@ -91,8 +91,24 @@ jobs:
           if text.count(old) != 1:
               raise RuntimeError(f"Expected one normalizer guard marker; found {text.count(old)}")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          path = Path("backend/tests/test_v2_compound_atomicity.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''        operations=[SimpleNamespace(type=step.operation_type) for step in plan.steps],
+          '''
+          new = '''        operations=[
+              SimpleNamespace(
+                  type=step.operation_type,
+                  entities=SimpleNamespace(service=None),
+              )
+              for step in plan.steps
+          ],
+          '''
+          if text.count(old) != 1:
+              raise RuntimeError(f"Expected one atomicity fixture marker; found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-          ruff check --fix backend/app/services/agent_v2/turn_normalization.py backend/tests/test_v2_multi_service_visit_semantics.py
+          ruff check --fix backend/app/services/agent_v2/turn_normalization.py backend/tests/test_v2_multi_service_visit_semantics.py backend/tests/test_v2_compound_atomicity.py
           git diff --check
           git status --short
 
