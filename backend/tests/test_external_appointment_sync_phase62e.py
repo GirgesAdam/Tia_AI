@@ -492,7 +492,6 @@ def test_local_write_guards_cover_dashboard_and_native_adapter(db_and_workspace)
     backend = Path(__file__).resolve().parent.parent
     booking_source = (backend / "app/api/routes/booking.py").read_text(encoding="utf-8")
     assert booking_source.count("require_local_appointment_write(db, access.workspace.id)") == 5
-
 def test_migration_0035_extends_sync_domain_checks_and_head() -> None:
     backend = Path(__file__).resolve().parent.parent
     migration = (backend / "alembic/versions/0035_appointment_sync.py").read_text(encoding="utf-8")
@@ -500,7 +499,7 @@ def test_migration_0035_extends_sync_domain_checks_and_head() -> None:
     assert 'revision: str = "0035_appointment_sync"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0034_drop_customer_email"' in migration
     assert "'patients', 'payments', 'appointments'" in migration
-    assert 'EXPECTED_MIGRATION_HEAD = "0062_laser_device_scheduling"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
 
 
 def _load_appointment_sync_migration_module():
