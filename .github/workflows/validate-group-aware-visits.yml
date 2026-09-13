@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - .github/workflows/validate-group-aware-visits.yml
+      - .github/implementation/group_aware_visit_patch.py
+      - .github/implementation/fix_group_aware_builder_markers.py
+      - .github/implementation/fix_group_aware_write_indent.py
   workflow_dispatch:
 
 permissions:
