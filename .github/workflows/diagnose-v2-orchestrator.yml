@@ -1,0 +1,47 @@
+name: Diagnose V2 Orchestrator Test Source
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/diagnose-v2-orchestrator.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Show checkout identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git rev-parse HEAD
+          git status --short
+          git ls-tree -r --name-only HEAD backend/tests | sort > /tmp/tree-tests.txt
+          echo "tree_count=$(wc -l < /tmp/tree-tests.txt)"
+          grep -n "v2_orchestrator" /tmp/tree-tests.txt || true
+          find backend/tests -maxdepth 1 -type f -printf '%f\n' | sort > /tmp/fs-tests.txt
+          echo "fs_count=$(wc -l < /tmp/fs-tests.txt)"
+          grep -n "v2_orchestrator" /tmp/fs-tests.txt || true
+      - name: Locate failing test text
+        shell: bash
+        run: |
+          set -euxo pipefail
+          grep -RFn "test_orchestrator_executes_all_authorized_compound_writes_in_order" backend . || true
+          grep -RFn 'writes == ["first", "second"]' backend . || true
+      - name: Inspect pytest collection
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install -r backend/requirements.txt >/dev/null
+          cd backend
+          python -m pytest --collect-only -q 2>&1 | tee /tmp/collect.txt >/dev/null
+          grep -n "test_v2_orchestrator" /tmp/collect.txt || true
+          grep -n "executes_all_authorized_compound_writes_in_order" /tmp/collect.txt || true
