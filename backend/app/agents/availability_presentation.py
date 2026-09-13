@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -48,31 +48,56 @@ def _device_from_slot(slot: dict[str, Any]) -> tuple[str, str]:
     return metadata.device_key or "", metadata.device_name or ""
 
 
-def _merge_verified_slot_intervals(
+def _bookable_start_runs(
     intervals: list[tuple[datetime, datetime]],
 ) -> list[tuple[datetime, datetime]]:
-    """Merge only verified overlapping or touching appointment intervals.
+    """Compress verified appointment starts into conservative start-time ranges.
 
-    Customer-facing windows represent continuous time covered by at least one
-    verified bookable slot. Real gaps remain separate instead of being inferred
-    away from start-time cadence.
+    A range end is always the latest verified *bookable start*, never appointment
+    end time. Repeated start-time deltas establish a trustworthy cadence. A pair
+    can also be joined when the earlier verified slot ends exactly at the later
+    start. Otherwise an irregular gap stays split instead of implying an
+    unverified start-time range.
     """
 
-    ordered = sorted(set(intervals), key=lambda interval: (interval[0], interval[1]))
+    by_start: dict[datetime, datetime] = {}
+    for start, end in intervals:
+        previous_end = by_start.get(start)
+        if previous_end is None or end > previous_end:
+            by_start[start] = end
+
+    ordered = sorted(by_start.items())
     if not ordered:
         return []
+    if len(ordered) == 1:
+        start = ordered[0][0]
+        return [(start, start)]
 
-    merged: list[tuple[datetime, datetime]] = []
-    current_start, current_end = ordered[0]
-    for start, end in ordered[1:]:
-        if start <= current_end:
-            if end > current_end:
-                current_end = end
+    deltas = [
+        int((current_start - previous_start).total_seconds())
+        for (previous_start, _), (current_start, _) in zip(ordered, ordered[1:], strict=False)
+    ]
+    cadence_counts = Counter(delta for delta in deltas if delta > 0)
+    reliable_cadences = {delta for delta, count in cadence_counts.items() if count >= 2}
+
+    runs: list[tuple[datetime, datetime]] = []
+    run_start = ordered[0][0]
+    run_end = ordered[0][0]
+
+    for (previous_start, previous_end), (current_start, _current_end) in zip(
+        ordered, ordered[1:], strict=False
+    ):
+        delta = int((current_start - previous_start).total_seconds())
+        same_verified_run = delta in reliable_cadences or previous_end == current_start
+        if same_verified_run:
+            run_end = current_start
             continue
-        merged.append((current_start, current_end))
-        current_start, current_end = start, end
-    merged.append((current_start, current_end))
-    return merged
+        runs.append((run_start, run_end))
+        run_start = current_start
+        run_end = current_start
+
+    runs.append((run_start, run_end))
+    return runs
 
 
 def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
@@ -94,7 +119,7 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
 
     windows: list[dict[str, Any]] = []
     for (doctor_id, doctor_name, device_key, device_name), intervals in grouped.items():
-        for start, end in _merge_verified_slot_intervals(intervals):
+        for start, end in _bookable_start_runs(intervals):
             windows.append(
                 {
                     "doctor_id": doctor_id or None,
