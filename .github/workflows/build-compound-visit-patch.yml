@@ -1,0 +1,69 @@
+name: Build Compound Visit Patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/implementation/compound_visit_patch.py
+      - .github/workflows/build-compound-visit-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Apply patch in checkout only
+        run: python .github/implementation/compound_visit_patch.py
+      - name: Validate diff
+        run: git diff --check
+      - name: Compile changed runtime
+        working-directory: backend
+        run: python -m compileall -q app tests
+      - name: Run focused compound tests
+        working-directory: backend
+        run: |
+          pytest -q \
+            tests/test_v2_same_visit_booking.py \
+            tests/test_v2_compound_turn_policy.py \
+            tests/test_v2_compound_visit_preflight.py \
+            tests/test_v2_planner.py \
+            tests/test_v2_write_executor.py
+      - name: Save patch diff
+        if: always()
+        run: git diff -- backend > compound-visit.patch
+      - name: Upload patched files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compound-visit-patch
+          path: |
+            compound-visit.patch
+            backend/app/models/appointment.py
+            backend/app/services/appointment_creation.py
+            backend/app/services/agent_v2/planner.py
+            backend/app/services/agent_v2/compound_turn_policy.py
+            backend/app/services/agent_v2/compound_visit_preflight.py
+            backend/app/services/agent_v2/orchestrator.py
+            backend/app/services/agent_v2/write_executor.py
+            backend/tests/test_v2_same_visit_booking.py
+          if-no-files-found: error
