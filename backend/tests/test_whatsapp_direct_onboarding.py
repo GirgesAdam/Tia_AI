@@ -146,14 +146,11 @@ def test_direct_onboarding_explains_phone_preparation_and_current_migration_path
         repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "طريقة الربط اليدوية الحالية في Tia" in automation
-    assert "Tia لا بتنقل ولا بتسجل الرقم بمجرد لصق البيانات" in automation
+    assert "جهّز الرقم في WhatsApp Cloud API أولًا" in automation
     assert "WhatsApp Business App" in automation
-    assert "WhatsApp Business Platform (Cloud API)" in automation
-    assert "لا يستخدم Coexistence" in automation
+    assert "الربط اليدوي الحالي لا يستخدم Coexistence" in automation
+    assert "أكمل نقل وتجهيز الرقم داخل Meta أولًا" in automation
     assert "Inbox داخل Tia" in automation
-    assert "مكالمات الموبايل العادية على الشريحة لا تتأثر" in automation
-    assert "Click-to-WhatsApp" in automation
 
 
 def test_direct_onboarding_keeps_entered_credentials_after_failed_action() -> None:
@@ -173,14 +170,16 @@ def test_direct_onboarding_keeps_entered_credentials_after_failed_action() -> No
     assert "technicalMessage" in actions
 
 
-def test_system_user_link_is_high_contrast_and_right_aligned() -> None:
+def test_system_user_link_is_high_contrast_and_opens_meta_safely() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
     automation = (
         repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
     ).read_text(encoding="utf-8")
     assert "!text-teal-700" in automation
-    assert 'className="mt-2 w-full text-right"' in automation
+    assert 'target="_blank"' in automation
+    assert 'rel="noreferrer"' in automation
+    assert "SYSTEM_USERS_URL" in automation
 
 
 def test_pending_template_variants_are_explained_as_non_blocking() -> None:
@@ -189,8 +188,8 @@ def test_pending_template_variants_are_explained_as_non_blocking() -> None:
     automation = (
         repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
     ).read_text(encoding="utf-8")
-    assert "وجود نسخ إضافية قيد المراجعة مش بيعطل التشغيل" in automation
-    assert "Tia تستخدم النسخ المعتمدة فقط" in automation
+    assert "قيد مراجعة Meta" in automation
+    assert "Tia تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط" in automation
 
 
 def test_http_client_info_logging_is_suppressed_for_provider_secret_safety() -> None:
@@ -217,17 +216,13 @@ def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup_or_paid_b
         repo / "frontend/src/app/(dashboard)/setup/whatsapp/page.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "WhatsAppDirectOnboarding" in automation_page
+    assert "WhatsAppDirectOnboarding" not in automation_page
+    assert 'href="/setup/whatsapp"' in automation_page
     assert "WhatsAppDirectOnboarding" in setup_page
-    assert "جهّز Meta والرقم مرة واحدة" in setup_page
-    assert "خلّي Tia تتحقق وتربط" in setup_page
-    assert "فعّل الـWebhook" in setup_page
-    assert "Direct Meta Cloud API" not in setup_page
-    assert "Meta Cloud API" in setup_page
-    assert "من غير مزود وسيط أو اشتراك إضافي لطرف ثالث" in setup_page
-    assert "مش محتاج 360dialog أو Twilio أو أي BSP باشتراك شهري" in setup_page
-    assert "رسوم WhatsApp/Meta الأصلية" in setup_page
-    assert "Meta Embedded Signup غير متاح لنا حاليًا" in setup_page
-    assert "لينك يفتح Meta ومعاه اسم المسار" in setup_page
+    assert "ربط مباشر مع Meta Cloud API" in setup_page
+    assert "الإعداد يتم مرة واحدة" in setup_page
+    assert "جهّز الرقم في Meta" in setup_page
+    assert "انسخ البيانات إلى Tia" in setup_page
+    assert "فعّل استقبال الرسائل" in setup_page
     assert 'href="/automations"' in setup_page
     assert not (repo / "frontend/src/app/(dashboard)/setup/whatsapp/meta-embedded-signup.tsx").exists()
