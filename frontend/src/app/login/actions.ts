@@ -24,8 +24,7 @@ async function signInAndOpenWorkspace(email: string, password: string, destinati
 
   const me = (await response.json()) as { workspaces: Array<{ workspace_id: string }> };
   if (!me.workspaces.length) {
-    await supabase.auth.signOut();
-    redirect(`/login?error=${encodeURIComponent("الحساب غير مرتبط بأي عيادة حتى الآن.")}`);
+    redirect("/onboarding");
   }
 
   const cookieStore = await cookies();
