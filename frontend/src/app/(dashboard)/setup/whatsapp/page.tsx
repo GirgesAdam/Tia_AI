@@ -15,18 +15,18 @@ import {
 
 const setupSteps = [
   {
-    title: "جهّز بيانات Meta",
-    description: "هتحتاج App ID وApp Secret وWABA ID وPhone Number ID وSystem User Access Token. كل خانة تحتها لينك مباشر للمكان اللي هتجيب منه القيمة.",
+    title: "جهّز بيانات Meta مرة واحدة",
+    description: "هتحتاج App ID وApp Secret وWABA ID وPhone Number ID وSystem User Access Token. كل خانة في Tia تحتها لينك مباشر للمكان اللي هتجيب منه القيمة.",
     icon: ExternalLink,
   },
   {
     title: "خلّي Tia تتحقق وتربط",
-    description: "الصق القيم واضغط تحقق واربط. Tia هتتأكد إن الـToken والصلاحيات والرقم تابعين لنفس حساب Meta قبل ما تحفظ أي إعداد.",
+    description: "الصق القيم واضغط تحقق واربط. Tia هتتأكد من الـToken والصلاحيات والرقم قبل ما تحفظ الأسرار مشفرة.",
     icon: CheckCircle2,
   },
   {
     title: "فعّل الـWebhook",
-    description: "بعد الربط، Tia هتديك Callback URL وVerify Token جاهزين للنسخ. ضيفهم في Meta واضغط إنهاء الإعداد داخل Tia.",
+    description: "بعد الربط، Tia هتديك Callback URL وVerify Token جاهزين للنسخ. ضيفهم في Meta مرة واحدة واضغط إنهاء الإعداد داخل Tia.",
     icon: Link2,
   },
 ];
@@ -43,7 +43,7 @@ export default async function WhatsAppSetupPage() {
     <>
       <PageHeader
         title="ربط WhatsApp"
-        description="إعداد مرة واحدة. امشِ بالترتيب، وTia هتوضح لك كل خطوة وتتحقق من البيانات قبل التشغيل."
+        description="ربط مباشر مع Meta Cloud API من غير مزود وسيط أو اشتراك إضافي لطرف ثالث. الإعداد بيتعمل مرة واحدة وTia هتراجع كل خطوة قبل التشغيل."
       />
 
       <Card className="mb-6 border-teal-200 bg-teal-50/40">
@@ -53,9 +53,9 @@ export default async function WhatsAppSetupPage() {
               <MessageCircleMore size={22} />
             </span>
             <div>
-              <b className="text-lg text-slate-950">قبل ما تبدأ</b>
+              <b className="text-lg text-slate-950">مفيش Provider مدفوع بين Tia وMeta</b>
               <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                الربط الحالي مباشر مع Meta Cloud API. مش محتاج أي طرف وسيط، لكن Meta بتطلب إن بيانات التطبيق والرقم تتجهز يدويًا. Tia هتفتح لك الصفحات المطلوبة وتقول لك بالضبط إيه القيمة اللي تنسخها.
+                الربط مباشر مع Meta Cloud API. مش محتاج 360dialog أو Twilio أو أي BSP باشتراك شهري. العيادة بتستخدم حساب Meta والرقم بتوعها، وتدفع فقط أي رسوم WhatsApp/Meta الأصلية المطبقة على استخدامها. بسبب إن Meta Embedded Signup غير متاح لنا حاليًا، Tia هتوجّهك في الإعداد اليدوي بأقل عدد ممكن من الخطوات ومن غير تخمين.
               </p>
             </div>
           </div>
