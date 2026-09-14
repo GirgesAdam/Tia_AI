@@ -53,7 +53,7 @@ def _schema(engine) -> None:
         )""",
         """CREATE TABLE messages (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), conversation_id CHAR(32), channel_connection_id CHAR(32), sender_type VARCHAR(20), direction VARCHAR(20),
-            message_type VARCHAR(32), content TEXT, external_message_id VARCHAR(255), delivery_status VARCHAR(20), sent_by_user_id CHAR(32), metadata TEXT,
+            message_type VARCHAR(32), content TEXT, external_message_id VARCHAR(255), delivery_status VARCHAR(20), in_reply_to_message_id CHAR(32), sent_by_user_id CHAR(32), metadata TEXT,
             created_at DATETIME, updated_at DATETIME
         )""",
         """CREATE TABLE message_dispatches (
