@@ -1,4 +1,4 @@
-"""Functional release gate on Alembic-migrated, disposable local PostgreSQL.
+"""Functional release gate on migrated CI PostgreSQL or explicitly pinned Staging.
 
 Every service commit stays inside an outer transaction which is rolled back.
 HTTP is blocked by default; provider tests inject only controlled responses.
@@ -17,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
 from app.models.branch import Branch
@@ -37,8 +38,16 @@ from app.services import meta_whatsapp_transport as transport
 @pytest.fixture
 def case(monkeypatch):
     url = make_url(os.environ["DATABASE_URL"])
-    # Never use a hosted DB, even if a developer has loaded a real .env.
-    if url.host not in {"localhost", "127.0.0.1", "::1"} or url.database != "ci_db":
+    staging_ref = "ycuxjlkhnubztgqmhtom"
+    staging = os.environ.get("AUTOMATION_GATE_STAGING_PROJECT") == staging_ref
+    if staging:
+        direct = url.host == f"db.{staging_ref}.supabase.co"
+        pooled = (url.host or "").endswith(
+            ".pooler.supabase.com"
+        ) and url.username == f"postgres.{staging_ref}"
+        if not (direct or pooled) or url.database != "postgres":
+            pytest.fail("Staging gate DB URL must identify the approved Staging project.")
+    elif url.host not in {"localhost", "127.0.0.1", "::1"} or url.database != "ci_db":
         pytest.fail("Automation DB gate requires disposable local ci_db.")
     if settings.environment != "test":
         pytest.fail("Automation DB gate requires ENVIRONMENT=test.")
@@ -50,12 +59,13 @@ def case(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "send", block_http)
     monkeypatch.setattr(settings, "demo_mode", False)
     monkeypatch.setattr(settings, "channel_dispatch_max_attempts", 3)
+    monkeypatch.setattr(meta_whatsapp_settings, "meta_graph_api_version", "v23.0")
     engine = create_engine(url, connect_args={"connect_timeout": 3})
     try:
         conn = engine.connect()
     except Exception:
         engine.dispose()
-        if os.environ.get("CI"):
+        if os.environ.get("CI") or staging:
             raise
         pytest.skip("Start disposable local ci_db and apply Alembic migrations")
     outer = conn.begin()
@@ -65,6 +75,7 @@ def case(monkeypatch):
         workspace = Workspace(name="Automation gate", slug=f"gate-{uuid4()}", timezone="UTC")
         db.add(workspace)
         db.flush()
+        workspace_id = workspace.id
         patient = Patient(
             workspace_id=workspace.id,
             first_name="Gate",
@@ -124,8 +135,12 @@ def case(monkeypatch):
     finally:
         db.close()
         outer.rollback()
-        conn.close()
-        engine.dispose()
+        try:
+            if "workspace_id" in locals():
+                assert conn.scalar(select(Workspace.id).where(Workspace.id == workspace_id)) is None
+        finally:
+            conn.close()
+            engine.dispose()
 
 
 def plan(case):
@@ -205,10 +220,22 @@ def test_reminder_plan_claim_execute_payload_and_dedupe(case):
         case.db, workspace_id=case.workspace.id, job_id=job.id, now=case.now
     )
     assert repeated.job.dispatch_id == job.dispatch_id
-    assert case.db.scalar(select(func.count()).select_from(MessageDispatch)) == 1
+    assert (
+        case.db.scalar(
+            select(func.count())
+            .select_from(MessageDispatch)
+            .where(MessageDispatch.workspace_id == case.workspace.id)
+        )
+        == 1
+    )
     (item,) = claim(case)
     assert item.external_user_id == "201001112223"
-    assert case.db.scalar(select(ChannelIdentity)).patient_id == case.patient.id
+    assert (
+        case.db.scalar(
+            select(ChannelIdentity).where(ChannelIdentity.workspace_id == case.workspace.id)
+        ).patient_id
+        == case.patient.id
+    )
     display = item.metadata["appointment"]
     assert display["timezone"] == "Africa/Cairo"  # branch overrides workspace UTC
     from zoneinfo import ZoneInfo
@@ -240,7 +267,7 @@ def test_post_visit_follows_completion_anchor(case):
     [
         ("blocked", True, "patient_not_active"),
         ("inactive", True, "patient_not_active"),
-        ("active", False, "no_active_external_channel_identity"),
+        ("active", False, "whatsapp_opt_in_required"),
     ],
 )
 def test_ineligible_patient_does_not_create_dispatch(case, status, opt_in, reason):
@@ -250,7 +277,14 @@ def test_ineligible_patient_does_not_create_dispatch(case, status, opt_in, reaso
     job = execute(case)
     assert job.status == "skipped"
     assert job.result_json["reason"] == reason
-    assert case.db.scalar(select(func.count()).select_from(MessageDispatch)) == 0
+    assert (
+        case.db.scalar(
+            select(func.count())
+            .select_from(MessageDispatch)
+            .where(MessageDispatch.workspace_id == case.workspace.id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize("change", ["reschedule", "cancel", "disable"])
@@ -406,7 +440,14 @@ def test_webhooks_update_db_and_audit_without_duplicates_or_downgrades(case):
     dispatch = record(case, job.dispatch_id)
     webhook(case, "delivered")
     webhook(case, "delivered")
-    assert case.db.scalar(select(func.count()).select_from(ChannelDeliveryEvent)) == 1
+    assert (
+        case.db.scalar(
+            select(func.count())
+            .select_from(ChannelDeliveryEvent)
+            .where(ChannelDeliveryEvent.workspace_id == case.workspace.id)
+        )
+        == 1
+    )
     assert dispatch.status == "delivered"
     webhook(case, "read")
     webhook(case, "sent")
@@ -414,7 +455,13 @@ def test_webhooks_update_db_and_audit_without_duplicates_or_downgrades(case):
     assert dispatch.status == "read"
     assert case.db.get(Message, job.message_id).delivery_status == "read"
     assert dispatch.read_at == case.now
-    events = list(case.db.scalars(select(ChannelDeliveryEvent)))
+    events = list(
+        case.db.scalars(
+            select(ChannelDeliveryEvent).where(
+                ChannelDeliveryEvent.workspace_id == case.workspace.id
+            )
+        )
+    )
     assert len(events) == 4
     assert all(e.processed_at and e.provider_message_id == "wamid.gate" for e in events)
     assert all(e.payload_json["metadata"]["recipient_id"] == "201001112223" for e in events)
@@ -424,14 +471,23 @@ def test_webhook_before_send_result_is_reconciled(case):
     job = execute(case)
     claim(case)
     webhook(case, "read")
-    event = case.db.scalar(select(ChannelDeliveryEvent))
+    event = case.db.scalar(
+        select(ChannelDeliveryEvent).where(ChannelDeliveryEvent.workspace_id == case.workspace.id)
+    )
     assert event.processed_at is None
     dispatch = record(case, job.dispatch_id)
     assert dispatch.status == "read"
     case.db.refresh(event)
     assert event.processed_at is not None
     webhook(case, "read")
-    assert case.db.scalar(select(func.count()).select_from(ChannelDeliveryEvent)) == 1
+    assert (
+        case.db.scalar(
+            select(func.count())
+            .select_from(ChannelDeliveryEvent)
+            .where(ChannelDeliveryEvent.workspace_id == case.workspace.id)
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize("outcome", ["success", "transient", "permanent", "timeout"])

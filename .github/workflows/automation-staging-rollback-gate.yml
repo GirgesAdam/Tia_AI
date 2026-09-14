@@ -1,0 +1,79 @@
+name: Automation Staging Rollback Gate
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  staging-engine:
+    # One automatic acceptance run, following successful CI for this handoff.
+    # Future runs are manual and still require successful CI on the selected SHA.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_commit.message == 'test(automations): add one-shot staging rollback gate')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Require successful CI on the exact checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, urllib.request
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          repo = os.environ['GH_REPO']
+          request = urllib.request.Request(
+              f'https://api.github.com/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=10',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              runs = json.load(response)['workflow_runs']
+          assert any(r['head_sha'] == sha and r['head_branch'] == 'main' and r['event'] == 'push'
+                     and r['conclusion'] == 'success' for r in runs), 'Exact-SHA CI proof is required'
+          print('CI-proven checkout:', sha)
+          PY
+      - run: python -m pip install -r requirements.txt
+      - name: Exercise Staging engine with HTTP blocked and rollback verified
+        env:
+          ENVIRONMENT: test
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          AUTOMATION_GATE_STAGING_PROJECT: ycuxjlkhnubztgqmhtom
+          SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_gate_unused
+          SUPABASE_SECRET_KEY: sb_secret_gate_unused
+          DEMO_MODE: 'true'
+          DEMO_ALLOW_EXTERNAL_DISPATCH: 'false'
+          DEBUG: 'false'
+          DOCS_ENABLED: 'false'
+          CORS_ORIGINS: '[]'
+        run: python -m pytest -v tests/test_automation_delivery_db.py --junitxml=artifacts/automation-staging-gate.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automation-staging-rollback-gate
+          path: backend/artifacts/automation-staging-gate.xml
+          if-no-files-found: warn
