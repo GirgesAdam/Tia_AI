@@ -81,7 +81,11 @@ def list_rules(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AutomationRule]:
-    return ensure_default_rules(db, access.workspace.id)
+    return [
+        rule
+        for rule in ensure_default_rules(db, access.workspace.id)
+        if rule.key != "booking_confirmation"
+    ]
 
 
 @router.patch("/rules/{rule_id}", response_model=AutomationRuleRead)
@@ -97,18 +101,12 @@ def update_rule(
             AutomationRule.id == rule_id,
         )
     )
-    if rule is None:
+    if rule is None or rule.key == "booking_confirmation":
         raise HTTPException(status_code=404, detail="Automation rule not found.")
 
     changes = payload.model_dump(exclude_unset=True)
     changed_fields = sorted(changes)
     previous_enabled = rule.enabled
-
-    if rule.key == "booking_confirmation" and changes.get("enabled") is False:
-        raise HTTPException(
-            status_code=409,
-            detail="Booking confirmation is a fixed Tia message and cannot be disabled.",
-        )
 
     if (
         rule.key == "appointment_reminder_6h"
