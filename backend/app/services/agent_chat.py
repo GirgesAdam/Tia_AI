@@ -193,35 +193,28 @@ def _existing_agent_response_for_inbound(
     marked processed. If queue/event finalization fails afterwards, a retry must
     reuse that response instead of producing a second AI reply or replaying writes.
     """
-    rows = list(
-        db.scalars(
-            select(Message)
-            .where(
-                Message.workspace_id == conversation.workspace_id,
-                Message.conversation_id == conversation.id,
-                Message.sender_type == "ai",
-                Message.direction == "outbound",
-            )
-            .order_by(Message.created_at.desc())
-            .limit(25)
+    outbound = db.scalar(
+        select(Message).where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.in_reply_to_message_id == inbound.id,
+            Message.sender_type == "ai",
+            Message.direction == "outbound",
         )
     )
-    inbound_id = str(inbound.id)
-    for outbound in rows:
-        metadata = outbound.metadata_json or {}
-        if str(metadata.get("in_reply_to_message_id") or "") != inbound_id:
-            continue
-        return AgentChatResponse(
-            run_id=_uuid_from_metadata(metadata.get("agent_run_id")) or run_id,
-            conversation_id=conversation.id,
-            inbound_message_id=inbound.id,
-            outbound_message_id=outbound.id,
-            reply=outbound.content,
-            handoff_required=conversation.owner_type == OWNER_HUMAN,
-            agent_paused=False,
-            model=metadata.get("model"),
-        )
-    return None
+    if outbound is None:
+        return None
+    metadata = outbound.metadata_json or {}
+    return AgentChatResponse(
+        run_id=_uuid_from_metadata(metadata.get("agent_run_id")) or run_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+        outbound_message_id=outbound.id,
+        reply=outbound.content,
+        handoff_required=conversation.owner_type == OWNER_HUMAN,
+        agent_paused=False,
+        model=metadata.get("model"),
+    )
 
 def _current_run_can_send_handoff_ack(
     db: Session,
@@ -3494,6 +3487,7 @@ def _run_after_inbound(
         channel_connection_id=conversation.channel_connection_id,
         sender_type="ai",
         direction="outbound",
+        in_reply_to_message_id=inbound.id,
         created_at=outbound_now,
         message_type="text",
         content=reply,

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy import event as sa_event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -534,12 +536,27 @@ def _processed_event_response(
     return ProcessedInbound(event=event, agent_response=response, dispatch=dispatch)
 
 
-def process_inbound_event(
+INBOUND_AGENT_LEASE = timedelta(minutes=5)
+
+
+class InboundProcessingLeaseLost(ChannelConflictError):
+    pass
+
+
+def _lease_is_active(event: ChannelInboundEvent, *, now: datetime) -> bool:
+    return (
+        event.processing_token is not None
+        and event.processing_lease_expires_at is not None
+        and event.processing_lease_expires_at > now
+    )
+
+
+def _claim_inbound_event(
     db: Session,
     *,
     connection: ChannelConnection,
     event_id: UUID,
-) -> ProcessedInbound:
+) -> tuple[ChannelInboundEvent, UUID, ProcessedInbound | None]:
     event = db.scalar(
         select(ChannelInboundEvent)
         .where(
@@ -548,6 +565,7 @@ def process_inbound_event(
             ChannelInboundEvent.channel_connection_id == connection.id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if event is None:
         raise ChannelError("Inbound event not found for this channel connection.")
@@ -555,17 +573,130 @@ def process_inbound_event(
     already_processed = _processed_event_response(db, event=event)
     if already_processed is not None:
         db.rollback()
-        return already_processed
+        return event, UUID(int=0), already_processed
 
-    stale_before = datetime.now(UTC) - timedelta(minutes=5)
-    if event.status == "processing" and event.updated_at > stale_before:
+    now = datetime.now(UTC)
+    if _lease_is_active(event, now=now):
         db.rollback()
-        raise ChannelConflictError("Inbound event is already being processed.")
+        raise ChannelConflictError("Inbound event already has an active processing lease.")
 
-    event.status = "processing"
+    token = uuid4()
+    if event.status == "processing":
+        event.status = "failed"
+    event.processing_token = token
+    event.processing_started_at = now
+    event.processing_lease_expires_at = now + INBOUND_AGENT_LEASE
     event.attempts += 1
     event.last_error = None
     db.commit()
+    return event, token, None
+
+
+def _assert_inbound_lease(db: Session, *, event_id: UUID, token: UUID) -> ChannelInboundEvent:
+    event = db.scalar(
+        select(ChannelInboundEvent)
+        .where(ChannelInboundEvent.id == event_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    now = datetime.now(UTC)
+    if (
+        event is None
+        or event.processing_token != token
+        or event.processing_lease_expires_at is None
+        or event.processing_lease_expires_at <= now
+    ):
+        raise InboundProcessingLeaseLost("Inbound processing lease is no longer owned.")
+    return event
+
+
+@contextmanager
+def _fence_inbound_commits(db: Session, *, event_id: UUID, token: UUID):
+    def before_commit(session: Session) -> None:
+        _assert_inbound_lease(session, event_id=event_id, token=token)
+
+    sa_event.listen(db, "before_commit", before_commit)
+    try:
+        yield
+    finally:
+        sa_event.remove(db, "before_commit", before_commit)
+
+
+def _correlated_agent_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> AgentChatResponse | None:
+    outbound = db.scalar(
+        select(Message).where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.in_reply_to_message_id == inbound.id,
+            Message.sender_type == "ai",
+            Message.direction == "outbound",
+        )
+    )
+    if outbound is None:
+        return None
+    metadata = outbound.metadata_json or {}
+    try:
+        run_id = UUID(str(metadata.get("agent_run_id")))
+    except (TypeError, ValueError):
+        run_id = UUID(int=0)
+    return AgentChatResponse(
+        run_id=run_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+        outbound_message_id=outbound.id,
+        reply=outbound.content,
+        handoff_required=conversation.owner_type == OWNER_HUMAN,
+        agent_paused=False,
+        model=metadata.get("model"),
+    )
+
+
+def _mark_inbound_failed_if_owned(
+    db: Session,
+    *,
+    event_id: UUID,
+    token: UUID,
+    error: Exception,
+) -> bool:
+    failed_event = db.scalar(
+        select(ChannelInboundEvent)
+        .where(
+            ChannelInboundEvent.id == event_id,
+            ChannelInboundEvent.processing_token == token,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if failed_event is None:
+        db.rollback()
+        return False
+    failed_event.status = "failed"
+    failed_event.last_error = f"{type(error).__name__}: {error}"[:2000]
+    failed_event.processing_token = None
+    failed_event.processing_started_at = None
+    failed_event.processing_lease_expires_at = None
+    db.commit()
+    return True
+
+
+def process_inbound_event(
+    db: Session,
+    *,
+    connection: ChannelConnection,
+    event_id: UUID,
+) -> ProcessedInbound:
+    event, token, already_processed = _claim_inbound_event(
+        db,
+        connection=connection,
+        event_id=event_id,
+    )
+    if already_processed is not None:
+        return already_processed
 
     try:
         inbound = db.get(Message, event.message_id)
@@ -588,32 +719,49 @@ def process_inbound_event(
         workspace = db.get(Workspace, connection.workspace_id)
         if patient is None or workspace is None:
             raise ChannelError("Inbound event references missing workspace CRM data.")
+        if inbound.sender_type != "patient" or inbound.direction != "inbound":
+            raise ChannelError("Inbound event must reference a patient inbound message.")
 
-        agent_response = (
-            process_whatsapp_booking_action(
+        with _fence_inbound_commits(db, event_id=event_id, token=token):
+            agent_response = _correlated_agent_response(
                 db,
-                workspace=workspace,
-                patient=patient,
                 conversation=conversation,
                 inbound=inbound,
             )
-            if connection.channel == "whatsapp"
-            else None
-        )
-        if agent_response is None:
-            agent_response = run_agent_for_existing_inbound(
-                db=db,
-                workspace=workspace,
-                patient=patient,
-                conversation=conversation,
-                inbound=inbound,
-            )
+            if agent_response is None and connection.channel == "whatsapp":
+                agent_response = process_whatsapp_booking_action(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    conversation=conversation,
+                    inbound=inbound,
+                )
+            if agent_response is None:
+                agent_response = run_agent_for_existing_inbound(
+                    db=db,
+                    workspace=workspace,
+                    patient=patient,
+                    conversation=conversation,
+                    inbound=inbound,
+                )
 
+        # This row lock and ownership check are in the same short transaction as
+        # dispatch/event finalization. No lock is held while the LLM is running.
+        event = _assert_inbound_lease(db, event_id=event_id, token=token)
         dispatch = None
         if agent_response.outbound_message_id is not None:
             outbound = db.get(Message, agent_response.outbound_message_id)
             if outbound is None:
                 raise ChannelError("Agent created an outbound id but the message is missing.")
+            if (
+                outbound.workspace_id != inbound.workspace_id
+                or outbound.conversation_id != inbound.conversation_id
+                or outbound.sender_type != "ai"
+                or outbound.direction != "outbound"
+            ):
+                raise ChannelError("Agent outbound does not match the inbound conversation.")
+            if outbound.in_reply_to_message_id != inbound.id:
+                raise ChannelError("Agent outbound is missing the durable inbound reply correlation.")
             dispatch = queue_message_dispatch(
                 db,
                 message=outbound,
@@ -622,27 +770,22 @@ def process_inbound_event(
             )
             event.outbound_message_id = outbound.id
 
+        if event.processing_lease_expires_at <= datetime.now(UTC):
+            raise InboundProcessingLeaseLost("Inbound processing lease expired before finalization.")
         event.status = "processed"
         event.last_error = None
+        event.processing_token = None
+        event.processing_started_at = None
+        event.processing_lease_expires_at = None
         db.commit()
         db.refresh(event)
         if dispatch is not None:
             db.refresh(dispatch)
-
-        return ProcessedInbound(
-            event=event,
-            agent_response=agent_response,
-            dispatch=dispatch,
-        )
+        return ProcessedInbound(event=event, agent_response=agent_response, dispatch=dispatch)
     except Exception as exc:
         db.rollback()
-        failed_event = db.get(ChannelInboundEvent, event_id)
-        if failed_event is not None:
-            failed_event.status = "failed"
-            failed_event.last_error = f"{type(exc).__name__}: {exc}"[:2000]
-            db.commit()
+        _mark_inbound_failed_if_owned(db, event_id=event_id, token=token, error=exc)
         raise
-
 
 def _dispatch_has_retry_budget(dispatch: MessageDispatch) -> bool:
     return dispatch.attempts < settings.channel_dispatch_max_attempts

@@ -89,7 +89,7 @@ def _existing_response(
             Message.conversation_id == conversation.id,
             Message.sender_type == "ai",
             Message.direction == "outbound",
-            Message.metadata_json["in_reply_to_message_id"].as_string() == str(inbound.id),
+            Message.in_reply_to_message_id == inbound.id,
         )
         .order_by(Message.created_at.desc())
         .limit(1)
@@ -125,6 +125,7 @@ def _persist_reply(
         channel_connection_id=conversation.channel_connection_id,
         sender_type="ai",
         direction="outbound",
+        in_reply_to_message_id=inbound.id,
         message_type="text",
         content=reply,
         delivery_status="queued",

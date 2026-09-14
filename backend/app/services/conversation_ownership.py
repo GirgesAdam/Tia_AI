@@ -33,7 +33,7 @@ def _as_utc(value: datetime) -> datetime:
 def _channel_turn_is_after_latest_handback(conversation: Conversation) -> bool:
     """Block a delayed provider event that belongs to the human-owned period.
 
-    Channel processing marks its event as `processing` before entering the agent.
+    Channel processing holds a short durable lease before entering the agent.
     Comparing that event's exact inbound message with the latest persisted handoff
     resolution means returning ownership to AI is silent until a newer customer
     message arrives. Direct agent API turns have no channel event and are already
@@ -64,7 +64,8 @@ def _channel_turn_is_after_latest_handback(conversation: Conversation) -> bool:
         .join(ChannelInboundEvent, ChannelInboundEvent.message_id == Message.id)
         .where(
             ChannelInboundEvent.workspace_id == conversation.workspace_id,
-            ChannelInboundEvent.status == "processing",
+            ChannelInboundEvent.processing_token.is_not(None),
+            ChannelInboundEvent.processing_lease_expires_at > datetime.now(UTC),
             Message.workspace_id == conversation.workspace_id,
             Message.conversation_id == conversation.id,
             Message.sender_type == "patient",

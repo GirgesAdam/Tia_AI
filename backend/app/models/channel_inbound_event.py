@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, ForeignKeyConstraint, Index, Integer, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Uuid,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,6 +74,9 @@ class ChannelInboundEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default="0",
     )
     last_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    processing_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processing_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payload_json: Mapped[dict] = mapped_column(
         "payload",
         JSONB,

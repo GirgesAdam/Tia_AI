@@ -292,6 +292,7 @@ def _run_v2_after_inbound(
         channel_connection_id=conversation.channel_connection_id,
         sender_type="ai",
         direction="outbound",
+        in_reply_to_message_id=inbound.id,
         created_at=outbound_now,
         message_type="text",
         content=turn.reply,

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
@@ -758,6 +758,11 @@ def _process_pending_inbound(
                 ChannelInboundEvent.channel_connection_id == connection.id,
                 ChannelInboundEvent.status.in_(("received", "failed")),
                 ChannelInboundEvent.attempts < _MAX_INBOUND_PROCESS_ATTEMPTS,
+                or_(
+                    ChannelInboundEvent.processing_token.is_(None),
+                    ChannelInboundEvent.processing_lease_expires_at.is_(None),
+                    ChannelInboundEvent.processing_lease_expires_at <= datetime.now(UTC),
+                ),
             )
             .order_by(ChannelInboundEvent.created_at)
             .limit(limit)

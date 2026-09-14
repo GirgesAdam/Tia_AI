@@ -84,7 +84,8 @@ def test_channel_guard_compares_processing_inbound_to_resolved_handoff_boundary(
 
     assert "def _channel_turn_is_after_latest_handback(" in source
     assert "HandoffRequest.resolved_at" in source
-    assert 'ChannelInboundEvent.status == "processing"' in source
+    assert "ChannelInboundEvent.processing_token.is_not(None)" in source
+    assert "ChannelInboundEvent.processing_lease_expires_at > datetime.now(UTC)" in source
     assert "_as_utc(inbound_created_at) > _as_utc(resolved_at)" in source
 
 

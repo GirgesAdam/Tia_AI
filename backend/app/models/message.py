@@ -40,6 +40,15 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="fk_messages_channel_connection",
         ),
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        Index("ix_messages_in_reply_to_message_id", "in_reply_to_message_id"),
+        Index(
+            "uq_messages_ai_execution_reply_per_inbound",
+            "in_reply_to_message_id",
+            unique=True,
+            postgresql_where=text(
+                "in_reply_to_message_id IS NOT NULL AND sender_type = 'ai' AND direction = 'outbound'"
+            ),
+        ),
         Index(
             "uq_messages_workspace_connection_external",
             "workspace_id",
@@ -69,6 +78,10 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     delivery_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    in_reply_to_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     sent_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,
