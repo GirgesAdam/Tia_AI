@@ -1,6 +1,6 @@
 import { Bot, Building2, Sparkles } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import { createWorkspaceAction } from "./actions";
 
 export default function OnboardingPage() {
@@ -11,13 +11,13 @@ export default function OnboardingPage() {
           <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(15,118,110,.18)]"><Bot /></span>
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-950">إضافة عيادة جديدة</h1>
-            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">ابدأ بالمعلومات الأساسية، وبعدها تقدر تكمل إعداد التشغيل والبيانات خطوة بخطوة.</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">ابدأ بالمعلومات الأساسية، وبعدها Tia هتوضح لك الخطوات المتبقية واحدة واحدة.</p>
           </div>
         </div>
 
         <div className="mb-6 rounded-2xl border border-teal-100 bg-teal-50/70 p-4 text-sm leading-6 text-teal-950">
           <Sparkles className="mb-2 text-teal-700" size={18} />
-          بعد الإنشاء تقدر تضيف الفروع والخدمات والدكاترة ومواعيد العمل، أو تستورد بيانات العيادة الحالية.
+          بعد الإنشاء هتشوف قائمة تجهيز واضحة للخدمات والدكاترة ومواعيد العمل وربط واتساب. استيراد البيانات القديمة اختياري وتقدر تعمله لاحقًا.
         </div>
 
         <form action={createWorkspaceAction} className="space-y-5">
@@ -33,9 +33,9 @@ export default function OnboardingPage() {
               <option value="Asia/Dubai">دبي</option>
             </select>
           </label>
-          <Button className="w-full" size="lg">
+          <SubmitButton className="w-full" size="lg" pendingLabel="جارٍ إنشاء العيادة...">
             <Building2 size={18} /> إنشاء العيادة
-          </Button>
+          </SubmitButton>
         </form>
       </div>
     </main>
