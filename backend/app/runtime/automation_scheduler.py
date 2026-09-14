@@ -13,9 +13,11 @@ from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
 from app.models.clinic_integration_sync import ClinicIntegrationSyncSchedule
 from app.models.workspace import Workspace
+from app.services.automation_template_rotation import sync_approved_automation_template_rotation
 from app.services.automations import (
     AutomationError,
     claim_due_jobs,
+    ensure_default_rules,
     execute_job,
     generate_worker_token,
     plan_automation_jobs,
@@ -95,6 +97,11 @@ def run_workspace_tick(
         now = datetime.now(UTC)
         _heartbeat(db, workspace.id, now=now)
         _retire_booking_confirmation(db, workspace.id)
+
+        # Default rules must exist before we can sync the approved template pool.
+        # Rotation is system-owned; admins still only control rule enablement/timing.
+        ensure_default_rules(db, workspace.id)
+        sync_approved_automation_template_rotation(db, workspace_id=workspace.id)
 
         planning = plan_automation_jobs(
             db,
