@@ -15,27 +15,25 @@ import {
 
 const setupSteps = [
   {
-    title: "جهّز Meta والرقم مرة واحدة",
-    description: "جهّز الـMeta App والرقم في WhatsApp Cloud API لحد ما يظهر WABA ID وPhone Number ID، وبعدها جهّز App Secret وSystem User Access Token. كل خانة في Tia تحتها لينك يفتح Meta ومعاه اسم المسار اللي تمشي عليه.",
+    title: "جهّز الرقم في Meta",
+    description: "افتح Meta App وجهّز رقم العيادة على WhatsApp Cloud API. كل خانة داخل Tia معها رابط مباشر للمكان المطلوب.",
     icon: ExternalLink,
   },
   {
-    title: "خلّي Tia تتحقق وتربط",
-    description: "الصق القيم واضغط تحقق واربط. Tia هتتأكد من الـToken والصلاحيات والرقم قبل ما تحفظ الأسرار مشفرة.",
+    title: "انسخ البيانات إلى Tia",
+    description: "Tia تتحقق من الحساب والرقم والصلاحيات قبل حفظ أي بيانات سرية.",
     icon: CheckCircle2,
   },
   {
-    title: "فعّل الـWebhook",
-    description: "بعد الربط، Tia هتديك Callback URL وVerify Token جاهزين للنسخ. ضيفهم في Meta مرة واحدة واضغط إنهاء الإعداد داخل Tia.",
+    title: "فعّل استقبال الرسائل",
+    description: "انسخ رابط الاستقبال ورمز التحقق إلى Meta مرة واحدة، وبعدها Tia تفحص الجاهزية تلقائيًا.",
     icon: Link2,
   },
 ];
 
 export default async function WhatsAppSetupPage() {
   const ctx = await getAppContext();
-  if (ctx.workspace.role !== "admin") {
-    redirect("/setup");
-  }
+  if (ctx.workspace.role !== "admin") redirect("/setup");
 
   const state = await tiaRequest<WhatsAppSetupState>("/channels/whatsapp/setup");
 
@@ -43,7 +41,7 @@ export default async function WhatsAppSetupPage() {
     <>
       <PageHeader
         title="ربط WhatsApp"
-        description="ربط مباشر مع Meta Cloud API من غير مزود وسيط أو اشتراك إضافي لطرف ثالث. الإعداد بيتعمل مرة واحدة وTia هتراجع كل خطوة قبل التشغيل."
+        description="ربط مباشر مع Meta Cloud API. الإعداد يتم مرة واحدة، وTia تتحقق من كل خطوة قبل التشغيل."
       />
 
       <Card className="mb-6 border-teal-200 bg-teal-50/40">
@@ -53,9 +51,9 @@ export default async function WhatsAppSetupPage() {
               <MessageCircleMore size={22} />
             </span>
             <div>
-              <b className="text-lg text-slate-950">مفيش Provider مدفوع بين Tia وMeta</b>
+              <b className="text-lg text-slate-950">الربط مباشر بين Tia وMeta</b>
               <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                الربط مباشر مع Meta Cloud API. مش محتاج 360dialog أو Twilio أو أي BSP باشتراك شهري. العيادة بتستخدم حساب Meta والرقم بتوعها، وتدفع فقط أي رسوم WhatsApp/Meta الأصلية المطبقة على استخدامها. بسبب إن Meta Embedded Signup غير متاح لنا حاليًا، Tia هتوجّهك في الإعداد اليدوي بأقل عدد ممكن من الخطوات ومن غير تخمين.
+                استخدم حساب Meta والرقم الخاصين بالعيادة. Tia ستوضح أين تجد كل قيمة وتتحقق منها قبل الحفظ، من غير ما تعرض لك تعقيد تقني أكثر من المطلوب.
               </p>
             </div>
           </div>
@@ -80,13 +78,9 @@ export default async function WhatsAppSetupPage() {
       <WhatsAppDirectOnboarding state={state} />
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <Link href="/setup" className={cn(buttonVariants({ variant: "outline" }))}>
-          الرجوع لإعدادات العيادة
-        </Link>
+        <Link href="/setup" className={cn(buttonVariants({ variant: "outline" }))}>الرجوع لإعدادات العيادة</Link>
         {state.ready_for_automations && (
-          <Link href="/automations" className={cn(buttonVariants())}>
-            افتح Automation
-          </Link>
+          <Link href="/automations" className={cn(buttonVariants())}>افتح الرسائل التلقائية</Link>
         )}
       </div>
     </>
