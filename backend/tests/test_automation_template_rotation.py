@@ -5,17 +5,8 @@ import re
 import types
 import uuid
 
-from app.core.meta_whatsapp_templates import (
-    STANDARD_TEMPLATE_BY_RULE_KEY,
-    STANDARD_TEMPLATES_BY_RULE_KEY,
-    STANDARD_WHATSAPP_TEMPLATES,
-    approved_standard_templates,
-    approved_template_refs_for_rule,
-)
-from app.services.automations import (
-    _select_ai_followup_template,
-    _select_rule_template,
-)
+from app.core import meta_whatsapp_templates
+from app.services import automations
 
 
 EXPECTED_PARAMETER_COUNT = {
@@ -31,14 +22,24 @@ def _root() -> pathlib.Path:
 
 
 def test_standard_catalog_has_three_friendly_variants_per_automation() -> None:
-    assert len(STANDARD_WHATSAPP_TEMPLATES) == 12
-    assert set(STANDARD_TEMPLATES_BY_RULE_KEY) == set(EXPECTED_PARAMETER_COUNT)
-    assert len({template.name for template in STANDARD_WHATSAPP_TEMPLATES}) == 12
+    assert len(meta_whatsapp_templates.STANDARD_WHATSAPP_TEMPLATES) == 12
+    assert set(meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY) == set(
+        EXPECTED_PARAMETER_COUNT
+    )
+    assert (
+        len(
+            {
+                template.name
+                for template in meta_whatsapp_templates.STANDARD_WHATSAPP_TEMPLATES
+            }
+        )
+        == 12
+    )
 
     for rule_key, parameter_count in EXPECTED_PARAMETER_COUNT.items():
-        templates = STANDARD_TEMPLATES_BY_RULE_KEY[rule_key]
+        templates = meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY[rule_key]
         assert len(templates) == 3
-        assert STANDARD_TEMPLATE_BY_RULE_KEY[rule_key] == templates[0]
+        assert meta_whatsapp_templates.STANDARD_TEMPLATE_BY_RULE_KEY[rule_key] == templates[0]
         expected_placeholders = [str(index) for index in range(1, parameter_count + 1)]
         for template in templates:
             assert re.findall(r"\{\{(\d+)\}\}", template.body_text) == expected_placeholders
@@ -51,8 +52,12 @@ def test_rotation_pool_contains_only_meta_approved_variants() -> None:
         "tia_reminder_02": "approved",
         "tia_reminder_03": "rejected",
     }
-    approved = approved_standard_templates("appointment_reminder_6h", statuses)
-    refs = approved_template_refs_for_rule("appointment_reminder_6h", statuses)
+    approved = meta_whatsapp_templates.approved_standard_templates(
+        "appointment_reminder_6h", statuses
+    )
+    refs = meta_whatsapp_templates.approved_template_refs_for_rule(
+        "appointment_reminder_6h", statuses
+    )
 
     assert [template.name for template in approved] == ["tia_reminder_02"]
     assert refs == [{"name": "tia_reminder_02", "language_code": "ar_EG"}]
@@ -61,7 +66,9 @@ def test_rotation_pool_contains_only_meta_approved_variants() -> None:
 def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
     refs = [
         {"name": template.name, "language_code": template.language}
-        for template in STANDARD_TEMPLATES_BY_RULE_KEY["appointment_reminder_6h"]
+        for template in meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY[
+            "appointment_reminder_6h"
+        ]
     ]
     rule = types.SimpleNamespace(
         key="appointment_reminder_6h",
@@ -72,8 +79,8 @@ def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
     )
     appointment_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
-    first = _select_rule_template(rule, appointment_id)
-    second = _select_rule_template(rule, appointment_id)
+    first = automations._select_rule_template(rule, appointment_id)
+    second = automations._select_rule_template(rule, appointment_id)
 
     assert first == second
     assert first[0] in {item["name"] for item in refs}
@@ -82,7 +89,9 @@ def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
 def test_lead_rotation_is_automatic_and_stable_for_retries() -> None:
     refs = [
         {"name": template.name, "language_code": template.language}
-        for template in STANDARD_TEMPLATES_BY_RULE_KEY["lead_not_booked_followup"]
+        for template in meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY[
+            "lead_not_booked_followup"
+        ]
     ]
     connection = types.SimpleNamespace(
         id=uuid.UUID("99999999-aaaa-bbbb-cccc-000000000000"),
@@ -91,12 +100,12 @@ def test_lead_rotation_is_automatic_and_stable_for_retries() -> None:
     task_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     patient_id = uuid.UUID("11111111-aaaa-bbbb-cccc-222222222222")
 
-    first = _select_ai_followup_template(
+    first = automations._select_ai_followup_template(
         connection,
         task_id=task_id,
         patient_id=patient_id,
     )
-    second = _select_ai_followup_template(
+    second = automations._select_ai_followup_template(
         connection,
         task_id=task_id,
         patient_id=patient_id,
