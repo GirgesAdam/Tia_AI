@@ -1,22 +1,30 @@
 import Link from "next/link";
-import { CalendarCheck2, CircleAlert, ContactRound, MessageSquareMore } from "lucide-react";
+import { CalendarCheck2, CircleAlert, ContactRound, MessageSquareMore, Settings2 } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { ClinicSetupV2Snapshot } from "@/lib/clinic-setup-v2-types";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, labelForPriority, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type { DashboardSummary, HandoffQueueItem } from "@/lib/types";
 
 export default async function DashboardPage() {
-  const [summary, handoffs] = await Promise.all([
+  const [summaryResult, handoffsResult, setupResult] = await Promise.allSettled([
     tiaRequest<DashboardSummary>("/dashboard/summary"),
     tiaRequest<HandoffQueueItem[]>("/inbox/handoffs?limit=5"),
+    tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
   ]);
 
+  if (summaryResult.status === "rejected") throw summaryResult.reason;
+
+  const summary = summaryResult.value;
+  const handoffs = handoffsResult.status === "fulfilled" ? handoffsResult.value : [];
+  const handoffsUnavailable = handoffsResult.status === "rejected";
+  const setup = setupResult.status === "fulfilled" ? setupResult.value : null;
   const hasOperationalIssue = summary.failed_automation_jobs > 0;
 
   return (
@@ -26,6 +34,33 @@ export default async function DashboardPage() {
         description="الحجوزات والمتابعات المهمة في مكان واحد، عشان تعرف بسرعة إيه اللي محتاج تدخل منك أو من الفريق."
       />
 
+      {setup && !setup.readiness.ready && (
+        <Card className="mb-5 border-teal-200 bg-teal-50/50">
+          <CardContent className="p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 font-black text-slate-950">
+                  <Settings2 size={18} className="text-teal-700" />
+                  كمّل تجهيز العيادة قبل تشغيل Tia بالكامل
+                </div>
+                <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                  البيانات الأساسية مكتملة بنسبة {setup.readiness.progress_percent}%. كمّل الناقص عشان الحجوزات والردود التلقائية تعتمد على بيانات صحيحة.
+                </p>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white" aria-label={`اكتمال إعداد العيادة ${setup.readiness.progress_percent}%`}>
+                  <div className="h-full rounded-full bg-teal-700" style={{ width: `${Math.max(0, Math.min(100, setup.readiness.progress_percent))}%` }} />
+                </div>
+                {setup.readiness.missing.length > 0 && (
+                  <p className="mt-2 text-xs leading-5 text-teal-950">الخطوة التالية: {setup.readiness.missing.slice(0, 3).join(" • ")}</p>
+                )}
+              </div>
+              <Link href="/setup" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 px-4 text-sm font-bold text-white transition hover:bg-teal-800">
+                كمّل الإعداد
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {hasOperationalIssue && (
         <Link
           href="/automations"
@@ -33,8 +68,8 @@ export default async function DashboardPage() {
         >
           <CircleAlert className="mt-0.5 shrink-0 text-amber-700" size={19} />
           <div>
-            <div className="text-sm font-black">فيه {summary.failed_automation_jobs} عملية تلقائية محتاجة مراجعة</div>
-            <div className="mt-1 text-xs leading-5 text-amber-800">افتح صفحة Automation لإعادة المحاولة أو مراجعة الحالة.</div>
+            <div className="text-sm font-black">فيه {summary.failed_automation_jobs} رسالة تلقائية محتاجة مراجعة</div>
+            <div className="mt-1 text-xs leading-5 text-amber-800">افتح صفحة الرسائل التلقائية لإعادة المحاولة أو مراجعة الحالة.</div>
           </div>
         </Link>
       )}
@@ -107,6 +142,7 @@ export default async function DashboardPage() {
                 icon={CalendarCheck2}
                 title="لا توجد مواعيد قريبة"
                 description="ستظهر هنا أقرب الحجوزات بمجرد وجود مواعيد قادمة."
+                action={<Link href="/appointments" className="text-xs font-black text-teal-700 hover:underline">فتح المواعيد</Link>}
               />
             )}
           </CardContent>
@@ -121,7 +157,13 @@ export default async function DashboardPage() {
             <Link href="/inbox?owner=human" className="shrink-0 text-xs font-bold text-teal-700 hover:text-teal-800">فتح الرسائل</Link>
           </CardHeader>
           <CardContent className="pt-0">
-            {handoffs.length ? (
+            {handoffsUnavailable ? (
+              <div role="status" className="my-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                <b>تعذر تحديث قائمة المحادثات الآن.</b>
+                <p className="mt-1 text-xs leading-5">باقي الصفحة تعمل بشكل طبيعي. افتح الرسائل أو أعد المحاولة بعد قليل.</p>
+                <Link href="/inbox?owner=human" className="mt-3 inline-block text-xs font-black text-amber-900 underline underline-offset-2">فتح الرسائل</Link>
+              </div>
+            ) : handoffs.length ? (
               <div className="divide-y divide-[var(--border)]">
                 {handoffs.map((handoff) => (
                   <Link
