@@ -79,11 +79,13 @@ def test_inbound_whatsapp_is_not_processed_or_retried_by_n8n() -> None:
     root = _root()
     workflows = root / "n8n" / "workflows"
     transport = (root / "backend/app/services/meta_whatsapp_transport.py").read_text(encoding="utf-8")
+    channels = (root / "backend/app/services/channels.py").read_text(encoding="utf-8")
 
     assert not (workflows / "tia_whatsapp_inbound_status.json").exists()
     assert "def ingest_meta_webhook(" in transport
     assert "def _process_pending_inbound(" in transport
-    assert "_MAX_INBOUND_PROCESS_ATTEMPTS = 3" in transport
+    assert "MAX_INBOUND_PROCESS_ATTEMPTS," in transport
+    assert "MAX_INBOUND_PROCESS_ATTEMPTS = 3" in channels
 
 
 def test_provider_send_retries_remain_in_tia_state_machine_not_n8n() -> None:

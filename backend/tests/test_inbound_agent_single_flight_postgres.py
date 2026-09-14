@@ -112,9 +112,45 @@ def _connection(db: Session, case):
 
 
 def _expire(db: Session, case) -> None:
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
     event = db.get(ChannelInboundEvent, case.ids.event)
-    event.processing_lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    conversation = db.get(Conversation, case.ids.conversation)
+    event.processing_lease_expires_at = expired_at
+    conversation.agent_processing_lease_expires_at = expired_at
     db.commit()
+
+
+def _add_later_inbound(case, *, body: str = "later inbound"):
+    with Session(case.engine) as db:
+        original = db.get(Message, case.ids.inbound)
+        created_at = original.created_at + timedelta(seconds=1)
+        inbound = Message(
+            workspace_id=original.workspace_id,
+            conversation_id=original.conversation_id,
+            channel_connection_id=original.channel_connection_id,
+            sender_type="patient",
+            direction="inbound",
+            message_type="text",
+            content=body,
+            delivery_status="received",
+            metadata_json={},
+            created_at=created_at,
+        )
+        db.add(inbound)
+        db.flush()
+        event = ChannelInboundEvent(
+            workspace_id=original.workspace_id,
+            channel_connection_id=original.channel_connection_id,
+            message_id=inbound.id,
+            external_event_id=f"event-{uuid4()}",
+            status="received",
+            attempts=0,
+            payload_json={},
+            created_at=created_at,
+        )
+        db.add(event)
+        db.commit()
+        return SimpleNamespace(inbound=inbound.id, event=event.id)
 
 
 def _fake_agent(counter: dict[str, int]):
@@ -150,6 +186,40 @@ def _fake_agent(counter: dict[str, int]):
     return run
 
 
+def test_later_turn_cannot_claim_before_older_turn(p0_case):
+    later = _add_later_inbound(p0_case)
+    with Session(p0_case.engine) as db:
+        with pytest.raises(channels.ChannelConflictError, match="older inbound turn"):
+            channels._claim_inbound_event(
+                db, connection=_connection(db, p0_case), event_id=later.event
+            )
+    with Session(p0_case.engine) as db:
+        later_event = db.get(ChannelInboundEvent, later.event)
+        conversation = db.get(Conversation, p0_case.ids.conversation)
+        assert later_event.attempts == 0
+        assert later_event.processing_token is None
+        assert conversation.agent_processing_token is None
+
+
+def test_active_conversation_lease_blocks_later_turn_without_attempt(p0_case):
+    later = _add_later_inbound(p0_case)
+    with Session(p0_case.engine) as first:
+        _, first_token, _ = channels._claim_inbound_event(
+            first, connection=_connection(first, p0_case), event_id=p0_case.ids.event
+        )
+    with Session(p0_case.engine) as second:
+        with pytest.raises(channels.ChannelConflictError, match="Conversation already"):
+            channels._claim_inbound_event(
+                second, connection=_connection(second, p0_case), event_id=later.event
+            )
+    with Session(p0_case.engine) as db:
+        later_event = db.get(ChannelInboundEvent, later.event)
+        conversation = db.get(Conversation, p0_case.ids.conversation)
+        assert later_event.attempts == 0
+        assert later_event.processing_token is None
+        assert conversation.agent_processing_token == first_token
+
+
 def test_active_lease_blocks_second_worker_without_false_completion(p0_case, monkeypatch):
     counter = {}
     monkeypatch.setattr(channels, "run_agent_for_existing_inbound", _fake_agent(counter))
@@ -183,6 +253,26 @@ def test_expired_lease_is_reclaimable(p0_case):
         )
         assert token_b != token_a
         assert event.attempts == 2
+
+
+def test_expired_crash_lease_is_reclaimable_at_retry_budget(p0_case):
+    with Session(p0_case.engine) as first:
+        _, token_a, _ = channels._claim_inbound_event(
+            first, connection=_connection(first, p0_case), event_id=p0_case.ids.event
+        )
+    with Session(p0_case.engine) as admin:
+        event = admin.get(ChannelInboundEvent, p0_case.ids.event)
+        event.attempts = channels.MAX_INBOUND_PROCESS_ATTEMPTS
+        _expire(admin, p0_case)
+    with Session(p0_case.engine) as recovered:
+        event, token_b, processed = channels._claim_inbound_event(
+            recovered,
+            connection=_connection(recovered, p0_case),
+            event_id=p0_case.ids.event,
+        )
+        assert processed is None
+        assert token_b != token_a
+        assert event.attempts == channels.MAX_INBOUND_PROCESS_ATTEMPTS + 1
 
 
 def test_stale_owner_cannot_commit_after_reclaim(p0_case):
@@ -331,6 +421,42 @@ def test_unique_execution_reply_index_allows_exactly_one_winner(p0_case):
     assert sorted(outcomes) == ["integrity", "ok"]
 
 
+def test_poller_selects_only_oldest_turn_per_conversation(p0_case, monkeypatch):
+    later = _add_later_inbound(p0_case)
+    calls = []
+    monkeypatch.setattr(
+        transport,
+        "process_inbound_event",
+        lambda db, connection, event_id: calls.append(event_id),
+    )
+    with Session(p0_case.engine) as db:
+        assert transport._process_pending_inbound(
+            db, _connection(db, p0_case), limit=10
+        ) == (1, 0)
+    assert calls == [p0_case.ids.event]
+    assert later.event not in calls
+
+
+def test_next_turn_can_claim_after_older_turn_finishes(p0_case, monkeypatch):
+    later = _add_later_inbound(p0_case)
+    counter = {}
+    monkeypatch.setattr(channels, "run_agent_for_existing_inbound", _fake_agent(counter))
+    with Session(p0_case.engine) as first:
+        result = channels.process_inbound_event(
+            first, connection=_connection(first, p0_case), event_id=p0_case.ids.event
+        )
+        assert result.event.status == "processed"
+    with Session(p0_case.engine) as second:
+        event, token, processed = channels._claim_inbound_event(
+            second, connection=_connection(second, p0_case), event_id=later.event
+        )
+        assert processed is None
+        assert event.attempts == 1
+        assert event.processing_token == token
+        conversation = second.get(Conversation, p0_case.ids.conversation)
+        assert conversation.agent_processing_token == token
+
+
 def test_active_lease_is_not_reselected_by_poller(p0_case, monkeypatch):
     with Session(p0_case.engine) as db:
         channels._claim_inbound_event(
@@ -362,7 +488,11 @@ def test_provider_ingest_survives_worker_crash_and_becomes_retryable(p0_case, mo
         original = admin.get(ChannelInboundEvent, p0_case.ids.event)
         original.status = "processed"
         event = admin.get(ChannelInboundEvent, event_id)
-        event.processing_lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        inbound = admin.get(Message, event.message_id)
+        conversation = admin.get(Conversation, inbound.conversation_id)
+        expired_at = datetime.now(UTC) - timedelta(seconds=1)
+        event.processing_lease_expires_at = expired_at
+        conversation.agent_processing_lease_expires_at = expired_at
         admin.commit()
     calls = []
     monkeypatch.setattr(transport, "process_inbound_event", lambda db, connection, event_id: calls.append(event_id))
@@ -370,6 +500,61 @@ def test_provider_ingest_survives_worker_crash_and_becomes_retryable(p0_case, mo
         processed, failed = transport._process_pending_inbound(db, _connection(db, p0_case), limit=10)
         assert (processed, failed) == (1, 0)
     assert calls == [event_id]
+
+
+def test_same_provider_timestamp_preserves_webhook_message_order(p0_case, monkeypatch):
+    first_body = "same-ts-first"
+    second_body = "same-ts-second"
+    sender = "201234567891"
+    provider_timestamp = str(int(datetime.now(UTC).timestamp()))
+    with Session(p0_case.engine) as db:
+        original = db.get(ChannelInboundEvent, p0_case.ids.event)
+        original.status = "processed"
+        connection = _connection(db, p0_case)
+        phone_number_id = connection.external_account_id
+        db.commit()
+
+    payload = {
+        "entry": [{"changes": [{"value": {
+            "metadata": {"phone_number_id": phone_number_id},
+            "contacts": [{"wa_id": sender, "profile": {"name": "Ordered"}}],
+            "messages": [
+                {"id": f"wamid-{uuid4()}", "from": sender, "timestamp": provider_timestamp,
+                 "type": "text", "text": {"body": first_body}},
+                {"id": f"wamid-{uuid4()}", "from": sender, "timestamp": provider_timestamp,
+                 "type": "text", "text": {"body": second_body}},
+            ],
+        }}]}]
+    }
+    with Session(p0_case.engine) as db:
+        assert transport.ingest_meta_webhook(db, payload)["accepted_inbound"] == 2
+
+    with Session(p0_case.engine) as db:
+        rows = list(
+            db.execute(
+                select(Message, ChannelInboundEvent)
+                .join(ChannelInboundEvent, ChannelInboundEvent.message_id == Message.id)
+                .where(Message.content.in_((first_body, second_body)))
+                .order_by(Message.created_at, Message.id)
+            )
+        )
+        assert [message.content for message, _ in rows] == [first_body, second_body]
+        assert rows[0][0].created_at < rows[1][0].created_at
+        first_event_id = rows[0][1].id
+        second_event_id = rows[1][1].id
+
+    calls = []
+    monkeypatch.setattr(
+        transport,
+        "process_inbound_event",
+        lambda db, connection, event_id: calls.append(event_id),
+    )
+    with Session(p0_case.engine) as db:
+        assert transport._process_pending_inbound(
+            db, _connection(db, p0_case), limit=10
+        ) == (1, 0)
+    assert calls == [first_event_id]
+    assert second_event_id not in calls
 
 
 def test_historical_duplicate_backfill_keeps_history_and_selects_earliest(tmp_path):

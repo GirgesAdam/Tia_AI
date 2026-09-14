@@ -49,7 +49,9 @@ def _schema(engine) -> None:
         """CREATE TABLE conversations (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), channel VARCHAR(24), status VARCHAR(20), external_conversation_id VARCHAR(255),
             channel_connection_id CHAR(32), assigned_user_id CHAR(32), owner_type VARCHAR(16), unread_count INTEGER, ownership_changed_at DATETIME,
-            subject VARCHAR(250), started_at DATETIME, last_message_at DATETIME, closed_at DATETIME, created_at DATETIME, updated_at DATETIME
+            subject VARCHAR(250), started_at DATETIME, last_message_at DATETIME, closed_at DATETIME,
+            agent_processing_token CHAR(32), agent_processing_started_at DATETIME, agent_processing_lease_expires_at DATETIME,
+            created_at DATETIME, updated_at DATETIME
         )""",
         """CREATE TABLE messages (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), conversation_id CHAR(32), channel_connection_id CHAR(32), sender_type VARCHAR(20), direction VARCHAR(20),

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    Uuid,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -132,3 +133,6 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_processing_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    agent_processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_processing_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

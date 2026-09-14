@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import (
@@ -20,10 +20,13 @@ from app.models.automation_rule import AutomationRule
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.channel_provider_credential import ChannelProviderCredential
+from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.services.channels import (
+    MAX_INBOUND_PROCESS_ATTEMPTS,
+    ChannelConflictError,
     accept_normalized_inbound,
     claim_dispatches,
     process_inbound_event,
@@ -43,7 +46,6 @@ class MetaWhatsAppTransportError(RuntimeError):
 
 
 _SUPPORTED_STATUSES = frozenset({"sent", "delivered", "read", "failed"})
-_MAX_INBOUND_PROCESS_ATTEMPTS = 3
 _PROVIDER_REFRESH_INTERVAL = timedelta(minutes=15)
 _PENDING_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=2)
 _MAX_TEMPLATE_STATUS_PAGES = 20
@@ -750,21 +752,76 @@ def ingest_meta_webhook(db: Session, payload: dict[str, Any]) -> dict[str, int]:
 def _process_pending_inbound(
     db: Session, connection: ChannelConnection, *, limit: int
 ) -> tuple[int, int]:
+    now = datetime.now(UTC)
+    event_message = aliased(Message)
+    event_conversation = aliased(Conversation)
+    earlier_event = aliased(ChannelInboundEvent)
+    earlier_message = aliased(Message)
+
+    earliest_event_id = (
+        select(earlier_event.id)
+        .join(earlier_message, earlier_message.id == earlier_event.message_id)
+        .where(
+            earlier_event.workspace_id == connection.workspace_id,
+            earlier_event.channel_connection_id == connection.id,
+            earlier_event.status.in_(("received", "failed")),
+            or_(
+                earlier_event.attempts < MAX_INBOUND_PROCESS_ATTEMPTS,
+                and_(
+                    earlier_event.processing_token.is_not(None),
+                    or_(
+                        earlier_event.processing_lease_expires_at.is_(None),
+                        earlier_event.processing_lease_expires_at <= now,
+                    ),
+                ),
+            ),
+            earlier_message.conversation_id == event_message.conversation_id,
+            earlier_message.sender_type == "patient",
+            earlier_message.direction == "inbound",
+        )
+        .order_by(
+            earlier_message.created_at,
+            earlier_message.id,
+            earlier_event.created_at,
+            earlier_event.id,
+        )
+        .limit(1)
+        .correlate(event_message)
+        .scalar_subquery()
+    )
+
     events = list(
         db.scalars(
             select(ChannelInboundEvent)
+            .join(event_message, event_message.id == ChannelInboundEvent.message_id)
+            .join(event_conversation, event_conversation.id == event_message.conversation_id)
             .where(
                 ChannelInboundEvent.workspace_id == connection.workspace_id,
                 ChannelInboundEvent.channel_connection_id == connection.id,
                 ChannelInboundEvent.status.in_(("received", "failed")),
-                ChannelInboundEvent.attempts < _MAX_INBOUND_PROCESS_ATTEMPTS,
+                or_(
+                    ChannelInboundEvent.attempts < MAX_INBOUND_PROCESS_ATTEMPTS,
+                    and_(
+                        ChannelInboundEvent.processing_token.is_not(None),
+                        or_(
+                            ChannelInboundEvent.processing_lease_expires_at.is_(None),
+                            ChannelInboundEvent.processing_lease_expires_at <= now,
+                        ),
+                    ),
+                ),
+                ChannelInboundEvent.id == earliest_event_id,
                 or_(
                     ChannelInboundEvent.processing_token.is_(None),
                     ChannelInboundEvent.processing_lease_expires_at.is_(None),
-                    ChannelInboundEvent.processing_lease_expires_at <= datetime.now(UTC),
+                    ChannelInboundEvent.processing_lease_expires_at <= now,
+                ),
+                or_(
+                    event_conversation.agent_processing_token.is_(None),
+                    event_conversation.agent_processing_lease_expires_at.is_(None),
+                    event_conversation.agent_processing_lease_expires_at <= now,
                 ),
             )
-            .order_by(ChannelInboundEvent.created_at)
+            .order_by(event_message.created_at, event_message.id, ChannelInboundEvent.created_at)
             .limit(limit)
         )
     )
@@ -774,7 +831,11 @@ def _process_pending_inbound(
         try:
             process_inbound_event(db, connection=connection, event_id=event.id)
             processed += 1
+        except ChannelConflictError:
+            db.rollback()
+            continue
         except Exception:
+            db.rollback()
             failed += 1
     return processed, failed
 

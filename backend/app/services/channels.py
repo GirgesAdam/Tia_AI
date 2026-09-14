@@ -319,6 +319,19 @@ def _resolve_conversation(
     return conversation
 
 
+def _next_conversation_activity_at(conversation: Conversation) -> datetime:
+    """Return a strictly increasing local activity timestamp for one conversation."""
+    now = datetime.now(UTC)
+    previous = conversation.last_message_at
+    if previous is None:
+        return now
+    if previous.tzinfo is None:
+        previous = previous.replace(tzinfo=UTC)
+    else:
+        previous = previous.astimezone(UTC)
+    return max(now, previous + timedelta(microseconds=1))
+
+
 def accept_normalized_inbound(
     db: Session,
     *,
@@ -398,7 +411,7 @@ def accept_normalized_inbound(
         payload=payload,
     )
 
-    now = datetime.now(UTC)
+    now = _next_conversation_activity_at(conversation)
     inbound = Message(
         workspace_id=connection.workspace_id,
         conversation_id=conversation.id,
@@ -409,6 +422,7 @@ def accept_normalized_inbound(
         content=payload.text,
         external_message_id=payload.external_message_id,
         delivery_status="received",
+        created_at=now,
         metadata_json={
             "source": "channel_adapter",
             "provider": connection.provider,
@@ -536,6 +550,7 @@ def _processed_event_response(
     return ProcessedInbound(event=event, agent_response=response, dispatch=dispatch)
 
 
+MAX_INBOUND_PROCESS_ATTEMPTS = 3
 INBOUND_AGENT_LEASE = timedelta(minutes=5)
 
 
@@ -551,12 +566,130 @@ def _lease_is_active(event: ChannelInboundEvent, *, now: datetime) -> bool:
     )
 
 
+def _conversation_lease_is_active(conversation: Conversation, *, now: datetime) -> bool:
+    return (
+        conversation.agent_processing_token is not None
+        and conversation.agent_processing_lease_expires_at is not None
+        and conversation.agent_processing_lease_expires_at > now
+    )
+
+
+def _event_context(
+    db: Session, *, event: ChannelInboundEvent
+) -> tuple[Message, Conversation]:
+    inbound = db.get(Message, event.message_id)
+    if inbound is None:
+        raise ChannelError("Inbound event references a missing message.")
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.workspace_id == event.workspace_id,
+            Conversation.id == inbound.conversation_id,
+        )
+    )
+    if conversation is None:
+        raise ChannelError("Inbound event references a missing conversation.")
+    return inbound, conversation
+
+
+def _earliest_retryable_inbound_event_id(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    channel_connection_id: UUID,
+    conversation_id: UUID,
+) -> UUID | None:
+    now = datetime.now(UTC)
+    return db.scalar(
+        select(ChannelInboundEvent.id)
+        .join(Message, Message.id == ChannelInboundEvent.message_id)
+        .where(
+            ChannelInboundEvent.workspace_id == workspace_id,
+            ChannelInboundEvent.channel_connection_id == channel_connection_id,
+            ChannelInboundEvent.status.in_(("received", "failed")),
+            or_(
+                ChannelInboundEvent.attempts < MAX_INBOUND_PROCESS_ATTEMPTS,
+                and_(
+                    ChannelInboundEvent.processing_token.is_not(None),
+                    or_(
+                        ChannelInboundEvent.processing_lease_expires_at.is_(None),
+                        ChannelInboundEvent.processing_lease_expires_at <= now,
+                    ),
+                ),
+            ),
+            Message.conversation_id == conversation_id,
+            Message.sender_type == "patient",
+            Message.direction == "inbound",
+        )
+        .order_by(
+            Message.created_at,
+            Message.id,
+            ChannelInboundEvent.created_at,
+            ChannelInboundEvent.id,
+        )
+        .limit(1)
+    )
+
+
+def _lock_event_and_conversation(
+    db: Session, *, event_id: UUID
+) -> tuple[ChannelInboundEvent, Conversation]:
+    event_ref = db.scalar(
+        select(ChannelInboundEvent).where(ChannelInboundEvent.id == event_id)
+    )
+    if event_ref is None:
+        raise InboundProcessingLeaseLost("Inbound processing event no longer exists.")
+    inbound = db.get(Message, event_ref.message_id)
+    if inbound is None:
+        raise InboundProcessingLeaseLost("Inbound processing message no longer exists.")
+    conversation = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == event_ref.workspace_id,
+            Conversation.id == inbound.conversation_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None:
+        raise InboundProcessingLeaseLost("Inbound processing conversation no longer exists.")
+    event = db.scalar(
+        select(ChannelInboundEvent)
+        .where(ChannelInboundEvent.id == event_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if event is None:
+        raise InboundProcessingLeaseLost("Inbound processing event no longer exists.")
+    return event, conversation
+
+
 def _claim_inbound_event(
     db: Session,
     *,
     connection: ChannelConnection,
     event_id: UUID,
 ) -> tuple[ChannelInboundEvent, UUID, ProcessedInbound | None]:
+    event_ref = db.scalar(
+        select(ChannelInboundEvent).where(
+            ChannelInboundEvent.id == event_id,
+            ChannelInboundEvent.workspace_id == connection.workspace_id,
+            ChannelInboundEvent.channel_connection_id == connection.id,
+        )
+    )
+    if event_ref is None:
+        raise ChannelError("Inbound event not found for this channel connection.")
+    inbound, conversation_ref = _event_context(db, event=event_ref)
+    conversation = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.workspace_id == connection.workspace_id,
+            Conversation.id == conversation_ref.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if conversation is None:
+        raise ChannelError("Inbound event references a missing conversation.")
     event = db.scalar(
         select(ChannelInboundEvent)
         .where(
@@ -576,38 +709,64 @@ def _claim_inbound_event(
         return event, UUID(int=0), already_processed
 
     now = datetime.now(UTC)
+    if _conversation_lease_is_active(conversation, now=now):
+        db.rollback()
+        raise ChannelConflictError("Conversation already has an active agent processing lease.")
     if _lease_is_active(event, now=now):
         db.rollback()
         raise ChannelConflictError("Inbound event already has an active processing lease.")
 
-    token = uuid4()
     if event.status == "processing":
         event.status = "failed"
+    if event.status not in {"received", "failed"}:
+        db.rollback()
+        raise ChannelConflictError("Inbound event is not retryable.")
+    reclaiming_expired_lease = (
+        event.processing_token is not None and not _lease_is_active(event, now=now)
+    )
+    if event.attempts >= MAX_INBOUND_PROCESS_ATTEMPTS and not reclaiming_expired_lease:
+        db.rollback()
+        raise ChannelConflictError("Inbound event exhausted its processing retry budget.")
+
+    earliest_id = _earliest_retryable_inbound_event_id(
+        db,
+        workspace_id=connection.workspace_id,
+        channel_connection_id=connection.id,
+        conversation_id=inbound.conversation_id,
+    )
+    if earliest_id != event.id:
+        db.rollback()
+        raise ChannelConflictError("An older inbound turn must be processed first.")
+
+    token = uuid4()
+    expires_at = now + INBOUND_AGENT_LEASE
     event.processing_token = token
     event.processing_started_at = now
-    event.processing_lease_expires_at = now + INBOUND_AGENT_LEASE
+    event.processing_lease_expires_at = expires_at
     event.attempts += 1
     event.last_error = None
+    conversation.agent_processing_token = token
+    conversation.agent_processing_started_at = now
+    conversation.agent_processing_lease_expires_at = expires_at
     db.commit()
     return event, token, None
 
 
-def _assert_inbound_lease(db: Session, *, event_id: UUID, token: UUID) -> ChannelInboundEvent:
-    event = db.scalar(
-        select(ChannelInboundEvent)
-        .where(ChannelInboundEvent.id == event_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
+def _assert_inbound_lease(
+    db: Session, *, event_id: UUID, token: UUID
+) -> tuple[ChannelInboundEvent, Conversation]:
+    event, conversation = _lock_event_and_conversation(db, event_id=event_id)
     now = datetime.now(UTC)
     if (
-        event is None
-        or event.processing_token != token
+        event.processing_token != token
         or event.processing_lease_expires_at is None
         or event.processing_lease_expires_at <= now
+        or conversation.agent_processing_token != token
+        or conversation.agent_processing_lease_expires_at is None
+        or conversation.agent_processing_lease_expires_at <= now
     ):
         raise InboundProcessingLeaseLost("Inbound processing lease is no longer owned.")
-    return event
+    return event, conversation
 
 
 @contextmanager
@@ -663,16 +822,15 @@ def _mark_inbound_failed_if_owned(
     token: UUID,
     error: Exception,
 ) -> bool:
-    failed_event = db.scalar(
-        select(ChannelInboundEvent)
-        .where(
-            ChannelInboundEvent.id == event_id,
-            ChannelInboundEvent.processing_token == token,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if failed_event is None:
+    try:
+        failed_event, conversation = _lock_event_and_conversation(db, event_id=event_id)
+    except InboundProcessingLeaseLost:
+        db.rollback()
+        return False
+    if (
+        failed_event.processing_token != token
+        or conversation.agent_processing_token != token
+    ):
         db.rollback()
         return False
     failed_event.status = "failed"
@@ -680,6 +838,9 @@ def _mark_inbound_failed_if_owned(
     failed_event.processing_token = None
     failed_event.processing_started_at = None
     failed_event.processing_lease_expires_at = None
+    conversation.agent_processing_token = None
+    conversation.agent_processing_started_at = None
+    conversation.agent_processing_lease_expires_at = None
     db.commit()
     return True
 
@@ -747,7 +908,11 @@ def process_inbound_event(
 
         # This row lock and ownership check are in the same short transaction as
         # dispatch/event finalization. No lock is held while the LLM is running.
-        event = _assert_inbound_lease(db, event_id=event_id, token=token)
+        event, processing_conversation = _assert_inbound_lease(
+            db, event_id=event_id, token=token
+        )
+        if processing_conversation.id != conversation.id:
+            raise ChannelError("Inbound processing lease belongs to another conversation.")
         dispatch = None
         if agent_response.outbound_message_id is not None:
             outbound = db.get(Message, agent_response.outbound_message_id)
@@ -770,13 +935,24 @@ def process_inbound_event(
             )
             event.outbound_message_id = outbound.id
 
-        if event.processing_lease_expires_at <= datetime.now(UTC):
-            raise InboundProcessingLeaseLost("Inbound processing lease expired before finalization.")
+        now = datetime.now(UTC)
+        if (
+            event.processing_lease_expires_at is None
+            or event.processing_lease_expires_at <= now
+            or processing_conversation.agent_processing_lease_expires_at is None
+            or processing_conversation.agent_processing_lease_expires_at <= now
+        ):
+            raise InboundProcessingLeaseLost(
+                "Inbound or conversation processing lease expired before finalization."
+            )
         event.status = "processed"
         event.last_error = None
         event.processing_token = None
         event.processing_started_at = None
         event.processing_lease_expires_at = None
+        processing_conversation.agent_processing_token = None
+        processing_conversation.agent_processing_started_at = None
+        processing_conversation.agent_processing_lease_expires_at = None
         db.commit()
         db.refresh(event)
         if dispatch is not None:
