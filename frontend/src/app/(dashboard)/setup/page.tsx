@@ -1,7 +1,9 @@
-import { CheckCircle2, Clock3 } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, Clock3, MessageCircleMore } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
@@ -37,6 +39,25 @@ export default async function SetupPage() {
           {!setup.readiness.ready && <p className="mt-2 text-sm text-[var(--muted)]">{setup.readiness.missing.join(" • ")}</p>}
         </CardContent>
       </Card>
+
+      {admin && (
+        <Card className="mb-5 border-sky-200 bg-sky-50/50">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white"><MessageCircleMore size={20} /></span>
+              <div>
+                <b className="text-slate-950">اربط واتساب بالعيادة</b>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+                  Tia هتمشي معاك خطوة بخطوة في إعداد Meta، وتتحقق من كل البيانات قبل الحفظ، وبعدها تجهز الـWebhook والقوالب للـAutomation.
+                </p>
+              </div>
+            </div>
+            <Button asChild className="shrink-0">
+              <Link href="/setup/whatsapp">ابدأ ربط واتساب</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {admin ? (
         <ClinicSettingsPanel
