@@ -88,11 +88,7 @@ def sync_approved_automation_template_rotation(
 
     lead_refs = approved_template_refs_for_rule("lead_not_booked_followup", statuses)
     connection_config = dict(connection.config_json or {})
-    canonical_lead = STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"]
-    lead_primary = lead_refs[0] if lead_refs else {
-        "name": canonical_lead.name,
-        "language_code": canonical_lead.language,
-    }
+    lead_primary = lead_refs[0] if lead_refs else {}
     next_connection_config = {
         **connection_config,
         "ai_followup_templates": lead_refs,

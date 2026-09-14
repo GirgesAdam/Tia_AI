@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import (
-    STANDARD_TEMPLATE_BY_RULE_KEY,
     STANDARD_WHATSAPP_TEMPLATES,
+    approved_template_refs_for_rule,
     template_create_payload,
 )
 from app.models.automation_job import AutomationJob
@@ -369,6 +369,11 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
         db.commit()
         return False
 
+    lead_refs = approved_template_refs_for_rule(
+        "lead_not_booked_followup",
+        template_statuses,
+    )
+    lead_primary = lead_refs[0] if lead_refs else {}
     config = dict(connection.config_json or {})
     config.update(
         {
@@ -382,16 +387,8 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
             "template_statuses": template_statuses,
             "template_provisioning_errors": template_provisioning_errors,
             "templates_checked_at": datetime.now(UTC).isoformat(),
-            "ai_followup_templates": [
-                {
-                    "name": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].name,
-                    "language_code": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].language,
-                }
-            ],
-            "ai_followup_template": {
-                "name": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].name,
-                "language_code": STANDARD_TEMPLATE_BY_RULE_KEY["lead_not_booked_followup"].language,
-            },
+            "ai_followup_templates": lead_refs,
+            "ai_followup_template": lead_primary,
             "transport_ready": True,
             "transport": "tia_native_meta_cloud",
         }

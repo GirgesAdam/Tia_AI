@@ -139,7 +139,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
         language="ar_EG",
         category="MARKETING",
         body_text=(
-            "هاي {{1}} 💛 بخصوص {{2}}، لو لٳه الموضوع يهمك إحنا موجودين نساعدك. "
+            "هاي {{1}} 💛 بخصوص {{2}}، لو لسه الموضوع يهمك إحنا موجودين نساعدك. "
             "آخر تواصل كان يوم {{3}} الساعة {{4}} مع {{5}}."
         ),
         example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Tia Clinic"),

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import pathlib
 import re
-from pathlib import Path
-from types import SimpleNamespace
-from uuid import UUID
+import types
+import uuid
 
 from app.core.meta_whatsapp_templates import (
     STANDARD_TEMPLATE_BY_RULE_KEY,
@@ -26,8 +26,8 @@ EXPECTED_PARAMETER_COUNT = {
 }
 
 
-def _root() -> Path:
-    return Path(__file__).resolve().parents[2]
+def _root() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[2]
 
 
 def test_standard_catalog_has_three_friendly_variants_per_automation() -> None:
@@ -63,14 +63,14 @@ def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
         {"name": template.name, "language_code": template.language}
         for template in STANDARD_TEMPLATES_BY_RULE_KEY["appointment_reminder_6h"]
     ]
-    rule = SimpleNamespace(
+    rule = types.SimpleNamespace(
         key="appointment_reminder_6h",
-        id=UUID("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
+        id=uuid.UUID("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
         template_name="tia_reminder_01",
         template_language="ar_EG",
         config_json={"template_variants": refs, "template_rotation": "automatic"},
     )
-    appointment_id = UUID("11111111-2222-3333-4444-555555555555")
+    appointment_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
     first = _select_rule_template(rule, appointment_id)
     second = _select_rule_template(rule, appointment_id)
@@ -84,12 +84,12 @@ def test_lead_rotation_is_automatic_and_stable_for_retries() -> None:
         {"name": template.name, "language_code": template.language}
         for template in STANDARD_TEMPLATES_BY_RULE_KEY["lead_not_booked_followup"]
     ]
-    connection = SimpleNamespace(
-        id=UUID("99999999-aaaa-bbbb-cccc-000000000000"),
+    connection = types.SimpleNamespace(
+        id=uuid.UUID("99999999-aaaa-bbbb-cccc-000000000000"),
         config_json={"ai_followup_templates": refs},
     )
-    task_id = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-    patient_id = UUID("11111111-aaaa-bbbb-cccc-222222222222")
+    task_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    patient_id = uuid.UUID("11111111-aaaa-bbbb-cccc-222222222222")
 
     first = _select_ai_followup_template(
         connection,
@@ -132,3 +132,17 @@ def test_rotation_is_system_owned_with_no_admin_template_picker() -> None:
     assert "template_variants" not in actions
     assert '"template_rotation": "automatic"' in service
     assert "approved_template_refs_for_rule" in service
+
+
+def test_rotation_config_has_no_unapproved_lead_fallback() -> None:
+    service = (
+        _root() / "backend/app/services/automation_template_rotation.py"
+    ).read_text(encoding="utf-8")
+    transport = (
+        _root() / "backend/app/services/meta_whatsapp_transport.py"
+    ).read_text(encoding="utf-8")
+
+    assert "lead_primary = lead_refs[0] if lead_refs else {}" in service
+    assert "approved_template_refs_for_rule" in transport
+    assert '"ai_followup_templates": lead_refs' in transport
+    assert '"ai_followup_template": lead_primary' in transport
