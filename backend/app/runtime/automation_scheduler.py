@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.database.session import SessionLocal
+from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
 from app.models.clinic_integration_sync import ClinicIntegrationSyncSchedule
 from app.models.workspace import Workspace
@@ -66,6 +67,18 @@ def _heartbeat(db, workspace_id, *, now: datetime) -> None:
     db.commit()
 
 
+def _retire_booking_confirmation(db, workspace_id) -> None:
+    legacy_rule = db.scalar(
+        select(AutomationRule).where(
+            AutomationRule.workspace_id == workspace_id,
+            AutomationRule.key == "booking_confirmation",
+        )
+    )
+    if legacy_rule is not None and legacy_rule.enabled:
+        legacy_rule.enabled = False
+        db.commit()
+
+
 def run_workspace_tick(
     workspace_id,
     *,
@@ -81,6 +94,7 @@ def run_workspace_tick(
 
         now = datetime.now(UTC)
         _heartbeat(db, workspace.id, now=now)
+        _retire_booking_confirmation(db, workspace.id)
 
         planning = plan_automation_jobs(
             db,
