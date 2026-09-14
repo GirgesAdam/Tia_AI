@@ -1,6 +1,6 @@
 import { LockKeyhole } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Input } from "@/components/ui/input";
 import { resetPasswordAction } from "./actions";
 
@@ -21,18 +21,19 @@ export default async function ResetPasswordPage({
           </div>
         </div>
 
-        {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
         <form action={resetPasswordAction} className="space-y-4">
           <label className="block space-y-2">
             <span className="text-sm font-semibold">كلمة المرور الجديدة</span>
-            <Input name="password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" />
+            <Input name="password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" aria-describedby="reset-password-hint" />
+            <span id="reset-password-hint" className="block text-xs font-normal text-[var(--muted)]">8 أحرف على الأقل.</span>
           </label>
           <label className="block space-y-2">
             <span className="text-sm font-semibold">تأكيد كلمة المرور</span>
             <Input name="confirm_password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" />
           </label>
-          <Button className="w-full" size="lg">حفظ كلمة المرور</Button>
+          <SubmitButton className="w-full" size="lg" pendingLabel="جارٍ حفظ كلمة المرور...">حفظ كلمة المرور</SubmitButton>
         </form>
       </div>
     </main>
