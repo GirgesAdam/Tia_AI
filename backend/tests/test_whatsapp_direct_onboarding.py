@@ -131,11 +131,16 @@ def test_setup_pending_pause_is_not_rendered_as_provider_failure() -> None:
     assert 'if (healthState === "setup_pending") return false;' in page
 
 
-def test_automation_page_owns_whatsapp_onboarding() -> None:
+def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
-    page = (repo / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
-    setup_redirect = (repo / "frontend/src/app/(dashboard)/setup/whatsapp/page.tsx").read_text(encoding="utf-8")
-    assert "WhatsAppDirectOnboarding" in page
-    assert 'redirect("/automations")' in setup_redirect
+    automation_page = (repo / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
+    setup_page = (repo / "frontend/src/app/(dashboard)/setup/whatsapp/page.tsx").read_text(encoding="utf-8")
+
+    assert "WhatsAppDirectOnboarding" in automation_page
+    assert "WhatsAppDirectOnboarding" in setup_page
+    assert "جهّز بيانات Meta" in setup_page
+    assert "خلّي Tia تتحقق وتربط" in setup_page
+    assert "فعّل الـWebhook" in setup_page
+    assert 'href="/automations"' in setup_page
     assert not (repo / "frontend/src/app/(dashboard)/setup/whatsapp/meta-embedded-signup.tsx").exists()
