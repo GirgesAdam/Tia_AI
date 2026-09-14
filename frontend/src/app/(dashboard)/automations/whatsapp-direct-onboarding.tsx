@@ -101,7 +101,7 @@ function TemplateStatusList({ templates }: { templates: WhatsAppSetupState["temp
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
       <div className="font-black text-slate-950">قوالب الرسائل</div>
       <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-        Tia بتنشيء القوالب القياسية تلقائيًا في حساب واتساب بتاع العيادة وتتابع حالة مراجعتها في Meta.
+        Tia بتنشيء القوالب القياسية تلقائيًا في حساب واتساب بتاع العيادة وتتابع حالة مراجعتها في Meta. وجود نسخ إضافية قيد المراجعة مش بيعطل التشغيل؛ Tia تستخدم النسخ المعتمدة فقط وتضيف أي نسخة جديدة للـrotation بعد اعتمادها.
       </p>
       <div className="mt-4 space-y-2">
         {templates.map((template) => (
@@ -144,12 +144,6 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
   const cleanAppId = appId.trim();
   const appDashboard = cleanAppId ? `${APPS_URL}${cleanAppId}/` : APPS_URL;
   const appSecretUrl = cleanAppId ? `${APPS_URL}${cleanAppId}/settings/basic/` : APPS_URL;
-  const apiTestingUrl = cleanAppId
-    ? `${APPS_URL}${cleanAppId}/use_cases/customize/api-testing-v2/?product_route=whatsapp-business&use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=api-testing-v2`
-    : APPS_URL;
-  const webhookConfigUrl = cleanAppId
-    ? `${APPS_URL}${cleanAppId}/use_cases/customize/wa-configurations-v2/?use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=wa-configurations-v2&product_route=whatsapp-business`
-    : APPS_URL;
 
   const needsCredentials =
     !state.connected || state.admin_action === "connect_meta_direct" || !state.provider_credentials_ready;
@@ -163,7 +157,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
             <CheckCircle2 size={20} /> واتساب مربوط وجاهز للـAutomation
           </div>
           <p className="mt-2 text-sm leading-6 text-emerald-900">
-            {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل بـMeta، والـWebhook ومسار الإرسال والقوالب المطلوبة جاهزين.
+            {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل بـMeta، والـWebhook ومسار الإرسال وقالب واحد معتمد على الأقل لكل Automation جاهزين.
           </p>
         </div>
         <TemplateStatusList templates={state.templates || []} />
@@ -177,13 +171,16 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
         <>
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-950">
             <div className="flex items-center gap-2 font-black">
-              <ShieldCheck size={18} /> قبل نقل رقم العيادة
+              <ShieldCheck size={18} /> قبل ما تبدأ ربط رقم العيادة
             </div>
             <p className="mt-2">
-              الرقم الحالي هيتنقل من WhatsApp Business App إلى WhatsApp Business Platform (Cloud API) ويكمل بنفس الرقم قدام العملاء. بعد النقل، نفس الرقم مش هيبقى متاح للرد من WhatsApp Business App على الموبايل؛ الرد اليدوي هيكون من Inbox داخل Tia، والـAI يقدر يسلّم المحادثة للريسبشن والعكس.
+              في طريقة الربط اليدوية الحالية في Tia، جهّز الرقم داخل WhatsApp Business Platform (Cloud API) الأول لحد ما يظهر لك WhatsApp Business Account ID وPhone Number ID. Tia لا بتنقل ولا بتسجل الرقم بمجرد لصق البيانات هنا؛ هي بتتحقق من الرقم والـApp والـToken بعد ما Meta تكون جهزتهم.
             </p>
             <p className="mt-2">
-              مكالمات الموبايل العادية على الشريحة لا تتأثر. جهّز الريسبشن على Tia قبل نقل الرقم، وبعد الربط اختبر رسالة جاية من إعلان Click-to-WhatsApp للتأكد إن الحملات لسه بتوصل لنفس الرقم بشكل سليم.
+              لو نفس الرقم شغال حاليًا على WhatsApp Business App، مسار الربط اليدوي الحالي في Tia لا يستخدم Coexistence. لو هتنقل نفس الرقم إلى Cloud API، كمّل خطوات نقل وتجهيز الرقم داخل Meta أولًا؛ وبعد النقل الرد اليدوي على نفس الرقم هيكون من Inbox داخل Tia بدل WhatsApp Business App، والـAI يقدر يسلّم المحادثة للريسبشن والعكس.
+            </p>
+            <p className="mt-2">
+              مكالمات الموبايل العادية على الشريحة لا تتأثر. جهّز الريسبشن على Tia قبل النقل، وبعد الربط اختبر رسالة جاية من إعلان Click-to-WhatsApp للتأكد إن الحملات لسه بتوصل لنفس الرقم بشكل سليم.
             </p>
           </div>
 
@@ -196,7 +193,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
                 <KeyRound size={18} /> 1. اربط Meta مباشرة
               </div>
               <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                الربط مباشر مع Meta Cloud API من غير طرف وسيط. العيادة تملك Meta App والرقم، وTia تستخدم Cloud API مباشرة. البيانات السرية تتخزن مشفرة ومش هتظهر بعد الحفظ.
+                الربط مباشر مع Meta Cloud API من غير طرف وسيط. العيادة تملك Meta App والرقم، وTia تستخدم Cloud API مباشرة. البيانات السرية تتخزن مشفرة ومش هتظهر بعد الحفظ. لو WABA ID وPhone Number ID مش ظاهرين لك لسه، افتح الـMeta App ثم WhatsApp → API Setup وجهّز الرقم الأول.
               </p>
             </div>
 
@@ -239,7 +236,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
                   onChange={(event) => setWabaId(event.target.value)}
                   required
                 />
-                <DirectLink href={apiTestingUrl}>افتح WhatsApp API Testing وخد WABA ID</DirectLink>
+                <DirectLink href={appDashboard}>افتح الـMeta App ثم WhatsApp → API Setup</DirectLink>
               </label>
 
               <label className="space-y-2 text-sm font-bold text-slate-900">
@@ -252,7 +249,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
                   onChange={(event) => setPhoneNumberId(event.target.value)}
                   required
                 />
-                <DirectLink href={apiTestingUrl}>افتح نفس صفحة API Testing وخد Phone Number ID</DirectLink>
+                <DirectLink href={appDashboard}>افتح نفس الـApp ثم WhatsApp → API Setup</DirectLink>
               </label>
             </div>
 
@@ -314,7 +311,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
               <Link2 size={18} /> 2. اربط الـWebhook
             </div>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Tia جهزت الرابط والـVerify Token مخصوص للعيادة دي. افتح WhatsApp Configuration في نفس Meta App، الصق القيمتين، واضغط Verify and Save، وبعدها Subscribe لحقل messages.
+              Tia جهزت الرابط والـVerify Token مخصوص للعيادة دي. افتح نفس الـMeta App ثم WhatsApp → Configuration، الصق القيمتين، واضغط Verify and Save، وبعدها Subscribe لحقل messages.
             </p>
           </div>
 
@@ -328,7 +325,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <DirectLink href={webhookConfigUrl}>افتح WhatsApp → Configuration مباشرة</DirectLink>
+            <DirectLink href={appDashboard}>افتح الـMeta App ثم WhatsApp → Configuration</DirectLink>
             <span className="text-xs text-[var(--muted)]">
               بعد Verify and Save: Manage → messages → Subscribe.
             </span>

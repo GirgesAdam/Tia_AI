@@ -5,9 +5,38 @@ from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
-from app.schemas.whatsapp_setup import WhatsAppDirectConnect
+from app.core.meta_whatsapp_templates import STANDARD_TEMPLATES_BY_RULE_KEY
+from app.schemas.whatsapp_setup import (
+    WhatsAppDirectConnect,
+    WhatsAppSetupState,
+    WhatsAppTemplateSetupStatus,
+)
 from app.services.meta_whatsapp_onboarding import direct_setup_available
 from app.services.provider_credentials import decrypt_provider_secret, encrypt_provider_secret
+
+
+def _template_states(
+    *,
+    missing_approved_rule: str | None = None,
+    reject_extra_variants: bool = False,
+) -> list[WhatsAppTemplateSetupStatus]:
+    states: list[WhatsAppTemplateSetupStatus] = []
+    for rule_key, templates in STANDARD_TEMPLATES_BY_RULE_KEY.items():
+        for index, template in enumerate(templates):
+            status = "approved" if index == 0 and rule_key != missing_approved_rule else "pending"
+            if reject_extra_variants and index == 1:
+                status = "rejected"
+            states.append(
+                WhatsAppTemplateSetupStatus(
+                    rule_key=rule_key,
+                    label=template.label_ar,
+                    name=template.name,
+                    language=template.language,
+                    category=template.category,
+                    status=status,
+                )
+            )
+    return states
 
 
 def test_direct_connect_schema_rejects_non_numeric_meta_ids() -> None:
@@ -38,6 +67,40 @@ def test_direct_setup_only_needs_platform_graph_and_encryption(monkeypatch: pyte
     assert direct_setup_available() is True
 
 
+def test_setup_is_ready_with_one_approved_template_per_automation() -> None:
+    state = WhatsAppSetupState(
+        connected=True,
+        connection_status="active",
+        provider_credentials_ready=True,
+        webhook_verified=True,
+        transport_ready=True,
+        provider_health_state="healthy",
+        templates=_template_states(reject_extra_variants=True),
+        admin_action="wait_for_template_review",
+        admin_message="Old all-variants review gate.",
+    )
+
+    assert state.templates_ready is True
+    assert state.ready_for_automations is True
+    assert state.admin_action == "none"
+    assert state.admin_message is None
+
+
+def test_setup_waits_if_an_automation_has_no_approved_template() -> None:
+    state = WhatsAppSetupState(
+        connected=True,
+        connection_status="active",
+        provider_credentials_ready=True,
+        webhook_verified=True,
+        transport_ready=True,
+        provider_health_state="healthy",
+        templates=_template_states(missing_approved_rule="post_visit_followup"),
+    )
+
+    assert state.templates_ready is False
+    assert state.ready_for_automations is False
+
+
 def test_embedded_signup_is_removed_from_product_routes_and_ui() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
@@ -52,7 +115,7 @@ def test_embedded_signup_is_removed_from_product_routes_and_ui() -> None:
     assert "/setup/direct" in route
 
 
-def test_direct_onboarding_has_clinic_scoped_meta_links_and_scoped_webhook() -> None:
+def test_direct_onboarding_uses_stable_meta_entry_links_and_scoped_webhook() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
     automation = (
@@ -63,10 +126,10 @@ def test_direct_onboarding_has_clinic_scoped_meta_links_and_scoped_webhook() -> 
 
     assert "https://developers.facebook.com/apps/" in automation
     assert "https://business.facebook.com/settings/system-users" in automation
-    assert "use_cases/customize/api-testing-v2/" in automation
-    assert "selected_tab=api-testing-v2" in automation
-    assert "use_cases/customize/wa-configurations-v2/" in automation
-    assert "selected_tab=wa-configurations-v2" in automation
+    assert "/settings/basic/" in automation
+    assert "WhatsApp → API Setup" in automation
+    assert "WhatsApp → Configuration" in automation
+    assert "use_cases/customize/" not in automation
     assert "1370437594582187" not in automation
     assert "2086664822245784" not in automation
     assert "cleanAppId" in automation
@@ -76,15 +139,18 @@ def test_direct_onboarding_has_clinic_scoped_meta_links_and_scoped_webhook() -> 
     assert '"webhook_verify_token"' in service
 
 
-def test_direct_onboarding_warns_about_business_app_migration_before_connecting() -> None:
+def test_direct_onboarding_explains_phone_preparation_and_current_migration_path() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
     automation = (
         repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
     ).read_text(encoding="utf-8")
 
+    assert "طريقة الربط اليدوية الحالية في Tia" in automation
+    assert "Tia لا بتنقل ولا بتسجل الرقم بمجرد لصق البيانات" in automation
     assert "WhatsApp Business App" in automation
     assert "WhatsApp Business Platform (Cloud API)" in automation
+    assert "لا يستخدم Coexistence" in automation
     assert "Inbox داخل Tia" in automation
     assert "مكالمات الموبايل العادية على الشريحة لا تتأثر" in automation
     assert "Click-to-WhatsApp" in automation
@@ -117,6 +183,16 @@ def test_system_user_link_is_high_contrast_and_right_aligned() -> None:
     assert 'className="mt-2 w-full text-right"' in automation
 
 
+def test_pending_template_variants_are_explained_as_non_blocking() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    repo = backend.parent
+    automation = (
+        repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
+    ).read_text(encoding="utf-8")
+    assert "وجود نسخ إضافية قيد المراجعة مش بيعطل التشغيل" in automation
+    assert "Tia تستخدم النسخ المعتمدة فقط" in automation
+
+
 def test_http_client_info_logging_is_suppressed_for_provider_secret_safety() -> None:
     backend = Path(__file__).resolve().parent.parent
     logging_source = (backend / "app/core/logging.py").read_text(encoding="utf-8")
@@ -134,12 +210,16 @@ def test_setup_pending_pause_is_not_rendered_as_provider_failure() -> None:
 def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup_or_paid_bsp() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
-    automation_page = (repo / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
-    setup_page = (repo / "frontend/src/app/(dashboard)/setup/whatsapp/page.tsx").read_text(encoding="utf-8")
+    automation_page = (
+        repo / "frontend/src/app/(dashboard)/automations/page.tsx"
+    ).read_text(encoding="utf-8")
+    setup_page = (
+        repo / "frontend/src/app/(dashboard)/setup/whatsapp/page.tsx"
+    ).read_text(encoding="utf-8")
 
     assert "WhatsAppDirectOnboarding" in automation_page
     assert "WhatsAppDirectOnboarding" in setup_page
-    assert "جهّز بيانات Meta مرة واحدة" in setup_page
+    assert "جهّز Meta والرقم مرة واحدة" in setup_page
     assert "خلّي Tia تتحقق وتربط" in setup_page
     assert "فعّل الـWebhook" in setup_page
     assert "Direct Meta Cloud API" not in setup_page
@@ -148,5 +228,6 @@ def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup_or_paid_b
     assert "مش محتاج 360dialog أو Twilio أو أي BSP باشتراك شهري" in setup_page
     assert "رسوم WhatsApp/Meta الأصلية" in setup_page
     assert "Meta Embedded Signup غير متاح لنا حاليًا" in setup_page
+    assert "لينك يفتح Meta ومعاه اسم المسار" in setup_page
     assert 'href="/automations"' in setup_page
     assert not (repo / "frontend/src/app/(dashboard)/setup/whatsapp/meta-embedded-signup.tsx").exists()

@@ -15,8 +15,8 @@ import {
 
 const setupSteps = [
   {
-    title: "جهّز بيانات Meta مرة واحدة",
-    description: "هتحتاج App ID وApp Secret وWABA ID وPhone Number ID وSystem User Access Token. كل خانة في Tia تحتها لينك مباشر للمكان اللي هتجيب منه القيمة.",
+    title: "جهّز Meta والرقم مرة واحدة",
+    description: "جهّز الـMeta App والرقم في WhatsApp Cloud API لحد ما يظهر WABA ID وPhone Number ID، وبعدها جهّز App Secret وSystem User Access Token. كل خانة في Tia تحتها لينك يفتح Meta ومعاه اسم المسار اللي تمشي عليه.",
     icon: ExternalLink,
   },
   {
