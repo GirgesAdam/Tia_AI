@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.core.config import settings
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
@@ -156,6 +157,16 @@ def whatsapp_transport_tick(
     limit_per_connection: Annotated[int, Query(ge=1, le=50)] = 10,
     max_connections: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> dict[str, int]:
+    if settings.demo_mode and not settings.demo_allow_external_dispatch:
+        return {
+            "connections_checked": 0,
+            "connections_ready": 0,
+            "provider_refreshes": 0,
+            "inbound_processed": 0,
+            "inbound_failed": 0,
+            "sent": 0,
+            "send_failed": 0,
+        }
     return run_meta_transport_tick(
         db,
         limit_per_connection=limit_per_connection,
