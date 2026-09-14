@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Bot, CalendarCheck2, MessagesSquare, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             </div>
           </div>
           <h2 className="text-3xl font-black">تسجيل الدخول</h2>
-          <p className="mt-2 text-sm text-[var(--muted)]">استخدم حسابك المسجل ضمن فريق العيادة.</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">ادخل بحسابك، أو أنشئ حساب جديد لو دي أول مرة تستخدم Tia.</p>
           {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
           {demoEnabled && (
             <form action={demoLoginAction} className="mt-7">
@@ -58,12 +59,24 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               <Input name="email" type="email" autoComplete="email" required placeholder="name@clinic.com" dir="ltr" />
             </label>
             <label className="block space-y-2">
-              <span className="text-sm font-semibold">كلمة المرور</span>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold">كلمة المرور</span>
+                <Link href="/forgot-password" className="text-xs font-bold text-teal-700 hover:underline">
+                  نسيت كلمة المرور؟
+                </Link>
+              </div>
               <Input name="password" type="password" autoComplete="current-password" required dir="ltr" />
             </label>
             <Button className="mt-2 w-full" size="lg">تسجيل الدخول</Button>
           </form>
-          <p className="mt-6 text-center text-xs leading-5 text-[var(--muted)]">بيانات العيادة محمية ولا تظهر إلا للأعضاء المصرح لهم.</p>
+
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center text-sm">
+            أول مرة تستخدم Tia؟{" "}
+            <Link href="/signup" className="font-black text-teal-700 hover:underline">
+              أنشئ حساب وابدأ إعداد عيادتك
+            </Link>
+          </div>
+          <p className="mt-4 text-center text-xs leading-5 text-[var(--muted)]">بيانات العيادة محمية ولا تظهر إلا للأعضاء المصرح لهم.</p>
         </div>
       </section>
     </main>
