@@ -3,8 +3,9 @@ import { CheckCircle2, ExternalLink, Link2, MessageCircleMore } from "lucide-rea
 import { redirect } from "next/navigation";
 
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import {
@@ -79,13 +80,13 @@ export default async function WhatsAppSetupPage() {
       <WhatsAppDirectOnboarding state={state} />
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <Button asChild variant="outline">
-          <Link href="/setup">الرجوع لإعدادات العيادة</Link>
-        </Button>
+        <Link href="/setup" className={cn(buttonVariants({ variant: "outline" }))}>
+          الرجوع لإعدادات العيادة
+        </Link>
         {state.ready_for_automations && (
-          <Button asChild>
-            <Link href="/automations">افتح Automation</Link>
-          </Button>
+          <Link href="/automations" className={cn(buttonVariants())}>
+            افتح Automation
+          </Link>
         )}
       </div>
     </>
