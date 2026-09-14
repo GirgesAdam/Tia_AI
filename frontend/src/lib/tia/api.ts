@@ -6,6 +6,7 @@ import type { MeResponse } from "@/lib/types";
 
 const RAW_API_URL = process.env.TIA_API_URL || "http://127.0.0.1:8000";
 const API_URL = (RAW_API_URL.startsWith("//") ? `https:${RAW_API_URL}` : RAW_API_URL).replace(/\/$/, "");
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export class TiaApiError extends Error {
   constructor(
@@ -44,7 +45,7 @@ function userFacingApiError(status: number) {
   if (status === 404) return "تعذر العثور على البيانات المطلوبة. قد تكون تغيّرت أو حُذفت.";
   if (status === 409) return "تعذر تنفيذ الإجراء بسبب تعارض في البيانات الحالية. حدّث الصفحة وحاول مرة أخرى.";
   if (status === 429) return "تم إرسال طلبات كثيرة خلال وقت قصير. حاول مرة أخرى بعد قليل.";
-  if (status >= 500) return "تعذر إكمال العملية الآن. حاول مرة أخرى، وإذا استمرت المشكلة راجع مسؤول النظام.";
+  if (status >= 500) return "جزء من خدمة Tia غير متاح مؤقتًا. حاول مرة أخرى بعد قليل.";
   return "تعذر إكمال العملية. حاول مرة أخرى.";
 }
 
@@ -62,7 +63,12 @@ export async function tiaRawRequest(path: string, init: RequestInit = {}, option
 
   let response: Response;
   try {
-    response = await fetch(`${API_URL}/api/v1${path}`, { ...init, headers, cache: "no-store" });
+    response = await fetch(`${API_URL}/api/v1${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+      signal: init.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   } catch (error) {
     const technicalMessage = error instanceof Error ? error.message : String(error);
     console.error("[Tia API] network request failed", {
