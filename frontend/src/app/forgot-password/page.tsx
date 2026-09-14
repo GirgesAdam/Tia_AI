@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { KeyRound } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Input } from "@/components/ui/input";
 import { forgotPasswordAction } from "./actions";
 
@@ -22,8 +22,8 @@ export default async function ForgotPasswordPage({
           </div>
         </div>
 
-        {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        {success && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
+        {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {success && <div role="status" aria-live="polite" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
 
         {!success && (
           <form action={forgotPasswordAction} className="space-y-4">
@@ -31,7 +31,7 @@ export default async function ForgotPasswordPage({
               <span className="text-sm font-semibold">البريد الإلكتروني</span>
               <Input name="email" type="email" autoComplete="email" required placeholder="name@clinic.com" dir="ltr" />
             </label>
-            <Button className="w-full" size="lg">إرسال رابط الاستعادة</Button>
+            <SubmitButton className="w-full" size="lg" pendingLabel="جارٍ إرسال الرابط...">إرسال رابط الاستعادة</SubmitButton>
           </form>
         )}
 
