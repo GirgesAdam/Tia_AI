@@ -12,7 +12,10 @@ from app.core.meta_whatsapp_templates import (
     approved_standard_templates,
     approved_template_refs_for_rule,
 )
-from app.services.automations import _select_ai_followup_template, _select_rule_template
+from app.services.automations import (
+    _select_ai_followup_template,
+    _select_rule_template,
+)
 
 
 EXPECTED_PARAMETER_COUNT = {
