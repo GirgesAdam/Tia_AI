@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Bot, Building2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Input } from "@/components/ui/input";
 import { signupAction } from "./actions";
 
@@ -24,8 +24,8 @@ export default async function SignupPage({
           </div>
         </div>
 
-        {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        {success && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
+        {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {success && <div role="status" aria-live="polite" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
 
         {!success && (
           <form action={signupAction} className="space-y-4">
@@ -35,15 +35,16 @@ export default async function SignupPage({
             </label>
             <label className="block space-y-2">
               <span className="text-sm font-semibold">كلمة المرور</span>
-              <Input name="password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" />
+              <Input name="password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" aria-describedby="signup-password-hint" />
+              <span id="signup-password-hint" className="block text-xs font-normal text-[var(--muted)]">8 أحرف على الأقل.</span>
             </label>
             <label className="block space-y-2">
               <span className="text-sm font-semibold">تأكيد كلمة المرور</span>
               <Input name="confirm_password" type="password" autoComplete="new-password" required minLength={8} dir="ltr" />
             </label>
-            <Button className="w-full" size="lg">
+            <SubmitButton className="w-full" size="lg" pendingLabel="جارٍ إنشاء الحساب...">
               <Building2 size={18} /> إنشاء الحساب
-            </Button>
+            </SubmitButton>
           </form>
         )}
 
