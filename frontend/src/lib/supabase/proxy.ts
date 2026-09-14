@@ -11,6 +11,11 @@ const PUBLIC_PATHS = new Set([
   "/data-deletion",
 ]);
 
+function safeDestination(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/login")) return "/dashboard";
+  return value;
+}
+
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
@@ -40,14 +45,16 @@ export async function updateSession(request: NextRequest) {
 
   if (!signedIn && !isPublicPath) {
     const url = request.nextUrl.clone();
+    const destination = `${pathname}${request.nextUrl.search}`;
     url.pathname = "/login";
     url.search = "";
+    url.searchParams.set("next", destination);
     return NextResponse.redirect(url);
   }
 
   if (signedIn && isLogin) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = safeDestination(request.nextUrl.searchParams.get("next"));
     url.search = "";
     return NextResponse.redirect(url);
   }
