@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { CheckCircle2, Copy, ExternalLink, KeyRound, Link2, ShieldCheck } from "lucide-react";
+import { Check, CheckCircle2, Copy, ExternalLink, KeyRound, Link2, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,15 +65,16 @@ function DirectLink({ href, children }: { href: string; children: React.ReactNod
   );
 }
 
-function CopyValue({ value }: { value: string }) {
+function CopyValue({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex gap-2">
-      <Input value={value} readOnly className="font-mono text-xs" dir="ltr" />
+      <Input value={value} readOnly aria-label={label} className="font-mono text-xs" dir="ltr" />
       <Button
         type="button"
         variant="outline"
         size="sm"
+        aria-label={`نسخ ${label}`}
         onClick={async () => {
           await navigator.clipboard.writeText(value);
           setCopied(true);
@@ -86,43 +87,54 @@ function CopyValue({ value }: { value: string }) {
   );
 }
 
+function SetupProgress({ state }: { state: WhatsAppSetupState }) {
+  const steps = [
+    { label: "بيانات الربط", done: state.provider_credentials_ready },
+    { label: "استقبال الرسائل", done: state.webhook_verified },
+    { label: "جاهز للتشغيل", done: state.ready_for_automations },
+  ];
+  return (
+    <ol className="grid gap-2 sm:grid-cols-3" aria-label="مراحل ربط واتساب">
+      {steps.map((step, index) => (
+        <li key={step.label} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${step.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-600"}`}>
+          <span className={`grid size-6 shrink-0 place-items-center rounded-full ${step.done ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+            {step.done ? <Check size={13} /> : index + 1}
+          </span>
+          {step.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function TemplateStatusList({ templates }: { templates: WhatsAppSetupState["templates"] }) {
   const statusLabel = (status: string) => {
     const normalized = status.toLowerCase();
-    if (normalized === "approved") return "معتمد ✅";
-    if (normalized === "pending") return "قيد مراجعة Meta ⏳";
-    if (normalized === "rejected") return "مرفوض ❌";
-    if (normalized === "error") return "Tia هتعيد محاولة الإنشاء";
+    if (normalized === "approved") return "معتمد";
+    if (normalized === "pending") return "قيد مراجعة Meta";
+    if (normalized === "rejected") return "يحتاج تعديل";
+    if (normalized === "error") return "سيعاد التجهيز تلقائيًا";
     if (normalized === "disabled") return "متوقف في Meta";
-    return "قيد الإنشاء";
+    return "قيد التجهيز";
   };
 
+  if (!templates.length) return null;
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
-      <div className="font-black text-slate-950">قوالب الرسائل</div>
-      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-        Tia بتنشيء القوالب القياسية تلقائيًا في حساب واتساب بتاع العيادة وتتابع حالة مراجعتها في Meta. وجود نسخ إضافية قيد المراجعة مش بيعطل التشغيل؛ Tia تستخدم النسخ المعتمدة فقط وتضيف أي نسخة جديدة للـrotation بعد اعتمادها.
+    <details className="rounded-2xl border border-slate-200 bg-white p-4">
+      <summary className="cursor-pointer text-sm font-black text-slate-900">حالة قوالب الرسائل</summary>
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+        Tia تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط. لا تحتاج لإدارة أسماء تقنية من هنا.
       </p>
-      <div className="mt-4 space-y-2">
+      <div className="mt-3 space-y-2">
         {templates.map((template) => (
-          <div
-            key={template.name}
-            className="flex flex-col gap-1 rounded-xl bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <div className="text-sm font-bold text-slate-900">{template.label}</div>
-              <div className="font-mono text-[11px] text-slate-500" dir="ltr">
-                {template.name}
-              </div>
-              {template.error && (
-                <div className="mt-1 text-[11px] text-rose-700">{template.error}</div>
-              )}
-            </div>
-            <div className="text-xs font-bold text-slate-700">{statusLabel(template.status)}</div>
+          <div key={template.name} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+            <div className="min-w-0 text-sm font-bold text-slate-900">{template.label}</div>
+            <div className="shrink-0 text-xs font-bold text-slate-600">{statusLabel(template.status)}</div>
           </div>
         ))}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -132,230 +144,151 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
   const [wabaId, setWabaId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [accessToken, setAccessToken] = useState("");
-  const [connectState, connectAction, connectPending] = useActionState(
-    connectWhatsappDirectAction,
-    initialSetupActionState,
-  );
-  const [finishState, finishAction, finishPending] = useActionState(
-    finishWhatsappDirectSetupAction,
-    initialSetupActionState,
-  );
+  const [connectState, connectAction, connectPending] = useActionState(connectWhatsappDirectAction, initialSetupActionState);
+  const [finishState, finishAction, finishPending] = useActionState(finishWhatsappDirectSetupAction, initialSetupActionState);
 
   const cleanAppId = appId.trim();
   const appDashboard = cleanAppId ? `${APPS_URL}${cleanAppId}/` : APPS_URL;
   const appSecretUrl = cleanAppId ? `${APPS_URL}${cleanAppId}/settings/basic/` : APPS_URL;
-
-  const needsCredentials =
-    !state.connected || state.admin_action === "connect_meta_direct" || !state.provider_credentials_ready;
+  const needsCredentials = !state.connected || state.admin_action === "connect_meta_direct" || !state.provider_credentials_ready;
   const needsWebhook = state.connected && !state.webhook_verified;
 
-  if (state.ready_for_automations) {
-    return (
-      <div className="space-y-4">
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-          <div className="flex items-center gap-2 font-black text-emerald-950">
-            <CheckCircle2 size={20} /> واتساب مربوط وجاهز للـAutomation
-          </div>
-          <p className="mt-2 text-sm leading-6 text-emerald-900">
-            {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل بـMeta، والـWebhook ومسار الإرسال وقالب واحد معتمد على الأقل لكل Automation جاهزين.
-          </p>
-        </div>
-        <TemplateStatusList templates={state.templates || []} />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-4">
-      {needsCredentials && (
+    <div className="space-y-5">
+      <SetupProgress state={state} />
+
+      {state.ready_for_automations ? (
         <>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-950">
-            <div className="flex items-center gap-2 font-black">
-              <ShieldCheck size={18} /> قبل ما تبدأ ربط رقم العيادة
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+            <div className="flex items-center gap-2 font-black text-emerald-950">
+              <CheckCircle2 size={20} /> واتساب جاهز
             </div>
-            <p className="mt-2">
-              في طريقة الربط اليدوية الحالية في Tia، جهّز الرقم داخل WhatsApp Business Platform (Cloud API) الأول لحد ما يظهر لك WhatsApp Business Account ID وPhone Number ID. Tia لا بتنقل ولا بتسجل الرقم بمجرد لصق البيانات هنا؛ هي بتتحقق من الرقم والـApp والـToken بعد ما Meta تكون جهزتهم.
-            </p>
-            <p className="mt-2">
-              لو نفس الرقم شغال حاليًا على WhatsApp Business App، مسار الربط اليدوي الحالي في Tia لا يستخدم Coexistence. لو هتنقل نفس الرقم إلى Cloud API، كمّل خطوات نقل وتجهيز الرقم داخل Meta أولًا؛ وبعد النقل الرد اليدوي على نفس الرقم هيكون من Inbox داخل Tia بدل WhatsApp Business App، والـAI يقدر يسلّم المحادثة للريسبشن والعكس.
-            </p>
-            <p className="mt-2">
-              مكالمات الموبايل العادية على الشريحة لا تتأثر. جهّز الريسبشن على Tia قبل النقل، وبعد الربط اختبر رسالة جاية من إعلان Click-to-WhatsApp للتأكد إن الحملات لسه بتوصل لنفس الرقم بشكل سليم.
+            <p className="mt-2 text-sm leading-6 text-emerald-900">
+              {state.verified_name || state.display_phone_number || "رقم العيادة"} متصل ويستقبل الرسائل، والرسائل التلقائية الجاهزة يمكن تشغيلها من صفحتها.
             </p>
           </div>
-
-          <form
-            action={connectAction}
-            className="space-y-5 rounded-2xl border border-teal-200 bg-teal-50/50 p-5"
-          >
-            <div>
-              <div className="flex items-center gap-2 font-black text-slate-950">
-                <KeyRound size={18} /> 1. اربط Meta مباشرة
-              </div>
-              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                الربط مباشر مع Meta Cloud API من غير طرف وسيط. العيادة تملك Meta App والرقم، وTia تستخدم Cloud API مباشرة. البيانات السرية تتخزن مشفرة ومش هتظهر بعد الحفظ. لو WABA ID وPhone Number ID مش ظاهرين لك لسه، افتح الـMeta App ثم WhatsApp → API Setup وجهّز الرقم الأول.
-              </p>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="space-y-2 text-sm font-bold text-slate-900">
-                <span>Meta App ID</span>
-                <Input
-                  name="app_id"
-                  value={appId}
-                  onChange={(event) => setAppId(event.target.value)}
-                  inputMode="numeric"
-                  dir="ltr"
-                  placeholder="1234567890123456"
-                  required
-                />
-                <DirectLink href={APPS_URL}>افتح My Apps وخد App ID</DirectLink>
-              </label>
-
-              <label className="space-y-2 text-sm font-bold text-slate-900">
-                <span>App Secret</span>
-                <Input
-                  name="app_secret"
-                  type="password"
-                  dir="ltr"
-                  autoComplete="off"
-                  value={appSecret}
-                  onChange={(event) => setAppSecret(event.target.value)}
-                  required
-                />
-                <DirectLink href={appSecretUrl}>افتح App Settings → Basic مباشرة</DirectLink>
-              </label>
-
-              <label className="space-y-2 text-sm font-bold text-slate-900">
-                <span>WhatsApp Business Account ID (WABA ID)</span>
-                <Input
-                  name="waba_id"
-                  inputMode="numeric"
-                  dir="ltr"
-                  value={wabaId}
-                  onChange={(event) => setWabaId(event.target.value)}
-                  required
-                />
-                <DirectLink href={appDashboard}>افتح الـMeta App ثم WhatsApp → API Setup</DirectLink>
-              </label>
-
-              <label className="space-y-2 text-sm font-bold text-slate-900">
-                <span>Phone Number ID</span>
-                <Input
-                  name="phone_number_id"
-                  inputMode="numeric"
-                  dir="ltr"
-                  value={phoneNumberId}
-                  onChange={(event) => setPhoneNumberId(event.target.value)}
-                  required
-                />
-                <DirectLink href={appDashboard}>افتح نفس الـApp ثم WhatsApp → API Setup</DirectLink>
-              </label>
-            </div>
-
-            <label className="block space-y-2 text-sm font-bold text-slate-900">
-              <span>System User Access Token</span>
-              <Input
-                name="access_token"
-                type="password"
-                dir="ltr"
-                autoComplete="off"
-                value={accessToken}
-                onChange={(event) => setAccessToken(event.target.value)}
-                required
-              />
-              <div className="text-xs font-normal text-[var(--muted)]">
-                <p>
-                  اعمل System User بصلاحية Admin، Assign Assets للـApp وWhatsApp Account، وبعدها Generate Token بصلاحيات whatsapp_business_management وwhatsapp_business_messaging.
-                </p>
-                <div className="mt-2 w-full text-right">
-                  <DirectLink href={SYSTEM_USERS_URL}>افتح System Users مباشرة</DirectLink>
-                </div>
-              </div>
-            </label>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-600">
-              <b className="text-slate-900">قبل ما تضغط ربط:</b> Tia هتتأكد من Meta إن الـToken تابع لنفس App، وإن الصلاحيات موجودة، وإن Phone Number ID تابع للـWABA ID. لو أي حاجة غلط هتقولك بالظبط إيه اللي محتاج يتصلح.
-            </div>
-
-            {connectState.message && (
-              <p
-                className={`text-sm leading-6 ${connectState.ok ? "text-emerald-700" : "text-rose-700"}`}
-              >
-                {connectState.message}
-              </p>
-            )}
-
-            <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={connectPending || !state.direct_setup_available}>
-                {connectPending ? "Tia بتتحقق..." : "تحقق واربط"}
-              </Button>
-              <DirectLink href={appDashboard}>افتح الـMeta App</DirectLink>
-              {!state.direct_setup_available && (
-                <span className="text-xs text-rose-700">
-                  إعداد التشفير أو Graph API في Tia غير مكتمل على السيرفر.
-                </span>
-              )}
-            </div>
-          </form>
+          <TemplateStatusList templates={state.templates || []} />
         </>
-      )}
+      ) : (
+        <>
+          {needsCredentials && (
+            <form action={connectAction} className="space-y-5 rounded-2xl border border-teal-200 bg-teal-50/40 p-5">
+              <div>
+                <div className="flex items-center gap-2 font-black text-slate-950">
+                  <KeyRound size={18} /> 1. أدخل بيانات الربط من Meta
+                </div>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                  جهّز الرقم في WhatsApp Cloud API أولًا، ثم انسخ القيم التالية. Tia تتحقق منها قبل الحفظ، والبيانات السرية لا تظهر مرة أخرى بعد نجاح الربط.
+                </p>
+                <details className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+                  <summary className="cursor-pointer font-bold">لو الرقم مستخدم حاليًا في WhatsApp Business App</summary>
+                  <p className="mt-2">
+                    الربط اليدوي الحالي لا يستخدم Coexistence. لو ستستخدم نفس الرقم على Cloud API، أكمل نقل وتجهيز الرقم داخل Meta أولًا وجهّز فريق الاستقبال لاستخدام Inbox داخل Tia للرد اليدوي.
+                  </p>
+                </details>
+              </div>
 
-      {needsWebhook && state.webhook_callback_url && state.webhook_verify_token && (
-        <form
-          action={finishAction}
-          className="space-y-4 rounded-2xl border border-sky-200 bg-sky-50/50 p-5"
-        >
-          <div>
-            <div className="flex items-center gap-2 font-black text-slate-950">
-              <Link2 size={18} /> 2. اربط الـWebhook
-            </div>
-            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Tia جهزت الرابط والـVerify Token مخصوص للعيادة دي. افتح نفس الـMeta App ثم WhatsApp → Configuration، الصق القيمتين، واضغط Verify and Save، وبعدها Subscribe لحقل messages.
-            </p>
-          </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2 text-sm font-bold text-slate-900">
+                  <span>معرّف التطبيق <span className="font-normal text-slate-500">(App ID)</span></span>
+                  <Input name="app_id" value={appId} onChange={(event) => setAppId(event.target.value)} inputMode="numeric" dir="ltr" placeholder="1234567890123456" required />
+                  <DirectLink href={APPS_URL}>أين أجده؟ افتح My Apps</DirectLink>
+                </label>
 
-          <div className="space-y-2">
-            <div className="text-xs font-bold text-slate-700">Callback URL</div>
-            <CopyValue value={state.webhook_callback_url} />
-          </div>
-          <div className="space-y-2">
-            <div className="text-xs font-bold text-slate-700">Verify Token</div>
-            <CopyValue value={state.webhook_verify_token} />
-          </div>
+                <label className="space-y-2 text-sm font-bold text-slate-900">
+                  <span>مفتاح التطبيق السري <span className="font-normal text-slate-500">(App Secret)</span></span>
+                  <Input name="app_secret" type="password" dir="ltr" autoComplete="off" value={appSecret} onChange={(event) => setAppSecret(event.target.value)} required />
+                  <DirectLink href={appSecretUrl}>أين أجده؟ App Settings → Basic</DirectLink>
+                </label>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <DirectLink href={appDashboard}>افتح الـMeta App ثم WhatsApp → Configuration</DirectLink>
-            <span className="text-xs text-[var(--muted)]">
-              بعد Verify and Save: Manage → messages → Subscribe.
-            </span>
-          </div>
+                <label className="space-y-2 text-sm font-bold text-slate-900">
+                  <span>معرّف حساب واتساب <span className="font-normal text-slate-500">(WABA ID)</span></span>
+                  <Input name="waba_id" inputMode="numeric" dir="ltr" value={wabaId} onChange={(event) => setWabaId(event.target.value)} required />
+                  <DirectLink href={appDashboard}>أين أجده؟ WhatsApp → API Setup</DirectLink>
+                </label>
 
-          {finishState.message && (
-            <p className={`text-sm ${finishState.ok ? "text-emerald-700" : "text-rose-700"}`}>
-              {finishState.message}
-            </p>
+                <label className="space-y-2 text-sm font-bold text-slate-900">
+                  <span>معرّف رقم الهاتف <span className="font-normal text-slate-500">(Phone Number ID)</span></span>
+                  <Input name="phone_number_id" inputMode="numeric" dir="ltr" value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required />
+                  <DirectLink href={appDashboard}>أين أجده؟ WhatsApp → API Setup</DirectLink>
+                </label>
+              </div>
+
+              <label className="block space-y-2 text-sm font-bold text-slate-900">
+                <span>رمز الوصول الدائم <span className="font-normal text-slate-500">(System User Access Token)</span></span>
+                <Input name="access_token" type="password" dir="ltr" autoComplete="off" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required />
+                <div><DirectLink href={SYSTEM_USERS_URL}>فتح System Users</DirectLink></div>
+              </label>
+
+              <details className="rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-600">
+                <summary className="cursor-pointer font-bold text-slate-900">طريقة تجهيز رمز الوصول</summary>
+                <p className="mt-2">
+                  أنشئ System User بصلاحية Admin، اربطه بالـApp وWhatsApp Account، ثم أنشئ Token بصلاحيتي whatsapp_business_management وwhatsapp_business_messaging.
+                </p>
+              </details>
+
+              {connectState.message && (
+                <p role="status" aria-live="polite" className={`rounded-xl p-3 text-sm leading-6 ${connectState.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>
+                  {connectState.message}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <Button type="submit" disabled={connectPending || !state.direct_setup_available}>
+                  {connectPending ? "جارٍ التحقق..." : "تحقق واربط"}
+                </Button>
+                {!state.direct_setup_available && <span className="text-xs text-rose-700">إعداد الربط غير متاح مؤقتًا. حاول مرة أخرى لاحقًا.</span>}
+              </div>
+            </form>
           )}
 
-          <Button type="submit" disabled={finishPending}>
-            {finishPending ? "Tia بتتحقق..." : "تم في Meta — تحقق وكمل"}
-          </Button>
-        </form>
-      )}
+          {needsWebhook && state.webhook_callback_url && state.webhook_verify_token && (
+            <form action={finishAction} className="space-y-4 rounded-2xl border border-sky-200 bg-sky-50/50 p-5">
+              <div>
+                <div className="flex items-center gap-2 font-black text-slate-950">
+                  <Link2 size={18} /> 2. فعّل استقبال الرسائل
+                </div>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                  افتح WhatsApp → Configuration في نفس Meta App، وانسخ القيمتين التاليتين ثم اختر Verify and Save. بعد ذلك فعّل الاشتراك في messages.
+                </p>
+              </div>
 
-      {state.connected && <TemplateStatusList templates={state.templates || []} />}
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-slate-700">رابط الاستقبال (Callback URL)</div>
+                <CopyValue value={state.webhook_callback_url} label="Callback URL" />
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-slate-700">رمز التحقق (Verify Token)</div>
+                <CopyValue value={state.webhook_verify_token} label="Verify Token" />
+              </div>
 
-      {state.connected && state.webhook_verified && !state.ready_for_automations && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-          <div className="flex items-center gap-2 font-black text-amber-950">
-            <ShieldCheck size={18} /> 3. Tia بتكمّل الفحص
-          </div>
-          <p className="mt-2 text-sm leading-6 text-amber-900">
-            {state.system_message ||
-              state.admin_message ||
-              "الـWebhook اتأكد. Tia بتفحص الرقم والقوالب ومسار الإرسال قبل ما تسمح للـAutomation يبعث."}
-          </p>
-        </div>
+              <DirectLink href={appDashboard}>فتح WhatsApp → Configuration</DirectLink>
+
+              {finishState.message && (
+                <p role="status" aria-live="polite" className={`rounded-xl p-3 text-sm ${finishState.ok ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>
+                  {finishState.message}
+                </p>
+              )}
+
+              <Button type="submit" disabled={finishPending}>
+                {finishPending ? "جارٍ التحقق..." : "تم في Meta — تحقق وكمل"}
+              </Button>
+            </form>
+          )}
+
+          {state.connected && state.webhook_verified && !state.ready_for_automations && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <div className="flex items-center gap-2 font-black text-amber-950">
+                <ShieldCheck size={18} /> 3. فحص الجاهزية
+              </div>
+              <p className="mt-2 text-sm leading-6 text-amber-900">
+                {state.system_message || state.admin_message || "استقبال الرسائل اتأكد. Tia تفحص الرقم والقوالب ومسار الإرسال قبل السماح بالتشغيل."}
+              </p>
+            </div>
+          )}
+
+          {state.connected && <TemplateStatusList templates={state.templates || []} />}
+        </>
       )}
     </div>
   );
