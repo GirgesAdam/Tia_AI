@@ -91,6 +91,20 @@ def test_automation_dashboard_has_health_attention_safe_actions_and_product_whit
     assert '/automations/jobs/${id}/cancel' in actions
 
 
+def test_booking_confirmation_is_retired_from_automation_product() -> None:
+    core = (_root() / "backend/app/core/automation_rules.py").read_text(encoding="utf-8")
+    route = (_root() / "backend/app/api/routes/automations.py").read_text(encoding="utf-8")
+    scheduler = (_root() / "backend/app/runtime/automation_scheduler.py").read_text(encoding="utf-8")
+    setup = (_root() / "n8n/AUTOMATIONS_SETUP.md").read_text(encoding="utf-8")
+
+    assert 'key="booking_confirmation"' not in core
+    assert 'if rule.key != "booking_confirmation"' in route
+    assert 'if rule is None or rule.key == "booking_confirmation"' in route
+    assert 'AutomationRule.key == "booking_confirmation"' in scheduler
+    assert "legacy_rule.enabled = False" in scheduler
+    assert "There is no separate automatic booking-confirmation rule." in setup
+
+
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
     assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
