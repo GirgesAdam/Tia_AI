@@ -131,7 +131,7 @@ def test_setup_pending_pause_is_not_rendered_as_provider_failure() -> None:
     assert 'if (healthState === "setup_pending") return false;' in page
 
 
-def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup() -> None:
+def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup_or_paid_bsp() -> None:
     backend = Path(__file__).resolve().parent.parent
     repo = backend.parent
     automation_page = (repo / "frontend/src/app/(dashboard)/automations/page.tsx").read_text(encoding="utf-8")
@@ -139,8 +139,14 @@ def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup() -> None
 
     assert "WhatsAppDirectOnboarding" in automation_page
     assert "WhatsAppDirectOnboarding" in setup_page
-    assert "جهّز بيانات Meta" in setup_page
+    assert "جهّز بيانات Meta مرة واحدة" in setup_page
     assert "خلّي Tia تتحقق وتربط" in setup_page
     assert "فعّل الـWebhook" in setup_page
+    assert "Direct Meta Cloud API" not in setup_page
+    assert "Meta Cloud API" in setup_page
+    assert "من غير مزود وسيط أو اشتراك إضافي لطرف ثالث" in setup_page
+    assert "مش محتاج 360dialog أو Twilio أو أي BSP باشتراك شهري" in setup_page
+    assert "رسوم WhatsApp/Meta الأصلية" in setup_page
+    assert "Meta Embedded Signup غير متاح لنا حاليًا" in setup_page
     assert 'href="/automations"' in setup_page
     assert not (repo / "frontend/src/app/(dashboard)/setup/whatsapp/meta-embedded-signup.tsx").exists()
