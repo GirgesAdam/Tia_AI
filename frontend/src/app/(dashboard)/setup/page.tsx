@@ -3,10 +3,11 @@ import { CheckCircle2, Clock3, MessageCircleMore } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
+import { cn } from "@/lib/utils";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
@@ -52,9 +53,9 @@ export default async function SetupPage() {
                 </p>
               </div>
             </div>
-            <Button asChild className="shrink-0">
-              <Link href="/setup/whatsapp">ابدأ ربط واتساب</Link>
-            </Button>
+            <Link href="/setup/whatsapp" className={cn(buttonVariants(), "shrink-0")}>
+              ابدأ ربط واتساب
+            </Link>
           </CardContent>
         </Card>
       )}
