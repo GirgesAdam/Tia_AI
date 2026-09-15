@@ -62,6 +62,23 @@ def main() -> int:
 
         endpoint = _graph_url(f"{waba_id}/subscribed_apps")
         headers = {"Authorization": f"Bearer {token}"}
+
+        # Establish/refresh the app's WABA subscription first. This operation is
+        # idempotent for an already-subscribed app and avoids relying on the
+        # app-level callback while switching to a WABA-level override.
+        try:
+            baseline = httpx.post(endpoint, headers=headers, timeout=30.0)
+        except httpx.HTTPError:
+            print("meta_waba_baseline_subscribe=FAIL reason=meta_post_unreachable")
+            return 3
+        if baseline.status_code >= 400:
+            print(
+                "meta_waba_baseline_subscribe=FAIL reason=meta_post_rejected "
+                f"status={baseline.status_code} code={_error_code(baseline)}"
+            )
+            return 3
+        print("meta_waba_baseline_subscribe=PASS")
+
         try:
             response = httpx.post(
                 endpoint,
