@@ -92,6 +92,7 @@ def me(
             workspace_name=membership.workspace.name,
             workspace_slug=membership.workspace.slug,
             role=membership.role,
+            is_demo=bool(membership.workspace.is_demo),
         )
         for membership in memberships
         if membership.workspace.is_active
@@ -123,6 +124,7 @@ def current_workspace(
         workspace_name=access.workspace.name,
         workspace_slug=access.workspace.slug,
         role=access.membership.role,
+        is_demo=bool(access.workspace.is_demo),
     )
 
 
