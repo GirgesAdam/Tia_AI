@@ -212,6 +212,9 @@ clinic does not stop other tenants.
 
 ## WhatsApp transport worker
 
+The active Tia automation scheduler also drains the native Meta outbox for its own workspace on every tick, and immediately after an automation job enqueues a WhatsApp dispatch. This is the production fallback that prevents a clinic automation from appearing active while messages remain queued just because a separate transport workflow was not enabled.
+
+
 Import once for the Tia platform:
 
 ```text
