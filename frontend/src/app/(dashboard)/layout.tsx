@@ -3,6 +3,6 @@ import { getAppContext } from "@/lib/tia/workspace";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { me, workspace } = await getAppContext();
-  const demoMode = process.env.TIA_DEMO_ENABLED === "true";
+  const demoMode = "is_demo" in workspace && workspace.is_demo === true;
   return <DashboardShell me={me} workspace={workspace} demoMode={demoMode}>{children}</DashboardShell>;
 }
