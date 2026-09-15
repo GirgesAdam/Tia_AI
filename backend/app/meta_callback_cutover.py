@@ -129,18 +129,23 @@ def main() -> int:
 
         endpoint = _graph_url(f"{waba_id}/subscribed_apps")
         try:
-            baseline = httpx.post(endpoint, headers=headers, timeout=30.0)
+            baseline = httpx.post(
+                endpoint,
+                headers=headers,
+                params={"subscribed_fields": "messages"},
+                timeout=30.0,
+            )
         except httpx.HTTPError:
-            print("meta_waba_baseline_subscribe=FAIL reason=meta_post_unreachable")
+            print("meta_waba_messages_subscribe=FAIL reason=meta_post_unreachable")
             return 3
         if baseline.status_code >= 400:
             code, subcode, message = _error_details(baseline, token, verify_token)
             print(
-                "meta_waba_baseline_subscribe=FAIL reason=meta_post_rejected "
+                "meta_waba_messages_subscribe=FAIL reason=meta_post_rejected "
                 f"status={baseline.status_code} code={code} subcode={subcode} message={message}"
             )
             return 3
-        print("meta_waba_baseline_subscribe=PASS")
+        print("meta_waba_messages_subscribe=PASS")
 
         try:
             baseline_readback = httpx.get(endpoint, headers=headers, timeout=30.0)
