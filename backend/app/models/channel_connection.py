@@ -50,6 +50,16 @@ class ChannelConnection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "workspace_id",
             "status",
         ),
+        Index(
+            "uq_channel_connections_active_meta_external_account",
+            "external_account_id",
+            unique=True,
+            postgresql_where=text(
+                "channel = 'whatsapp' AND provider = 'meta_cloud' "
+                "AND external_account_id IS NOT NULL "
+                "AND status IN ('active', 'paused')"
+            ),
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(

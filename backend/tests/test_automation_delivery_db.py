@@ -366,13 +366,41 @@ def test_dispatch_lease_recovery_and_max_attempts(case):
     assert case.db.get(Message, job.message_id).delivery_status == "failed"
 
 
-def test_demo_guard_does_not_claim_or_mutate_queue(case, monkeypatch):
+def test_demo_workspace_does_not_claim_or_mutate_queue(case):
+    case.workspace.is_demo = True
+    case.db.commit()
     job = execute(case)
-    monkeypatch.setattr(settings, "demo_mode", True)
-    monkeypatch.setattr(settings, "demo_allow_external_dispatch", False)
     assert claim(case) == []
     dispatch = case.db.get(MessageDispatch, job.dispatch_id)
     assert (dispatch.status, dispatch.attempts, dispatch.locked_at) == ("queued", 0, None)
+
+
+def test_production_workspace_dispatch_ignores_legacy_global_demo_switch(case, monkeypatch):
+    case.workspace.is_demo = False
+    case.db.commit()
+    job = execute(case)
+    monkeypatch.setattr(settings, "demo_mode", True)
+    monkeypatch.setattr(settings, "demo_allow_external_dispatch", False)
+    (item,) = claim(case)
+    assert item.dispatch_id == job.dispatch_id
+
+
+def test_new_workspace_defaults_to_production_behavior(case):
+    workspace = Workspace(name="New clinic", slug=f"new-clinic-{uuid4()}", timezone="UTC")
+    case.db.add(workspace)
+    case.db.flush()
+    case.db.refresh(workspace)
+    assert workspace.is_demo is False
+
+
+def test_renaming_demo_workspace_does_not_enable_dispatch(case):
+    case.workspace.is_demo = True
+    case.workspace.slug = f"renamed-demo-{uuid4()}"
+    case.db.commit()
+    job = execute(case)
+    assert claim(case) == []
+    dispatch = case.db.get(MessageDispatch, job.dispatch_id)
+    assert dispatch.status == "queued"
 
 
 def test_transient_failure_waits_then_retries_same_dispatch(case):

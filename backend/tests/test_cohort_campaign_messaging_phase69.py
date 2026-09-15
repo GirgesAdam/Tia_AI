@@ -21,7 +21,7 @@ NOW = datetime(2026, 8, 27, 1, 0, tzinfo=UTC)
 
 def _schema(engine) -> None:
     ddl = [
-        """CREATE TABLE workspaces (id CHAR(32) PRIMARY KEY, name VARCHAR(200), slug VARCHAR(120), timezone VARCHAR(64), primary_branch_id CHAR(32), is_active BOOLEAN, created_at DATETIME, updated_at DATETIME)""",
+        """CREATE TABLE workspaces (id CHAR(32) PRIMARY KEY, name VARCHAR(200), slug VARCHAR(120), timezone VARCHAR(64), primary_branch_id CHAR(32), is_active BOOLEAN, is_demo BOOLEAN DEFAULT 0, created_at DATETIME, updated_at DATETIME)""",
         """CREATE TABLE patients (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40), phone_normalized VARCHAR(40),
             gender VARCHAR(32), birth_date DATE, preferred_language VARCHAR(10), preferred_branch_id CHAR(32), source VARCHAR(32), source_detail VARCHAR(200),
@@ -248,7 +248,7 @@ def test_campaign_migration_and_readiness_head() -> None:
     assert 'revision: str = "0039_crm_campaigns"' in migration
     assert 'down_revision: str | Sequence[str] | None = "0038_crm_cohorts"' in migration
     assert len("0039_crm_campaigns") <= 32
-    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness
 
 
 def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_steps() -> None:

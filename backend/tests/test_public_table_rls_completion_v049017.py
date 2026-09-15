@@ -16,4 +16,4 @@ def test_v049017_hardens_remaining_public_tables() -> None:
 def test_v049017_updates_operational_readiness_head() -> None:
     backend = Path(__file__).resolve().parent.parent
     readiness = (backend / "app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness

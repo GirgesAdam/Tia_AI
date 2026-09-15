@@ -39,7 +39,7 @@ def test_v04776_operational_readiness_tracks_new_migration_head() -> None:
     readiness = (backend / "app/services/operational_readiness.py").read_text(
         encoding="utf-8"
     )
-    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness
 
 
 def test_v04776_upgrade_emits_rls_and_revoke_for_each_target(monkeypatch) -> None:

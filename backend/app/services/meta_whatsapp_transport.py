@@ -23,6 +23,7 @@ from app.models.channel_provider_credential import ChannelProviderCredential
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
+from app.models.workspace import Workspace
 from app.schemas.channel import DispatchClaimItem, NormalizedInboundMessage
 from app.services.channels import (
     MAX_INBOUND_PROCESS_ATTEMPTS,
@@ -37,6 +38,7 @@ from app.services.provider_credentials import (
     ProviderCredentialError,
     decrypt_provider_access_token,
 )
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 
 class MetaWhatsAppTransportError(RuntimeError):
@@ -948,15 +950,24 @@ def run_meta_transport_tick(
     provider_refreshes = 0
 
     for connection in connections:
-        required_templates = _required_template_names(db, connection)
-        if _readiness_refresh_due(
-            connection,
-            required_templates=required_templates,
-        ):
-            ready = refresh_meta_connection_readiness(db, connection)
-            provider_refreshes += 1
-        else:
-            ready = bool((connection.config_json or {}).get("transport_ready"))
+        workspace = db.get(Workspace, connection.workspace_id)
+        if workspace is None:
+            continue
+        policy = workspace_runtime_policy(workspace)
+
+        # Demo tenants share the production worker for inbound/agent behavior,
+        # but must never touch external provider readiness or outbound delivery.
+        ready = False
+        if policy.allow_external_dispatch:
+            required_templates = _required_template_names(db, connection)
+            if _readiness_refresh_due(
+                connection,
+                required_templates=required_templates,
+            ):
+                ready = refresh_meta_connection_readiness(db, connection)
+                provider_refreshes += 1
+            else:
+                ready = bool((connection.config_json or {}).get("transport_ready"))
 
         processed, failed = _process_pending_inbound(
             db, connection, limit=limit_per_connection
@@ -964,10 +975,11 @@ def run_meta_transport_tick(
         inbound_processed += processed
         inbound_failed += failed
 
-        # Expiration is independent of provider readiness. A pending template or
-        # temporary Meta issue must not cause an old automation to send later.
+        # Expiration is local state maintenance and remains safe for demo tenants.
         _cancel_expired_automation_dispatches(db, connection=connection)
 
+        if not policy.allow_external_dispatch:
+            continue
         if not ready or connection.status != "active":
             continue
 

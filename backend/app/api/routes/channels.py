@@ -14,7 +14,6 @@ from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.core.channel_adapter import generate_adapter_token
-from app.core.config import settings
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
 from app.schemas.channel import (
@@ -333,10 +332,6 @@ def claim_channel_outbox(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[DispatchClaimItem]:
     _require_active(adapter.connection)
-    if settings.demo_mode and not settings.demo_allow_external_dispatch:
-        # Public demo environments may create realistic queued dispatches, but
-        # no adapter is allowed to claim them for real provider delivery.
-        return []
     return claim_dispatches(
         db,
         connection=adapter.connection,

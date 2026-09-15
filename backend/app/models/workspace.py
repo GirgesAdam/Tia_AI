@@ -32,6 +32,12 @@ class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=True,
         server_default=text("true"),
     )
+    is_demo: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     members: Mapped[list[WorkspaceMember]] = relationship(
         back_populates="workspace",

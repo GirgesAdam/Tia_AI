@@ -410,6 +410,20 @@ def connect_direct_meta(
     except ProviderCredentialError as exc:
         raise MetaWhatsAppConfigurationError(str(exc)) from exc
 
+    cross_workspace_connection = db.scalar(
+        select(ChannelConnection.id).where(
+            ChannelConnection.workspace_id != workspace_id,
+            ChannelConnection.channel == "whatsapp",
+            ChannelConnection.provider == "meta_cloud",
+            ChannelConnection.external_account_id == phone_number_id,
+            ChannelConnection.status.in_(("active", "paused")),
+        )
+    )
+    if cross_workspace_connection is not None:
+        raise MetaWhatsAppConflictError(
+            "This WhatsApp number is already connected to another clinic."
+        )
+
     same_connection = db.scalar(
         select(ChannelConnection).where(
             ChannelConnection.workspace_id == workspace_id,

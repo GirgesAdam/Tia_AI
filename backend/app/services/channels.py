@@ -47,6 +47,7 @@ from app.services.whatsapp_interactions import (
     process_whatsapp_booking_action,
     whatsapp_booking_dispatch_metadata,
 )
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 
 class ChannelError(ValueError):
@@ -1086,7 +1087,10 @@ def claim_dispatches(
     allow_templates: bool = True,
     approved_template_names: frozenset[str] | set[str] | None = None,
 ) -> list[DispatchClaimItem]:
-    if settings.demo_mode and not settings.demo_allow_external_dispatch:
+    workspace = db.get(Workspace, connection.workspace_id)
+    if workspace is None:
+        raise ChannelError("Channel connection references a missing workspace.")
+    if not workspace_runtime_policy(workspace).allow_external_dispatch:
         return []
     now = datetime.now(UTC)
     stale_before = now - DISPATCH_SEND_LEASE

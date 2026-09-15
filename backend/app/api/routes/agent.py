@@ -11,7 +11,6 @@ from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
-from app.core.config import settings
 from app.database.session import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -19,26 +18,28 @@ from app.schemas.agent import AgentChatRequest, AgentChatResponse
 from app.services.agent_chat import AgentChatError
 from app.services.agent_v2.live_chat import run_agent_chat
 from app.services.conversation_flows import FlowStateConflictError
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 router = APIRouter()
 
 
-def _enforce_demo_agent_budget(db: Session, *, workspace_id) -> None:
-    if not settings.demo_mode:
+def _enforce_demo_agent_budget(db: Session, *, workspace) -> None:
+    policy = workspace_runtime_policy(workspace)
+    if not policy.is_demo:
         return
     cutoff = datetime.now(UTC) - timedelta(hours=1)
     turns = db.scalar(
         select(func.count(Message.id))
         .join(Conversation, Conversation.id == Message.conversation_id)
         .where(
-            Message.workspace_id == workspace_id,
+            Message.workspace_id == workspace.id,
             Message.sender_type == "patient",
             Message.direction == "inbound",
             Message.created_at >= cutoff,
             Conversation.channel == "web",
         )
     ) or 0
-    if turns >= settings.demo_agent_hourly_turn_limit:
+    if policy.agent_hourly_turn_limit is not None and turns >= policy.agent_hourly_turn_limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Public demo agent budget reached. Try again later.",
@@ -51,7 +52,7 @@ def chat_with_tia_agent(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AgentChatResponse:
-    _enforce_demo_agent_budget(db, workspace_id=access.workspace.id)
+    _enforce_demo_agent_budget(db, workspace=access.workspace)
     try:
         return run_agent_chat(
             db=db,

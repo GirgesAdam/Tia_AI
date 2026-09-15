@@ -107,7 +107,7 @@ def test_booking_confirmation_is_retired_from_automation_product() -> None:
 
 def test_operational_readiness_tracks_current_migration_head() -> None:
     readiness = (_root() / "backend/app/services/operational_readiness.py").read_text(encoding="utf-8")
-    assert 'EXPECTED_MIGRATION_HEAD = "0069_service_package_offers_rls"' in readiness
+    assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness
 
 
 def test_reminder_and_post_visit_fallback_copy_match_current_template_contract() -> None:
