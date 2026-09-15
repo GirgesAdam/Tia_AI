@@ -27,15 +27,31 @@ def _graph_url(path: str) -> str:
     return f"https://graph.facebook.com/{normalized}/{path.lstrip('/')}"
 
 
-def _error_code(response: httpx.Response) -> str:
+def _error_details(response: httpx.Response) -> tuple[str, str]:
     try:
         payload = response.json()
     except ValueError:
-        return "unknown"
+        return "unknown", "unknown"
     raw = payload.get("error") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):
-        return "unknown"
-    return str(raw.get("code") or "unknown")
+        return "unknown", "unknown"
+    return str(raw.get("code") or "unknown"), str(raw.get("error_subcode") or "unknown")
+
+
+def _subscription_app_ids(response: httpx.Response) -> list[str]:
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    result: list[str] = []
+    if not isinstance(data, list):
+        return result
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        app = item.get("whatsapp_business_api_data")
+        app_id = str(app.get("id") or "").strip() if isinstance(app, dict) else ""
+        if app_id:
+            result.append(app_id)
+    return result
 
 
 def main() -> int:
@@ -63,21 +79,38 @@ def main() -> int:
         endpoint = _graph_url(f"{waba_id}/subscribed_apps")
         headers = {"Authorization": f"Bearer {token}"}
 
-        # Establish/refresh the app's WABA subscription first. This operation is
-        # idempotent for an already-subscribed app and avoids relying on the
-        # app-level callback while switching to a WABA-level override.
         try:
             baseline = httpx.post(endpoint, headers=headers, timeout=30.0)
         except httpx.HTTPError:
             print("meta_waba_baseline_subscribe=FAIL reason=meta_post_unreachable")
             return 3
         if baseline.status_code >= 400:
+            code, subcode = _error_details(baseline)
             print(
                 "meta_waba_baseline_subscribe=FAIL reason=meta_post_rejected "
-                f"status={baseline.status_code} code={_error_code(baseline)}"
+                f"status={baseline.status_code} code={code} subcode={subcode}"
             )
             return 3
         print("meta_waba_baseline_subscribe=PASS")
+
+        try:
+            baseline_readback = httpx.get(endpoint, headers=headers, timeout=30.0)
+        except httpx.HTTPError:
+            print("meta_waba_subscription_readback=FAIL reason=meta_get_unreachable")
+            return 3
+        if baseline_readback.status_code >= 400:
+            code, subcode = _error_details(baseline_readback)
+            print(
+                "meta_waba_subscription_readback=FAIL reason=meta_get_rejected "
+                f"status={baseline_readback.status_code} code={code} subcode={subcode}"
+            )
+            return 3
+        subscribed_app_ids = _subscription_app_ids(baseline_readback)
+        print(
+            "meta_waba_subscription_readback=PASS "
+            f"target_app_present={app_id in subscribed_app_ids} "
+            f"subscribed_app_ids={','.join(subscribed_app_ids) or 'none'}"
+        )
 
         try:
             response = httpx.post(
@@ -93,9 +126,10 @@ def main() -> int:
             print("meta_callback_cutover=FAIL reason=meta_post_unreachable")
             return 3
         if response.status_code >= 400:
+            code, subcode = _error_details(response)
             print(
                 "meta_callback_cutover=FAIL reason=meta_post_rejected "
-                f"status={response.status_code} code={_error_code(response)}"
+                f"status={response.status_code} code={code} subcode={subcode}"
             )
             return 3
         print("meta_callback_cutover_post=PASS")
@@ -106,9 +140,10 @@ def main() -> int:
             print("meta_callback_readback=FAIL reason=meta_get_unreachable")
             return 4
         if readback.status_code >= 400:
+            code, subcode = _error_details(readback)
             print(
                 "meta_callback_readback=FAIL reason=meta_get_rejected "
-                f"status={readback.status_code} code={_error_code(readback)}"
+                f"status={readback.status_code} code={code} subcode={subcode}"
             )
             return 4
 
