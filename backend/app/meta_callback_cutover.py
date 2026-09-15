@@ -9,7 +9,11 @@ from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.database.session import SessionLocal
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
-from app.services.provider_credentials import ProviderCredentialError, decrypt_provider_access_token
+from app.services.provider_credentials import (
+    ProviderCredentialError,
+    decrypt_provider_access_token,
+    decrypt_provider_secret,
+)
 
 _CONNECTION_ID = UUID("5f1d9345-4209-4187-b980-9189f5d84001")
 _EXPECTED_WABA_ID = "1088607350781750"
@@ -100,20 +104,29 @@ def main() -> int:
         waba_id = str(config.get("waba_id") or "").strip()
         verify_token = str(config.get("webhook_verify_token") or "").strip()
         app_id = str(config.get("meta_app_id") or "").strip()
-        app_secret = str(config.get("meta_app_secret") or "").strip()
         legacy_callback_url = str(config.get("webhook_callback_url") or "").strip()
+        has_app_secret = bool(credential.app_secret_ciphertext)
         if (
             waba_id != _EXPECTED_WABA_ID
             or not verify_token
             or not app_id
-            or not app_secret
+            or not has_app_secret
             or not legacy_callback_url
         ):
+            print(
+                "meta_connection_metadata=FAIL "
+                f"waba_match={waba_id == _EXPECTED_WABA_ID} "
+                f"has_verify_token={bool(verify_token)} "
+                f"has_app_id={bool(app_id)} "
+                f"has_encrypted_app_secret={has_app_secret} "
+                f"has_callback_url={bool(legacy_callback_url)}"
+            )
             print("meta_callback_cutover=FAIL reason=connection_metadata_mismatch")
             return 2
 
         try:
             token = decrypt_provider_access_token(credential.access_token_ciphertext)
+            app_secret = decrypt_provider_secret(str(credential.app_secret_ciphertext))
         except ProviderCredentialError:
             print("meta_callback_cutover=FAIL reason=credential_decrypt_failed")
             return 2
