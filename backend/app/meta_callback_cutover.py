@@ -17,6 +17,7 @@ _TARGET_CALLBACK_URL = (
     "https://tia-api-production-54c5.up.railway.app"
     "/api/v1/channels/whatsapp/webhook/5f1d9345-4209-4187-b980-9189f5d84001"
 )
+_VERIFY_CHALLENGE = "tia-meta-cutover-probe"
 
 
 def _graph_url(path: str) -> str:
@@ -27,15 +28,23 @@ def _graph_url(path: str) -> str:
     return f"https://graph.facebook.com/{normalized}/{path.lstrip('/')}"
 
 
-def _error_details(response: httpx.Response) -> tuple[str, str]:
+def _error_details(response: httpx.Response, *secrets: str) -> tuple[str, str, str]:
     try:
         payload = response.json()
     except ValueError:
-        return "unknown", "unknown"
+        return "unknown", "unknown", "unknown"
     raw = payload.get("error") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):
-        return "unknown", "unknown"
-    return str(raw.get("code") or "unknown"), str(raw.get("error_subcode") or "unknown")
+        return "unknown", "unknown", "unknown"
+    message = str(raw.get("message") or "unknown").replace("\n", " ")
+    for secret in secrets:
+        if secret:
+            message = message.replace(secret, "[redacted]")
+    return (
+        str(raw.get("code") or "unknown"),
+        str(raw.get("error_subcode") or "unknown"),
+        message[:500],
+    )
 
 
 def _subscription_app_ids(response: httpx.Response) -> list[str]:
@@ -78,19 +87,37 @@ def main() -> int:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        # A WABA callback override is scoped to the application that owns the
-        # access token. Verify that identity first so a token from a different
-        # Meta app cannot mutate the wrong subscription.
+        try:
+            verification = httpx.get(
+                _TARGET_CALLBACK_URL,
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": verify_token,
+                    "hub.challenge": _VERIFY_CHALLENGE,
+                },
+                timeout=30.0,
+            )
+        except httpx.HTTPError:
+            print("canonical_webhook_verification=FAIL reason=callback_unreachable")
+            return 3
+        if verification.status_code != 200 or verification.text.strip() != _VERIFY_CHALLENGE:
+            print(
+                "canonical_webhook_verification=FAIL "
+                f"status={verification.status_code} challenge_match={verification.text.strip() == _VERIFY_CHALLENGE}"
+            )
+            return 3
+        print("canonical_webhook_verification=PASS")
+
         try:
             token_app_response = httpx.get(_graph_url("app"), headers=headers, timeout=30.0)
         except httpx.HTTPError:
             print("meta_token_app_readback=FAIL reason=meta_get_unreachable")
             return 3
         if token_app_response.status_code >= 400:
-            code, subcode = _error_details(token_app_response)
+            code, subcode, message = _error_details(token_app_response, token, verify_token)
             print(
                 "meta_token_app_readback=FAIL reason=meta_get_rejected "
-                f"status={token_app_response.status_code} code={code} subcode={subcode}"
+                f"status={token_app_response.status_code} code={code} subcode={subcode} message={message}"
             )
             return 3
         token_app_payload = token_app_response.json()
@@ -107,10 +134,10 @@ def main() -> int:
             print("meta_waba_baseline_subscribe=FAIL reason=meta_post_unreachable")
             return 3
         if baseline.status_code >= 400:
-            code, subcode = _error_details(baseline)
+            code, subcode, message = _error_details(baseline, token, verify_token)
             print(
                 "meta_waba_baseline_subscribe=FAIL reason=meta_post_rejected "
-                f"status={baseline.status_code} code={code} subcode={subcode}"
+                f"status={baseline.status_code} code={code} subcode={subcode} message={message}"
             )
             return 3
         print("meta_waba_baseline_subscribe=PASS")
@@ -121,10 +148,10 @@ def main() -> int:
             print("meta_waba_subscription_readback=FAIL reason=meta_get_unreachable")
             return 3
         if baseline_readback.status_code >= 400:
-            code, subcode = _error_details(baseline_readback)
+            code, subcode, message = _error_details(baseline_readback, token, verify_token)
             print(
                 "meta_waba_subscription_readback=FAIL reason=meta_get_rejected "
-                f"status={baseline_readback.status_code} code={code} subcode={subcode}"
+                f"status={baseline_readback.status_code} code={code} subcode={subcode} message={message}"
             )
             return 3
         subscribed_app_ids = _subscription_app_ids(baseline_readback)
@@ -148,10 +175,10 @@ def main() -> int:
             print("meta_callback_cutover=FAIL reason=meta_post_unreachable")
             return 3
         if response.status_code >= 400:
-            code, subcode = _error_details(response)
+            code, subcode, message = _error_details(response, token, verify_token)
             print(
                 "meta_callback_cutover=FAIL reason=meta_post_rejected "
-                f"status={response.status_code} code={code} subcode={subcode}"
+                f"status={response.status_code} code={code} subcode={subcode} message={message}"
             )
             return 3
         print("meta_callback_cutover_post=PASS")
@@ -162,10 +189,10 @@ def main() -> int:
             print("meta_callback_readback=FAIL reason=meta_get_unreachable")
             return 4
         if readback.status_code >= 400:
-            code, subcode = _error_details(readback)
+            code, subcode, message = _error_details(readback, token, verify_token)
             print(
                 "meta_callback_readback=FAIL reason=meta_get_rejected "
-                f"status={readback.status_code} code={code} subcode={subcode}"
+                f"status={readback.status_code} code={code} subcode={subcode} message={message}"
             )
             return 4
 
