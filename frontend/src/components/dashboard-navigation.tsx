@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Banknote,
   BarChart3,
@@ -26,6 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const demoEnabled = process.env.NEXT_PUBLIC_TIA_DEMO_ENABLED === "true";
+const inboxPollIntervalMs = 15_000;
 
 const primaryItems = [
   { href: "/dashboard", label: "الرئيسية", icon: Sparkles },
@@ -50,12 +51,88 @@ const adminItems = [
 
 const mobilePrimaryHrefs = new Set(["/dashboard", "/inbox", "/appointments", "/patients"]);
 
+type InboxSummary = {
+  unread_conversations: number;
+};
+
 function activeFor(pathname: string, href: string) {
   if (href === "/dashboard") return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function DesktopNavItem({ href, label, Icon, active }: { href: string; label: string; Icon: typeof Sparkles; active: boolean }) {
+function useInboxUnreadCount(mediaQuery: string) {
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    const media = window.matchMedia(mediaQuery);
+    let cancelled = false;
+
+    const refresh = async () => {
+      if (cancelled || !media.matches || document.visibilityState !== "visible") return;
+
+      try {
+        const response = await fetch("/api/inbox/summary", { cache: "no-store" });
+        if (!response.ok) return;
+
+        const summary = (await response.json()) as InboxSummary;
+        if (!cancelled && Number.isFinite(summary.unread_conversations)) {
+          setUnreadCount(Math.max(0, Math.trunc(summary.unread_conversations)));
+        }
+      } catch {
+        // Keep the last known count when the lightweight status refresh fails.
+      }
+    };
+
+    const refreshWhenRelevant = () => {
+      if (media.matches && document.visibilityState === "visible") void refresh();
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => void refresh(), inboxPollIntervalMs);
+    media.addEventListener("change", refreshWhenRelevant);
+    document.addEventListener("visibilitychange", refreshWhenRelevant);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      media.removeEventListener("change", refreshWhenRelevant);
+      document.removeEventListener("visibilitychange", refreshWhenRelevant);
+    };
+  }, [mediaQuery]);
+
+  return unreadCount;
+}
+
+function InboxUnreadBadge({ count, compact = false }: { count: number; compact?: boolean }) {
+  if (count <= 0) return null;
+
+  const text = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      aria-label={count > 99 ? "أكثر من 99 محادثة غير مقروءة" : `${count} محادثة غير مقروءة`}
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-full bg-rose-600 font-black leading-none text-white shadow-sm",
+        compact ? "absolute -left-2 -top-2 min-w-4 px-1 py-0.5 text-[9px]" : "min-w-5 px-1.5 py-1 text-[10px]",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
+function DesktopNavItem({
+  href,
+  label,
+  Icon,
+  active,
+  unreadCount = 0,
+}: {
+  href: string;
+  label: string;
+  Icon: typeof Sparkles;
+  active: boolean;
+  unreadCount?: number;
+}) {
   return (
     <Link
       href={href}
@@ -67,19 +144,29 @@ function DesktopNavItem({ href, label, Icon, active }: { href: string; label: st
     >
       {active && <span className="absolute right-0 h-5 w-1 rounded-l-full bg-teal-700" />}
       <Icon size={18} strokeWidth={active ? 2.1 : 1.8} className={active ? "text-teal-700" : "text-slate-500 group-hover:text-slate-700"} />
-      {label}
+      <span className="min-w-0 flex-1">{label}</span>
+      <InboxUnreadBadge count={unreadCount} />
     </Link>
   );
 }
 
 export function DesktopNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
+  const unreadCount = useInboxUnreadCount("(min-width: 1024px)");
+
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-5 scrollbar-thin" aria-label="التنقل الرئيسي">
       <div className="px-3 pb-2 text-[10px] font-black tracking-[0.08em] text-slate-400">العمل اليومي</div>
       <div className="space-y-1">
         {primaryItems.map(({ href, label, icon }) => (
-          <DesktopNavItem key={href} href={href} label={label} Icon={icon} active={activeFor(pathname, href)} />
+          <DesktopNavItem
+            key={href}
+            href={href}
+            label={label}
+            Icon={icon}
+            active={activeFor(pathname, href)}
+            unreadCount={href === "/inbox" ? unreadCount : 0}
+          />
         ))}
       </div>
 
@@ -120,6 +207,7 @@ function MobileNavLink({ href, label, Icon, onNavigate }: { href: string; label:
 export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const unreadCount = useInboxUnreadCount("(max-width: 1023px)");
   const mobilePrimary = primaryItems.filter((item) => mobilePrimaryHrefs.has(item.href));
   const morePrimary = primaryItems.filter((item) => !mobilePrimaryHrefs.has(item.href));
   const moreActive = [...morePrimary, ...(isAdmin ? adminItems : [])].some((item) => activeFor(pathname, item.href));
@@ -144,7 +232,10 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
                 active ? "bg-teal-50 text-teal-800" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
               )}
             >
-              <Icon size={18} strokeWidth={active ? 2.2 : 1.8} />
+              <span className="relative inline-flex">
+                <Icon size={18} strokeWidth={active ? 2.2 : 1.8} />
+                {href === "/inbox" && <InboxUnreadBadge count={unreadCount} compact />}
+              </span>
               <span className="max-w-full truncate">{label}</span>
             </Link>
           );
