@@ -31,6 +31,7 @@ class WorkspaceAccessRead(BaseModel):
     workspace_name: str
     workspace_slug: str
     role: WorkspaceRole
+    is_demo: bool = False
 
 
 class MeRead(BaseModel):
