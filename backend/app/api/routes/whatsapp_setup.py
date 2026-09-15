@@ -19,6 +19,7 @@ from app.schemas.whatsapp_setup import (
     WhatsAppDirectConnectResult,
     WhatsAppSetupState,
 )
+from app.services.meta_whatsapp_media import ingest_meta_media_webhook
 from app.services.meta_whatsapp_onboarding import (
     MetaWhatsAppConfigurationError,
     MetaWhatsAppConflictError,
@@ -126,8 +127,9 @@ async def whatsapp_meta_webhook_receive(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook JSON.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook payload.")
+    media_result = ingest_meta_media_webhook(db, connection=connection, payload=payload)
     result = ingest_meta_webhook(db, payload)
-    return {"received": True, **result}
+    return {"received": True, **result, **media_result}
 
 
 def _require_transport_worker(
