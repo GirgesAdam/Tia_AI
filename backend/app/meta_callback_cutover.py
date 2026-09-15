@@ -63,6 +63,30 @@ def _subscription_app_ids(response: httpx.Response) -> list[str]:
     return result
 
 
+def _app_whatsapp_fields(response: httpx.Response) -> list[str]:
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    result: list[str] = []
+    for item in data:
+        if not isinstance(item, dict) or item.get("object") != "whatsapp_business_account":
+            continue
+        fields = item.get("fields")
+        if not isinstance(fields, list):
+            continue
+        for field in fields:
+            if isinstance(field, str):
+                name = field.strip()
+            elif isinstance(field, dict):
+                name = str(field.get("name") or "").strip()
+            else:
+                name = ""
+            if name:
+                result.append(name)
+    return result
+
+
 def main() -> int:
     with SessionLocal() as db:
         connection = db.get(ChannelConnection, _CONNECTION_ID)
@@ -125,6 +149,32 @@ def main() -> int:
         print(f"meta_token_app_readback=PASS app_id={token_app_id or 'unknown'} matches_config={token_app_id == app_id}")
         if token_app_id != app_id:
             print("meta_callback_cutover=FAIL reason=token_app_mismatch")
+            return 3
+
+        try:
+            app_subscriptions = httpx.get(
+                _graph_url(f"{app_id}/subscriptions"),
+                headers=headers,
+                timeout=30.0,
+            )
+        except httpx.HTTPError:
+            print("meta_app_subscription_readback=FAIL reason=meta_get_unreachable")
+            return 3
+        if app_subscriptions.status_code >= 400:
+            code, subcode, message = _error_details(app_subscriptions, token, verify_token)
+            print(
+                "meta_app_subscription_readback=FAIL reason=meta_get_rejected "
+                f"status={app_subscriptions.status_code} code={code} subcode={subcode} message={message}"
+            )
+            return 3
+        app_whatsapp_fields = _app_whatsapp_fields(app_subscriptions)
+        print(
+            "meta_app_subscription_readback=PASS "
+            f"whatsapp_messages_subscribed={'messages' in app_whatsapp_fields} "
+            f"whatsapp_field_names={','.join(sorted(set(app_whatsapp_fields))) or 'none'}"
+        )
+        if "messages" not in app_whatsapp_fields:
+            print("meta_callback_cutover=FAIL reason=app_messages_field_not_subscribed")
             return 3
 
         endpoint = _graph_url(f"{waba_id}/subscribed_apps")
