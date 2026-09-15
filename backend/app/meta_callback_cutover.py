@@ -76,9 +76,31 @@ def main() -> int:
             print("meta_callback_cutover=FAIL reason=credential_decrypt_failed")
             return 2
 
-        endpoint = _graph_url(f"{waba_id}/subscribed_apps")
         headers = {"Authorization": f"Bearer {token}"}
 
+        # A WABA callback override is scoped to the application that owns the
+        # access token. Verify that identity first so a token from a different
+        # Meta app cannot mutate the wrong subscription.
+        try:
+            token_app_response = httpx.get(_graph_url("app"), headers=headers, timeout=30.0)
+        except httpx.HTTPError:
+            print("meta_token_app_readback=FAIL reason=meta_get_unreachable")
+            return 3
+        if token_app_response.status_code >= 400:
+            code, subcode = _error_details(token_app_response)
+            print(
+                "meta_token_app_readback=FAIL reason=meta_get_rejected "
+                f"status={token_app_response.status_code} code={code} subcode={subcode}"
+            )
+            return 3
+        token_app_payload = token_app_response.json()
+        token_app_id = str(token_app_payload.get("id") or "").strip() if isinstance(token_app_payload, dict) else ""
+        print(f"meta_token_app_readback=PASS app_id={token_app_id or 'unknown'} matches_config={token_app_id == app_id}")
+        if token_app_id != app_id:
+            print("meta_callback_cutover=FAIL reason=token_app_mismatch")
+            return 3
+
+        endpoint = _graph_url(f"{waba_id}/subscribed_apps")
         try:
             baseline = httpx.post(endpoint, headers=headers, timeout=30.0)
         except httpx.HTTPError:
