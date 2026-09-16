@@ -3,7 +3,7 @@ import { Bot, CalendarCheck2, MessagesSquare, ShieldCheck } from "lucide-react";
 
 import { SubmitButton } from "@/components/submit-button";
 import { Input } from "@/components/ui/input";
-import { demoLoginAction, loginAction } from "./actions";
+import { loginAction } from "./actions";
 
 export default async function LoginPage({
   searchParams,
@@ -11,7 +11,6 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
   const { error, next } = await searchParams;
-  const demoEnabled = process.env.TIA_DEMO_ENABLED === "true";
   const continuing = Boolean(next && next.startsWith("/") && !next.startsWith("//"));
 
   return (
@@ -48,20 +47,8 @@ export default async function LoginPage({
             {continuing ? "سجّل الدخول للمتابعة من نفس الصفحة اللي كنت فيها." : "ادخل بحسابك، أو أنشئ حساب جديد لو دي أول مرة تستخدم Tia."}
           </p>
           {error && <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          {demoEnabled && (
-            <form action={demoLoginAction} className="mt-7">
-              <SubmitButton type="submit" className="w-full" size="lg" pendingLabel="جارٍ فتح النسخة التجريبية...">
-                <Bot size={18} /> جرّب نسخة الـAdmin Demo
-              </SubmitButton>
-              <p className="mt-2 text-center text-xs leading-5 text-[var(--muted)]">
-                دخول فوري إلى عيادة تجريبية معزولة — بدون الحاجة لبيانات تسجيل.
-              </p>
-            </form>
-          )}
 
-          {demoEnabled && <div className="my-5 flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" />أو حسابك<span className="h-px flex-1 bg-slate-200" /></div>}
-
-          <form action={loginAction} className={demoEnabled ? "space-y-4" : "mt-7 space-y-4"}>
+          <form action={loginAction} className="mt-7 space-y-4">
             {continuing && <input type="hidden" name="next" value={next} />}
             <label className="block space-y-2">
               <span className="text-sm font-semibold">البريد الإلكتروني</span>
