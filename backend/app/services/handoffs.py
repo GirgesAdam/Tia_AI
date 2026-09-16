@@ -30,6 +30,7 @@ from app.services.conversation_ownership import (
     transfer_to_human,
 )
 from app.services.handoff_intelligence import merge_handoff_context
+from app.services.whatsapp_customer_service import freeform_reply_window_open
 
 
 class HandoffStateError(ValueError):
@@ -274,8 +275,6 @@ def create_handoff(
     return handoff
 
 
-
-
 def _ensure_handoff_context(
     *,
     handoff: HandoffRequest,
@@ -440,6 +439,15 @@ def add_staff_reply(
     content = content.strip()
     if not content:
         raise HandoffStateError("Message cannot be empty.")
+    if conversation.channel == "whatsapp" and not freeform_reply_window_open(
+        db,
+        workspace_id=handoff.workspace_id,
+        conversation_id=conversation.id,
+    ):
+        raise HandoffStateError(
+            "WhatsApp's 24-hour customer-service window is closed. "
+            "Send an approved follow-up template instead."
+        )
 
     _quiesce_ai_before_staff(db, conversation=conversation)
     mark_conversation_read(conversation)
