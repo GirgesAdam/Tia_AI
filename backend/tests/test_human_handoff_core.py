@@ -43,6 +43,7 @@ def _conversation(**overrides: object) -> SimpleNamespace:
         "id": uuid4(),
         "workspace_id": workspace_id,
         "patient_id": patient_id,
+        "channel": "web",
         "owner_type": "ai",
         "status": "open",
         "assigned_user_id": None,
