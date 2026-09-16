@@ -16,11 +16,14 @@ import {
   assignHandoff,
   claimHandoff,
   resolveHandoff,
+  sendWhatsappFollowup,
   takeOverConversation,
 } from "../actions";
 import { ConversationScroll } from "./conversation-scroll";
 import { InboxMessageBody } from "./media-message";
 import { InboxReplyForm } from "./reply-form";
+
+const WHATSAPP_FREEFORM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const categoryLabels: Record<string, string> = {
   customer_request: "طلب من العميل",
@@ -49,12 +52,25 @@ function contextString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function freeformReplyAllowed(conversation: InboxConversation) {
+  if (conversation.channel !== "whatsapp") return true;
+  for (let index = conversation.messages.length - 1; index >= 0; index -= 1) {
+    const message = conversation.messages[index];
+    if (message.sender_type !== "patient" || message.direction !== "inbound") continue;
+    const inboundAt = Date.parse(message.created_at);
+    return Number.isFinite(inboundAt) && Date.now() < inboundAt + WHATSAPP_FREEFORM_WINDOW_MS;
+  }
+  return false;
+}
+
 export default async function ConversationPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ conversationId: string }>;
+  searchParams: Promise<{ followup?: string }>;
 }) {
-  const { conversationId } = await params;
+  const [{ conversationId }, query] = await Promise.all([params, searchParams]);
   const [conversation, ctx] = await Promise.all([
     tiaRequest<InboxConversation>(`/inbox/conversations/${conversationId}`),
     getAppContext(),
@@ -73,6 +89,8 @@ export default async function ConversationPage({
   );
   const latestCustomerMessage = contextString(handoff?.context_json?.latest_customer_message);
   const patientName = `${conversation.patient.first_name} ${conversation.patient.last_name || ""}`.trim();
+  const canSendFreeform = freeformReplyAllowed(conversation);
+  const followupState = query.followup === "pending" || query.followup === "unavailable" ? query.followup : null;
 
   return (
     <>
@@ -160,6 +178,29 @@ export default async function ConversationPage({
                   <form action={takeOverConversation}>
                     <input type="hidden" name="conversation_id" value={conversation.id} />
                     <Button size="sm">استلام المحادثة</Button>
+                  </form>
+                </div>
+              ) : handoff && assignedToMe && conversation.channel === "whatsapp" && !canSendFreeform ? (
+                <div className="space-y-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-950">
+                  <div>
+                    <div className="font-bold">انتهت نافذة واتساب للرد الحر بعد 24 ساعة.</div>
+                    <p className="mt-1 leading-6 text-amber-900">
+                      بدل إرسال رسالة حرة قد ترفضها Meta، استخدم رسالة متابعة معتمدة. بعد ما العميل يرد، تقدر تكمل المحادثة بشكل طبيعي.
+                    </p>
+                  </div>
+                  {followupState === "pending" && (
+                    <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2 text-xs font-semibold leading-5">
+                      Tia طلبت قالب المتابعة من Meta. الإرسال هيتاح بمجرد اعتماد القالب، من غير ما يعطل باقي واتساب أو الـAutomations.
+                    </div>
+                  )}
+                  {followupState === "unavailable" && (
+                    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-800">
+                      رسالة المتابعة المعتمدة غير متاحة حاليًا. راجع ربط واتساب وموافقة العميل قبل المحاولة مرة أخرى.
+                    </div>
+                  )}
+                  <form action={sendWhatsappFollowup}>
+                    <input type="hidden" name="conversation_id" value={conversation.id} />
+                    <Button size="sm">إرسال متابعة معتمدة</Button>
                   </form>
                 </div>
               ) : handoff && assignedToMe ? (
