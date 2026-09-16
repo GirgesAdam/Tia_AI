@@ -154,6 +154,12 @@ def inbox_pg() -> InboxPgFixture:
         yield fixture
     finally:
         with SessionLocal() as db:
+            db.execute(
+                delete(MessageDispatch).where(
+                    MessageDispatch.workspace_id == fixture.workspace_id
+                )
+            )
+            db.execute(delete(Message).where(Message.workspace_id == fixture.workspace_id))
             db.execute(delete(Workspace).where(Workspace.id == fixture.workspace_id))
             db.commit()
             db.execute(

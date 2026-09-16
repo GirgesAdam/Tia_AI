@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { replyToConversation, type ReplyActionState } from "../actions";
@@ -9,78 +9,88 @@ const initialState: ReplyActionState = { submittedRequestId: null };
 
 export function InboxReplyForm({ conversationId }: { conversationId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
-  const [draft, setDraft] = useState("");
-  const [requestId, setRequestId] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const requestInputRef = useRef<HTMLInputElement>(null);
+  const requestIdRef = useRef<string | null>(null);
   const [state, formAction, isPending] = useActionState(replyToConversation, initialState);
   const storageKey = `tia:inbox-reply:${conversationId}`;
 
-  useEffect(() => {
-    let nextDraft = "";
-    let nextRequestId = crypto.randomUUID();
-    const raw = window.sessionStorage.getItem(storageKey);
-    if (raw) {
-      try {
-        const saved = JSON.parse(raw) as { content?: unknown; requestId?: unknown };
-        if (typeof saved.content === "string") nextDraft = saved.content;
-        if (typeof saved.requestId === "string" && saved.requestId) {
-          nextRequestId = saved.requestId;
-        }
-      } catch {
-        window.sessionStorage.removeItem(storageKey);
-      }
+  const ensureRequestId = () => {
+    let requestId = requestIdRef.current;
+    if (!requestId) {
+      requestId = crypto.randomUUID();
+      requestIdRef.current = requestId;
+      if (requestInputRef.current) requestInputRef.current.value = requestId;
     }
-    setDraft(nextDraft);
-    setRequestId(nextRequestId);
+    return requestId;
+  };
+
+  useEffect(() => {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { content?: unknown; requestId?: unknown };
+      if (typeof saved.content === "string" && textareaRef.current) {
+        textareaRef.current.value = saved.content;
+      }
+      if (typeof saved.requestId === "string" && saved.requestId) {
+        requestIdRef.current = saved.requestId;
+        if (requestInputRef.current) requestInputRef.current.value = saved.requestId;
+      }
+    } catch {
+      window.sessionStorage.removeItem(storageKey);
+    }
   }, [storageKey]);
 
   useEffect(() => {
-    if (!requestId) return;
-    if (!draft) {
-      window.sessionStorage.removeItem(storageKey);
-      return;
-    }
-    window.sessionStorage.setItem(
-      storageKey,
-      JSON.stringify({ content: draft, requestId }),
-    );
-  }, [draft, requestId, storageKey]);
-
-  useEffect(() => {
-    if (!state.submittedRequestId || state.submittedRequestId !== requestId) return;
+    if (!state.submittedRequestId || state.submittedRequestId !== requestIdRef.current) return;
     window.sessionStorage.removeItem(storageKey);
-    setDraft("");
-    setRequestId(crypto.randomUUID());
-  }, [requestId, state.submittedRequestId, storageKey]);
+    if (textareaRef.current) textareaRef.current.value = "";
+    const nextRequestId = crypto.randomUUID();
+    requestIdRef.current = nextRequestId;
+    if (requestInputRef.current) requestInputRef.current.value = nextRequestId;
+  }, [state.submittedRequestId, storageKey]);
 
   return (
     <form ref={formRef} action={formAction} className="flex flex-col gap-3 sm:flex-row">
       <input type="hidden" name="conversation_id" value={conversationId} />
-      <input type="hidden" name="request_id" value={requestId} />
+      <input ref={requestInputRef} type="hidden" name="request_id" />
       <Textarea
+        ref={textareaRef}
         name="content"
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
         placeholder="اكتب ردك للعميل..."
         className="min-h-20 flex-1"
         required
+        onChange={(event) => {
+          const content = event.currentTarget.value;
+          if (!content) {
+            window.sessionStorage.removeItem(storageKey);
+            return;
+          }
+          window.sessionStorage.setItem(
+            storageKey,
+            JSON.stringify({ content, requestId: ensureRequestId() }),
+          );
+        }}
         onKeyDown={(event) => {
           if (
             event.key !== "Enter" ||
             event.shiftKey ||
             event.nativeEvent.isComposing ||
             isPending ||
-            !requestId ||
-            !draft.trim()
+            !event.currentTarget.value.trim()
           ) {
             return;
           }
           event.preventDefault();
+          ensureRequestId();
           formRef.current?.requestSubmit();
         }}
       />
       <Button
         className="self-end"
-        disabled={isPending || !requestId || !draft.trim()}
+        disabled={isPending}
+        onClick={() => ensureRequestId()}
       >
         {isPending ? "جارٍ الإرسال..." : "إرسال الرد"}
       </Button>
