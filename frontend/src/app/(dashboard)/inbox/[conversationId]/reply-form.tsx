@@ -9,7 +9,6 @@ const initialState: ReplyActionState = { submittedRequestId: null };
 
 export function InboxReplyForm({ conversationId }: { conversationId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const requestInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef<string | null>(null);
   const [state, formAction, isPending] = useActionState(replyToConversation, initialState);
@@ -30,8 +29,9 @@ export function InboxReplyForm({ conversationId }: { conversationId: string }) {
     if (!raw) return;
     try {
       const saved = JSON.parse(raw) as { content?: unknown; requestId?: unknown };
-      if (typeof saved.content === "string" && textareaRef.current) {
-        textareaRef.current.value = saved.content;
+      const contentField = formRef.current?.elements.namedItem("content");
+      if (typeof saved.content === "string" && contentField instanceof HTMLTextAreaElement) {
+        contentField.value = saved.content;
       }
       if (typeof saved.requestId === "string" && saved.requestId) {
         requestIdRef.current = saved.requestId;
@@ -45,7 +45,8 @@ export function InboxReplyForm({ conversationId }: { conversationId: string }) {
   useEffect(() => {
     if (!state.submittedRequestId || state.submittedRequestId !== requestIdRef.current) return;
     window.sessionStorage.removeItem(storageKey);
-    if (textareaRef.current) textareaRef.current.value = "";
+    const contentField = formRef.current?.elements.namedItem("content");
+    if (contentField instanceof HTMLTextAreaElement) contentField.value = "";
     const nextRequestId = crypto.randomUUID();
     requestIdRef.current = nextRequestId;
     if (requestInputRef.current) requestInputRef.current.value = nextRequestId;
@@ -56,7 +57,6 @@ export function InboxReplyForm({ conversationId }: { conversationId: string }) {
       <input type="hidden" name="conversation_id" value={conversationId} />
       <input ref={requestInputRef} type="hidden" name="request_id" />
       <Textarea
-        ref={textareaRef}
         name="content"
         placeholder="اكتب ردك للعميل..."
         className="min-h-20 flex-1"
