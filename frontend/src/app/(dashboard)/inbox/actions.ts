@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { tiaRequest } from "@/lib/tia/api";
 
 function revalidateConversation(conversationId: string) {
@@ -48,6 +49,30 @@ export async function replyToConversation(formData: FormData) {
     body: JSON.stringify({ content }),
   });
   revalidateConversation(conversationId);
+}
+
+type StaffWhatsappFollowupResult = {
+  status: "queued" | "template_pending" | "unavailable";
+  conversation_id: string;
+};
+
+export async function sendWhatsappFollowup(formData: FormData) {
+  const conversationId = String(formData.get("conversation_id") || "").trim();
+  if (!conversationId) return;
+
+  const result = await tiaRequest<StaffWhatsappFollowupResult>(
+    `/inbox/conversations/${conversationId}/whatsapp-followup`,
+    { method: "POST" },
+  );
+  revalidateConversation(conversationId);
+
+  if (result.status === "template_pending") {
+    redirect(`/inbox/${conversationId}?followup=pending`);
+  }
+  if (result.status === "unavailable") {
+    redirect(`/inbox/${conversationId}?followup=unavailable`);
+  }
+  redirect(`/inbox/${conversationId}`);
 }
 
 export async function resolveHandoff(formData: FormData) {
