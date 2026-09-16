@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, MessageSquareMore, Search, UserRound } from "lucide-react";
+import { AlertTriangle, Bot, MessageSquareMore, Search, UserRound } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { LiveRouteRefresh } from "@/components/live-route-refresh";
@@ -13,6 +13,20 @@ import { tiaRequest } from "@/lib/tia/api";
 import type { InboxConversationListItem } from "@/lib/types";
 
 type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string; q?: string };
+
+type InboxChannelConnection = {
+  channel: string;
+  provider: string;
+  status: string;
+  updated_at: string;
+  config_json?: Record<string, unknown>;
+};
+
+type DeliveryHealthNotice = {
+  tone: "amber" | "red";
+  title: string;
+  message: string;
+};
 
 const ownerOptions = [["", "الكل"], ["human", "الفريق"], ["ai", "Tia"]] as const;
 const statusOptions = [["", "كل الحالات"], ["open", "مفتوحة"], ["pending", "بانتظار رد"], ["closed", "مغلقة"]] as const;
@@ -34,6 +48,60 @@ function senderLabel(senderType?: string) {
   return "رسالة";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function deliveryHealthNotice(connections: InboxChannelConnection[]): DeliveryHealthNotice | null {
+  const connection = [...connections]
+    .filter(
+      (item) =>
+        item.channel === "whatsapp" &&
+        item.provider === "meta_cloud" &&
+        item.status !== "disconnected",
+    )
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
+
+  if (!connection) return null;
+
+  const providerHealth = asRecord(connection.config_json?.provider_health);
+  if (!providerHealth) return null;
+
+  const state = String(providerHealth.state || "");
+  const errorCode = String(providerHealth.current_error_code || "");
+  const actionRequired = String(providerHealth.action_required || "");
+
+  if (actionRequired === "reconnect_meta" || errorCode === "190") {
+    return {
+      tone: "red",
+      title: "إرسال واتساب يحتاج تدخل الإدارة",
+      message: "اتصال Meta يحتاج إعادة ربط. الرسائل الجديدة قد تفشل لحد ما مدير العيادة يعيد ربط الحساب.",
+    };
+  }
+
+  if (
+    actionRequired === "meta_account_review" ||
+    state === "disabled" ||
+    errorCode === "131031"
+  ) {
+    return {
+      tone: "red",
+      title: "Meta أوقفت أو قيّدت حساب واتساب",
+      message: "مدير العيادة يحتاج يراجع حالة الحساب في Meta قبل ما إرسال واتساب يرجع يشتغل بصورة طبيعية.",
+    };
+  }
+
+  if (state === "degraded") {
+    return {
+      tone: "amber",
+      title: "اتصال واتساب غير مستقر مؤقتًا",
+      message: "قد تتأخر أو تفشل بعض الرسائل الجديدة أثناء مشكلة الاتصال الحالية مع Meta.",
+    };
+  }
+
+  return null;
+}
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<InboxSearchParams> }) {
   const raw = await searchParams;
@@ -52,7 +120,11 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   if (filters.unread) query.set("unread_only", "true");
   if (filters.q) query.set("q", filters.q);
 
-  const conversations = await tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`);
+  const [conversations, channelConnections] = await Promise.all([
+    tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`),
+    tiaRequest<InboxChannelConnection[]>("/channels/connections").catch(() => []),
+  ]);
+  const deliveryHealth = deliveryHealthNotice(channelConnections);
 
   return (
     <>
@@ -61,6 +133,23 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         title="الرسائل"
         description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Tia والمحادثات التي تحتاج تدخل الفريق."
       />
+
+      {deliveryHealth && (
+        <div
+          role="status"
+          className={`mb-4 flex gap-3 rounded-2xl border p-4 text-sm ${
+            deliveryHealth.tone === "red"
+              ? "border-rose-200 bg-rose-50 text-rose-950"
+              : "border-amber-200 bg-amber-50 text-amber-950"
+          }`}
+        >
+          <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+          <div>
+            <div className="font-black">{deliveryHealth.title}</div>
+            <p className="mt-1 leading-6">{deliveryHealth.message}</p>
+          </div>
+        </div>
+      )}
 
       <form action="/inbox" method="get" className="mb-4 flex flex-col gap-2 sm:flex-row">
         {filters.owner && <input type="hidden" name="owner" value={filters.owner} />}
