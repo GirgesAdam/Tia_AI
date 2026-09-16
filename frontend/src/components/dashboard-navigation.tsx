@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   Banknote,
   BarChart3,
-  BotMessageSquare,
   CalendarDays,
   ContactRound,
   History,
@@ -25,7 +24,6 @@ import {
 
 import { cn } from "@/lib/utils";
 
-const demoEnabled = process.env.NEXT_PUBLIC_TIA_DEMO_ENABLED === "true";
 const inboxPollIntervalMs = 15_000;
 
 const primaryItems = [
@@ -37,7 +35,6 @@ const primaryItems = [
   { href: "/tasks", label: "المتابعات", icon: ListTodo },
   { href: "/analytics", label: "التقارير", icon: BarChart3 },
   { href: "/finance", label: "المالية", icon: Banknote },
-  ...(demoEnabled ? [{ href: "/agent-demo", label: "اختبر Tia", icon: BotMessageSquare }] : []),
 ] as const;
 
 const adminItems = [
