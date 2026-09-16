@@ -19,6 +19,7 @@ import {
   takeOverConversation,
 } from "../actions";
 import { ConversationScroll } from "./conversation-scroll";
+import { InboxMessageBody } from "./media-message";
 import { InboxReplyForm } from "./reply-form";
 
 const categoryLabels: Record<string, string> = {
@@ -113,9 +114,7 @@ export default async function ConversationPage({
                         {isAi ? <Bot size={12} /> : <UserRound size={12} />}
                         {senderLabel(message.sender_type)}
                       </div>
-                      <div className="whitespace-pre-wrap text-sm leading-6">
-                        {message.content || "رسالة بدون نص"}
-                      </div>
+                      <InboxMessageBody message={message} />
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted)]">
                         <span>{formatDateTime(message.created_at)}</span>
                         {message.direction === "outbound" && (

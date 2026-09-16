@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.message import Message
@@ -33,6 +37,10 @@ _MEDIA_METADATA_KEYS = (
 )
 
 
+class MetaWhatsAppMediaError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class MetaMediaInbound:
     external_event_id: str
@@ -44,6 +52,122 @@ class MetaMediaInbound:
     message_type: str
     content: str | None
     metadata: dict[str, Any]
+
+
+@dataclass
+class MetaMediaStream:
+    client: httpx.Client
+    response: httpx.Response
+    status_code: int
+    content_type: str
+    content_length: str | None
+    content_range: str | None
+    accept_ranges: str | None
+
+    def iter_bytes(self) -> Iterator[bytes]:
+        try:
+            yield from self.response.iter_bytes()
+        finally:
+            self.response.close()
+            self.client.close()
+
+
+def _graph_url(path: str) -> str:
+    version = str(meta_whatsapp_settings.meta_graph_api_version or "").strip()
+    if not version:
+        raise MetaWhatsAppMediaError("Meta Graph API version is not configured.")
+    normalized = version if version.startswith("v") else f"v{version}"
+    return f"https://graph.facebook.com/{normalized}/{path.lstrip('/')}"
+
+
+def _provider_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"Meta media request failed with HTTP {response.status_code}."
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        return str(payload["error"].get("message") or "Meta media request failed.")[:2000]
+    return f"Meta media request failed with HTTP {response.status_code}."
+
+
+def _safe_download_url(value: object) -> str:
+    raw = str(value or "").strip()
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise MetaWhatsAppMediaError("Meta returned an invalid media download URL.")
+    return raw
+
+
+def _safe_range_header(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if len(raw) > 200 or not raw.lower().startswith("bytes="):
+        return None
+    return raw
+
+
+def open_meta_media_stream(
+    *,
+    access_token: str,
+    media_id: str,
+    phone_number_id: str,
+    expected_mime_type: str | None = None,
+    range_header: str | None = None,
+) -> MetaMediaStream:
+    token = access_token.strip()
+    clean_media_id = media_id.strip()
+    clean_phone_number_id = phone_number_id.strip()
+    if not token or not clean_media_id or not clean_phone_number_id:
+        raise MetaWhatsAppMediaError("WhatsApp media lookup is missing required provider data.")
+
+    client = httpx.Client(
+        timeout=httpx.Timeout(60.0, connect=15.0),
+        follow_redirects=False,
+    )
+    try:
+        metadata_response = client.get(
+            _graph_url(clean_media_id),
+            params={"phone_number_id": clean_phone_number_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if metadata_response.status_code >= 400:
+            raise MetaWhatsAppMediaError(_provider_error(metadata_response))
+        payload = metadata_response.json()
+        if not isinstance(payload, dict):
+            raise MetaWhatsAppMediaError("Meta returned an invalid media metadata response.")
+        download_url = _safe_download_url(payload.get("url"))
+
+        headers = {"Authorization": f"Bearer {token}"}
+        safe_range = _safe_range_header(range_header)
+        if safe_range:
+            headers["Range"] = safe_range
+        request = client.build_request("GET", download_url, headers=headers)
+        response = client.send(request, stream=True)
+        if response.status_code >= 400 or response.status_code not in {200, 206}:
+            response.read()
+            message = _provider_error(response)
+            response.close()
+            raise MetaWhatsAppMediaError(message)
+
+        provider_mime = str(payload.get("mime_type") or "").strip()
+        response_mime = str(response.headers.get("content-type") or "").strip()
+        content_type = response_mime or provider_mime or str(expected_mime_type or "").strip()
+        if not content_type:
+            content_type = "application/octet-stream"
+
+        return MetaMediaStream(
+            client=client,
+            response=response,
+            status_code=response.status_code,
+            content_type=content_type,
+            content_length=response.headers.get("content-length"),
+            content_range=response.headers.get("content-range"),
+            accept_ranges=response.headers.get("accept-ranges"),
+        )
+    except Exception:
+        client.close()
+        raise
 
 
 def _display_name_for_sender(contacts: list[Any], sender: str) -> str | None:
