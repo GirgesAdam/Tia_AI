@@ -38,6 +38,13 @@ function senderLabel(senderType: string) {
   return "العيادة";
 }
 
+function deliveryLabel(status: string) {
+  if (status === "failed") return "فشل الإرسال";
+  if (status === "queued") return "بانتظار الإرسال";
+  if (status === "processing") return "جارٍ الإرسال";
+  return labelForStatus(status);
+}
+
 function contextString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -103,22 +110,34 @@ export default async function ConversationPage({
               {conversation.messages.map((message) => {
                 const incoming = message.sender_type === "patient";
                 const isAi = message.sender_type === "ai";
+                const deliveryFailed =
+                  message.direction === "outbound" && message.delivery_status === "failed";
                 return (
                   <div key={message.id} className={`flex ${incoming ? "justify-start" : "justify-end"}`}>
                     <div
                       className={`max-w-[88%] rounded-2xl px-4 py-3 sm:max-w-[76%] ${
                         incoming ? "bg-[var(--surface-2)]" : "bg-[#e4f4f1]"
-                      }`}
+                      } ${deliveryFailed ? "ring-1 ring-red-200" : ""}`}
                     >
                       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold text-[var(--muted)]">
                         {isAi ? <Bot size={12} /> : <UserRound size={12} />}
                         {senderLabel(message.sender_type)}
                       </div>
                       <InboxMessageBody message={message} />
+                      {deliveryFailed && (
+                        <div
+                          role="alert"
+                          className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-800"
+                        >
+                          الرسالة لم تصل للعميل، ولا توجد محاولة تلقائية معلّقة. راجع حالة واتساب وبيانات العميل قبل إعادة الإرسال.
+                        </div>
+                      )}
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted)]">
                         <span>{formatDateTime(message.created_at)}</span>
                         {message.direction === "outbound" && (
-                          <span>{labelForStatus(message.delivery_status)}</span>
+                          <Badge tone={toneForStatus(message.delivery_status)}>
+                            {deliveryLabel(message.delivery_status)}
+                          </Badge>
                         )}
                       </div>
                     </div>
