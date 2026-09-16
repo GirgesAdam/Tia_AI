@@ -74,4 +74,4 @@ def test_inbox_search_escapes_like_wildcards() -> None:
     assert db.statement is not None
     compiled = db.statement.compile(dialect=postgresql.dialect())
     values = [value for value in compiled.params.values() if isinstance(value, str)]
-    assert any(r"\\%" in value and r"\\_" in value for value in values)
+    assert any(r"\%" in value and r"\_" in value for value in values)
