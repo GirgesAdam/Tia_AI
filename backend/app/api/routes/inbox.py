@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import (
@@ -187,6 +187,7 @@ def list_inbox_conversations(
     conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
     assigned_to_me: bool = False,
     unread_only: bool = False,
+    q: Annotated[str | None, Query(max_length=120)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[InboxConversationListItem]:
@@ -208,6 +209,26 @@ def list_inbox_conversations(
         stmt = stmt.where(Conversation.assigned_user_id == access.user.id)
     if unread_only:
         stmt = stmt.where(Conversation.unread_count > 0)
+    if q:
+        search = q.strip()
+        if search:
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            conditions = [
+                Patient.first_name.ilike(pattern, escape="\\"),
+                Patient.last_name.ilike(pattern, escape="\\"),
+                func.concat_ws(" ", Patient.first_name, Patient.last_name).ilike(
+                    pattern, escape="\\"
+                ),
+                Patient.phone.ilike(pattern, escape="\\"),
+            ]
+            phone_digits = "".join(character for character in search if character.isdigit())
+            if phone_digits:
+                phone_pattern = f"%{phone_digits}%"
+                conditions.append(
+                    Patient.phone_normalized.ilike(phone_pattern, escape="\\")
+                )
+            stmt = stmt.where(or_(*conditions))
 
     stmt = (
         stmt.order_by(

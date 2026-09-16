@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, MessageSquareMore, UserRound } from "lucide-react";
+import { Bot, MessageSquareMore, Search, UserRound } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { LiveRouteRefresh } from "@/components/live-route-refresh";
@@ -12,7 +12,7 @@ import { labelForChannel, labelForPriority, labelForStatus, toneForStatus } from
 import { tiaRequest } from "@/lib/tia/api";
 import type { InboxConversationListItem } from "@/lib/types";
 
-type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string };
+type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string; q?: string };
 
 const ownerOptions = [["", "الكل"], ["human", "الفريق"], ["ai", "Tia"]] as const;
 const statusOptions = [["", "كل الحالات"], ["open", "مفتوحة"], ["pending", "بانتظار رد"], ["closed", "مغلقة"]] as const;
@@ -42,6 +42,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     status: ["open", "pending", "closed"].includes(raw.status || "") ? raw.status : "",
     mine: raw.mine === "1" ? "1" : "",
     unread: raw.unread === "1" ? "1" : "",
+    q: (raw.q || "").trim().slice(0, 120),
   };
 
   const query = new URLSearchParams({ limit: "100" });
@@ -49,6 +50,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   if (filters.status) query.set("status", filters.status);
   if (filters.mine) query.set("assigned_to_me", "true");
   if (filters.unread) query.set("unread_only", "true");
+  if (filters.q) query.set("q", filters.q);
 
   const conversations = await tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`);
 
@@ -59,6 +61,43 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         title="الرسائل"
         description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Tia والمحادثات التي تحتاج تدخل الفريق."
       />
+
+      <form action="/inbox" method="get" className="mb-4 flex flex-col gap-2 sm:flex-row">
+        {filters.owner && <input type="hidden" name="owner" value={filters.owner} />}
+        {filters.status && <input type="hidden" name="status" value={filters.status} />}
+        {filters.mine && <input type="hidden" name="mine" value={filters.mine} />}
+        {filters.unread && <input type="hidden" name="unread" value={filters.unread} />}
+        <div className="relative min-w-0 flex-1">
+          <Search
+            size={17}
+            aria-hidden="true"
+            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <input
+            type="search"
+            name="q"
+            defaultValue={filters.q}
+            maxLength={120}
+            className="form-control w-full pr-10"
+            placeholder="ابحث باسم العميل أو رقم الموبايل"
+            aria-label="البحث في المحادثات باسم العميل أو رقم الموبايل"
+          />
+        </div>
+        <button
+          type="submit"
+          className="inline-flex h-10 items-center justify-center rounded-xl bg-[var(--accent)] px-5 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)]"
+        >
+          بحث
+        </button>
+        {filters.q && (
+          <Link
+            href={filterHref(filters, "q", "")}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+          >
+            مسح البحث
+          </Link>
+        )}
+      </form>
 
       <div className="surface-toolbar mb-4">
         {ownerOptions.map(([value, label]) => (
@@ -140,7 +179,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
             <EmptyState
               icon={MessageSquareMore}
               title="لا توجد محادثات مطابقة"
-              description="غيّر الفلاتر أو افتح كل المحادثات لعرض نتائج أخرى."
+              description={filters.q ? "جرّب اسمًا أو رقم موبايل مختلفًا، أو امسح البحث لعرض كل المحادثات." : "غيّر الفلاتر أو افتح كل المحادثات لعرض نتائج أخرى."}
             />
           )}
         </CardContent>
