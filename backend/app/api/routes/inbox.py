@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from app.models.conversation import Conversation
 from app.models.handoff_event import HandoffEvent
 from app.models.handoff_request import HandoffRequest
 from app.models.message import Message
+from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
 from app.models.user import User
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
@@ -107,7 +108,6 @@ def _get_conversation(
     if conversation is None:
         raise _not_found("Conversation")
     return conversation
-
 
 
 
@@ -234,6 +234,7 @@ def list_inbox_conversations(
         stmt.order_by(
             Conversation.last_message_at.desc().nullslast(),
             Conversation.started_at.desc(),
+            Conversation.id.desc(),
         )
         .limit(limit)
         .offset(offset)
@@ -402,10 +403,11 @@ def get_inbox_conversation(
                 Message.workspace_id == access.workspace.id,
                 Message.conversation_id == conversation.id,
             )
-            .order_by(Message.created_at)
+            .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(500)
         )
     )
+    messages.reverse()
     events = list(
         db.scalars(
             select(HandoffEvent)
@@ -599,6 +601,10 @@ def send_staff_reply(
     payload: StaffReplyRequest,
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", max_length=128),
+    ] = None,
 ) -> StaffReplyResponse:
     conversation = _get_conversation(
         db,
@@ -626,6 +632,42 @@ def send_staff_reply(
             detail="Claim this handoff before replying to the customer.",
         )
 
+    request_key = idempotency_key.strip() if idempotency_key else None
+    if request_key:
+        existing_message = db.scalar(
+            select(Message)
+            .where(
+                Message.workspace_id == access.workspace.id,
+                Message.conversation_id == conversation.id,
+                Message.sender_type == "staff",
+                Message.direction == "outbound",
+                Message.sent_by_user_id == access.user.id,
+                Message.metadata_json.contains({"staff_reply_request_id": request_key}),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        if existing_message is not None:
+            if existing_message.content != payload.content:
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key was already used for a different staff reply.",
+                )
+            existing_dispatch = db.scalar(
+                select(MessageDispatch).where(
+                    MessageDispatch.workspace_id == access.workspace.id,
+                    MessageDispatch.message_id == existing_message.id,
+                )
+            )
+            response = StaffReplyResponse(
+                message=InboxMessageRead.model_validate(existing_message),
+                dispatch_required=existing_dispatch is not None,
+                dispatch_id=existing_dispatch.id if existing_dispatch else None,
+            )
+            db.rollback()
+            return response
+
     try:
         message = add_staff_reply(
             db,
@@ -638,6 +680,12 @@ def send_staff_reply(
     except HandoffStateError as exc:
         db.rollback()
         raise _conflict(exc) from exc
+
+    if request_key:
+        message.metadata_json = {
+            **(message.metadata_json or {}),
+            "staff_reply_request_id": request_key,
+        }
 
     dispatch = queue_message_dispatch(
         db,

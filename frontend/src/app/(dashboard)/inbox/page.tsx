@@ -12,7 +12,8 @@ import { labelForChannel, labelForPriority, labelForStatus, toneForStatus } from
 import { tiaRequest } from "@/lib/tia/api";
 import type { InboxConversationListItem } from "@/lib/types";
 
-type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string; q?: string };
+type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string; q?: string; page?: string };
+type InboxFilters = Omit<InboxSearchParams, "page">;
 
 type InboxChannelConnection = {
   channel: string;
@@ -28,15 +29,26 @@ type DeliveryHealthNotice = {
   message: string;
 };
 
+const PAGE_SIZE = 50;
 const ownerOptions = [["", "الكل"], ["human", "الفريق"], ["ai", "Tia"]] as const;
 const statusOptions = [["", "كل الحالات"], ["open", "مفتوحة"], ["pending", "بانتظار رد"], ["closed", "مغلقة"]] as const;
 
-function filterHref(current: InboxSearchParams, key: keyof InboxSearchParams, value: string) {
+function filterHref(current: InboxFilters, key: keyof InboxFilters, value: string) {
   const params = new URLSearchParams();
   for (const [currentKey, currentValue] of Object.entries(current)) {
     if (currentValue && currentKey !== key) params.set(currentKey, currentValue);
   }
   if (value) params.set(key, value);
+  const query = params.toString();
+  return query ? `/inbox?${query}` : "/inbox";
+}
+
+function pageHref(filters: InboxFilters, page: number) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, value);
+  }
+  if (page > 1) params.set("page", String(page));
   const query = params.toString();
   return query ? `/inbox?${query}` : "/inbox";
 }
@@ -105,25 +117,32 @@ function deliveryHealthNotice(connections: InboxChannelConnection[]): DeliveryHe
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<InboxSearchParams> }) {
   const raw = await searchParams;
-  const filters: InboxSearchParams = {
+  const filters: InboxFilters = {
     owner: raw.owner === "ai" || raw.owner === "human" ? raw.owner : "",
     status: ["open", "pending", "closed"].includes(raw.status || "") ? raw.status : "",
     mine: raw.mine === "1" ? "1" : "",
     unread: raw.unread === "1" ? "1" : "",
     q: (raw.q || "").trim().slice(0, 120),
   };
+  const parsedPage = Number.parseInt(raw.page || "1", 10);
+  const page = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
 
-  const query = new URLSearchParams({ limit: "100" });
+  const query = new URLSearchParams({
+    limit: String(PAGE_SIZE + 1),
+    offset: String((page - 1) * PAGE_SIZE),
+  });
   if (filters.owner) query.set("owner_type", filters.owner);
   if (filters.status) query.set("status", filters.status);
   if (filters.mine) query.set("assigned_to_me", "true");
   if (filters.unread) query.set("unread_only", "true");
   if (filters.q) query.set("q", filters.q);
 
-  const [conversations, channelConnections] = await Promise.all([
+  const [conversationPage, channelConnections] = await Promise.all([
     tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`),
     tiaRequest<InboxChannelConnection[]>("/channels/connections").catch(() => []),
   ]);
+  const hasNextPage = conversationPage.length > PAGE_SIZE;
+  const conversations = conversationPage.slice(0, PAGE_SIZE);
   const deliveryHealth = deliveryHealthNotice(channelConnections);
 
   return (
@@ -273,6 +292,32 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           )}
         </CardContent>
       </Card>
+
+      {(page > 1 || hasNextPage) && (
+        <nav className="mt-4 flex items-center justify-between gap-3" aria-label="صفحات المحادثات">
+          {page > 1 ? (
+            <Link
+              href={pageHref(filters, page - 1)}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              السابق
+            </Link>
+          ) : (
+            <span />
+          )}
+          <span className="text-xs font-semibold text-[var(--muted)]">صفحة {page}</span>
+          {hasNextPage ? (
+            <Link
+              href={pageHref(filters, page + 1)}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-[var(--border)] px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              التالي
+            </Link>
+          ) : (
+            <span />
+          )}
+        </nav>
+      )}
     </>
   );
 }

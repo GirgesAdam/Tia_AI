@@ -40,15 +40,26 @@ export async function takeOverConversation(formData: FormData) {
   revalidateConversation(conversationId);
 }
 
-export async function replyToConversation(formData: FormData) {
+export type ReplyActionState = {
+  submittedRequestId: string | null;
+};
+
+export async function replyToConversation(
+  _previousState: ReplyActionState,
+  formData: FormData,
+): Promise<ReplyActionState> {
   const conversationId = String(formData.get("conversation_id"));
   const content = String(formData.get("content") || "").trim();
-  if (!content) return;
+  const requestId = String(formData.get("request_id") || "").trim();
+  if (!content || !requestId) return { submittedRequestId: null };
+
   await tiaRequest(`/inbox/conversations/${conversationId}/messages`, {
     method: "POST",
+    headers: { "Idempotency-Key": requestId },
     body: JSON.stringify({ content }),
   });
   revalidateConversation(conversationId);
+  return { submittedRequestId: requestId };
 }
 
 type StaffWhatsappFollowupResult = {
