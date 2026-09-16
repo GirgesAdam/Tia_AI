@@ -22,6 +22,7 @@ from app.api.routes.finance import router as finance_router
 from app.api.routes.health import router as health_router
 from app.api.routes.inbox import router as inbox_router
 from app.api.routes.inbox_media import router as inbox_media_router
+from app.api.routes.inbox_outbound import router as inbox_outbound_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.operations import router as operations_router
@@ -58,6 +59,7 @@ api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboar
 api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 api_router.include_router(inbox_router, prefix="/inbox", tags=["inbox"])
 api_router.include_router(inbox_media_router, prefix="/inbox", tags=["inbox"])
+api_router.include_router(inbox_outbound_router, prefix="/inbox", tags=["inbox"])
 api_router.include_router(inventory_router, prefix="/inventory", tags=["inventory"])
 api_router.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(operations_router, prefix="/operations", tags=["operations"])
