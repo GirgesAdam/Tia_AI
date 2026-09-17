@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
+from app.models.automation_worker import AutomationWorker
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
@@ -179,6 +180,13 @@ def _fixture(db: Session, *, demo: bool = True, slug_prefix: str = "demo"):
         adapter_token_hash=(suffix * 7)[:64],
         config_json={"mock": True, "transport_ready": False},
     )
+    worker = AutomationWorker(
+        workspace_id=workspace.id,
+        name="Tia Railway Automation Scheduler",
+        token_hash=uuid4().hex + uuid4().hex,
+        status="active",
+        created_by_user_id=None,
+    )
     db.add_all([
         assignment,
         doctor_service,
@@ -189,6 +197,7 @@ def _fixture(db: Session, *, demo: bool = True, slug_prefix: str = "demo"):
         inventory,
         integration,
         connection,
+        worker,
     ])
     db.flush()
     workspace.primary_branch_id = branch.id
@@ -263,6 +272,7 @@ def _fixture(db: Session, *, demo: bool = True, slug_prefix: str = "demo"):
         "inventory": inventory,
         "integration": integration,
         "connection": connection,
+        "worker": worker,
     }
 
 
@@ -306,6 +316,7 @@ def test_demo_mutations_are_visible_then_reset_restores_canonical_state() -> Non
         member_id = fx["member"].id
         integration_config = dict(fx["integration"].config_json)
         connection_id = fx["connection"].id
+        worker_id = fx["worker"].id
         canonical = _business_signature(db, wid)
         capture_demo_canonical_seed(db, workspace_id=wid)
 
@@ -379,6 +390,7 @@ def test_demo_mutations_are_visible_then_reset_restores_canonical_state() -> Non
         assert db.get(WorkspaceMember, member_id) is not None
         assert db.get(ClinicIntegration, wid).config_json == integration_config
         assert db.get(ChannelConnection, connection_id) is not None
+        assert db.get(AutomationWorker, worker_id) is not None
         assert db.scalar(select(Patient).where(Patient.workspace_id == wid, Patient.first_name == "Temporary")) is None
         assert db.scalar(select(PatientPackage).where(PatientPackage.workspace_id == wid, PatientPackage.name == "Temporary Package")) is None
 

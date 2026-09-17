@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import bindparam, delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.database.base import Base
@@ -31,6 +31,7 @@ DEMO_UUID_NAMESPACE = UUID("8f005f0d-e6b7-4bb0-b3d3-cb45c03af365")
 
 PRESERVE_TABLES = frozenset({
     "analytics_saved_views",
+    "automation_workers",
     "channel_connections",
     "channel_provider_credentials",
     "clinic_integration_sync_schedules",
@@ -75,7 +76,6 @@ CLEAR_TABLES = frozenset({
     "activity_events",
     "agent_actions",
     "automation_jobs",
-    "automation_workers",
     "channel_delivery_events",
     "channel_identities",
     "channel_inbound_events",
@@ -449,22 +449,32 @@ def _restore_deferred_links(
     seed_tables: dict[str, list[dict[str, Any]]],
 ) -> None:
     for table_name, table in tables.items():
-        column_names = _deferred_fk_columns(table)
+        column_names = sorted(_deferred_fk_columns(table))
         if not column_names:
             continue
         if "id" not in table.c:
             raise DemoResetError(
                 f"Deferred-FK table {table_name} has no id column for deterministic restore."
             )
+        params = []
         for encoded in seed_tables.get(table_name, []):
-            row_id = _decode_value(workspace_id, encoded["id"])
-            values = {
-                name: _decode_value(workspace_id, encoded.get(name))
-                for name in column_names
-                if encoded.get(name) is not None
-            }
-            if values:
-                db.execute(update(table).where(table.c.id == row_id).values(**values))
+            params.append(
+                {
+                    "_demo_row_id": _decode_value(workspace_id, encoded["id"]),
+                    **{
+                        f"_demo_{name}": _decode_value(workspace_id, encoded.get(name))
+                        for name in column_names
+                    },
+                }
+            )
+        if not params:
+            continue
+        stmt = (
+            update(table)
+            .where(table.c.id == bindparam("_demo_row_id"))
+            .values(**{name: bindparam(f"_demo_{name}") for name in column_names})
+        )
+        db.execute(stmt, params)
 
 
 def _verify_seed_invariants(
@@ -584,13 +594,16 @@ def _reset_demo_workspace(
     for name in _insert_order(reset_tables):
         table = reset_tables[name]
         deferred_columns = _deferred_fk_columns(table)
+        values_batch = []
         for encoded in seed_tables.get(name, []):
             values = _decode_row(table, workspace.id, encoded)
             for deferred_column in deferred_columns:
                 if deferred_column in values:
                     values[deferred_column] = None
-            db.execute(table.insert().values(**values))
-            inserted += 1
+            values_batch.append(values)
+        if values_batch:
+            db.execute(table.insert(), values_batch)
+            inserted += len(values_batch)
 
     _restore_deferred_links(db, reset_tables, workspace.id, seed_tables)
     primary_branch = seed.get("primary_branch_id")
