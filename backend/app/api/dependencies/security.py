@@ -17,6 +17,7 @@ from app.models.workspace_member import (
     WORKSPACE_ROLE_MEMBER,
     WorkspaceMember,
 )
+from app.services.demo_reset import DemoResetInProgress, acquire_demo_request_lock
 from app.services.supabase_auth import SupabaseAuthError, VerifiedAuthIdentity, verify_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -129,6 +130,16 @@ def get_workspace_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Workspace not found or inactive.",
         )
+
+    try:
+        acquire_demo_request_lock(db, workspace)
+    except DemoResetInProgress as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Demo data is being restored.",
+        ) from exc
+    if workspace.is_demo:
+        db.refresh(workspace)
 
     return WorkspaceAccess(user=user, workspace=workspace, membership=membership)
 

@@ -10,6 +10,9 @@ from app.models.workspace import Workspace
 class WorkspaceRuntimePolicy:
     is_demo: bool
     allow_external_dispatch: bool
+    allow_external_configuration: bool
+    allow_external_ingress: bool
+    allow_external_sync: bool
     agent_hourly_turn_limit: int | None
 
 
@@ -24,6 +27,9 @@ def workspace_runtime_policy(workspace: Workspace) -> WorkspaceRuntimePolicy:
     return WorkspaceRuntimePolicy(
         is_demo=is_demo,
         allow_external_dispatch=not is_demo,
+        allow_external_configuration=not is_demo,
+        allow_external_ingress=not is_demo,
+        allow_external_sync=not is_demo,
         agent_hourly_turn_limit=(
             settings.demo_agent_hourly_turn_limit if is_demo else None
         ),

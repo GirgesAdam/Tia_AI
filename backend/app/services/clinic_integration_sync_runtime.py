@@ -43,6 +43,7 @@ from app.services.clinic_integration_sync import (
     ClinicIntegrationSyncError,
     apply_external_sync_page,
 )
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 SYNC_DOMAIN_ORDER = (
     ClinicSyncDomain.PATIENTS,
@@ -181,6 +182,10 @@ def _validate_connector_runtime(
     workspace: Workspace,
     integration: ClinicIntegration,
 ) -> ClinicSyncSource:
+    if not workspace_runtime_policy(workspace).allow_external_sync:
+        raise ClinicSyncRuntimeError(
+            "External clinic sync is disabled for demo workspaces."
+        )
     if integration.status != "active":
         raise ClinicSyncRuntimeError("Clinic integration must be active before connector sync can run.")
     if integration.mode not in {"external_api", "hybrid"}:

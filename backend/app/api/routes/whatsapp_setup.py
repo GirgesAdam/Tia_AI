@@ -14,6 +14,7 @@ from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
+from app.models.workspace import Workspace
 from app.schemas.whatsapp_setup import (
     WhatsAppDirectConnect,
     WhatsAppDirectConnectResult,
@@ -31,6 +32,7 @@ from app.services.meta_whatsapp_onboarding import (
 )
 from app.services.meta_whatsapp_transport import ingest_meta_webhook, run_meta_transport_tick
 from app.services.provider_credentials import ProviderCredentialError, decrypt_provider_secret
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 router = APIRouter()
 
@@ -127,6 +129,11 @@ async def whatsapp_meta_webhook_receive(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook JSON.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook payload.")
+    workspace = db.get(Workspace, connection.workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found.")
+    if not workspace_runtime_policy(workspace).allow_external_ingress:
+        return {"received": True, "ignored": True}
     media_result = ingest_meta_media_webhook(db, connection=connection, payload=payload)
     result = ingest_meta_webhook(db, payload)
     return {"received": True, **result, **media_result}

@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -6,12 +7,17 @@ from pydantic import ValidationError
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import STANDARD_TEMPLATES_BY_RULE_KEY
+from app.models.workspace import Workspace
 from app.schemas.whatsapp_setup import (
     WhatsAppDirectConnect,
     WhatsAppSetupState,
     WhatsAppTemplateSetupStatus,
 )
-from app.services.meta_whatsapp_onboarding import direct_setup_available
+from app.services.meta_whatsapp_onboarding import (
+    MetaWhatsAppConflictError,
+    connect_direct_meta,
+    direct_setup_available,
+)
 from app.services.provider_credentials import decrypt_provider_secret, encrypt_provider_secret
 
 
@@ -38,6 +44,30 @@ def _template_states(
             )
     return states
 
+
+
+def test_demo_workspace_cannot_start_external_meta_configuration() -> None:
+    workspace_id = uuid4()
+    demo = Workspace(name="Demo", slug=f"demo-meta-{uuid4().hex[:8]}", is_demo=True)
+
+    class DemoSession:
+        def get(self, model, object_id):
+            assert model is Workspace
+            assert object_id == workspace_id
+            return demo
+
+    with pytest.raises(MetaWhatsAppConflictError, match="disabled for demo"):
+        connect_direct_meta(
+            DemoSession(),  # type: ignore[arg-type]
+            workspace_id=workspace_id,
+            created_by_user_id=uuid4(),
+            app_id="123456789",
+            app_secret="not-used",
+            waba_id="123456789",
+            phone_number_id="987654321",
+            access_token="not-used",
+            callback_base_url="https://example.test/api/v1/channels/whatsapp",
+        )
 
 def test_direct_connect_schema_rejects_non_numeric_meta_ids() -> None:
     with pytest.raises(ValidationError):

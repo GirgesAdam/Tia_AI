@@ -23,6 +23,8 @@ from app.services.automations import (
     plan_automation_jobs,
 )
 from app.services.clinic_integration_sync_runtime import run_scheduled_sync_tick
+from app.services.demo_reset import DemoResetError, scheduled_demo_reset_state
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 logger = logging.getLogger("tia.automation_scheduler")
 
@@ -95,6 +97,27 @@ def run_workspace_tick(
             return
 
         now = datetime.now(UTC)
+        if workspace.is_demo:
+            try:
+                reset_state = scheduled_demo_reset_state(db, workspace=workspace, now=now)
+            except DemoResetError:
+                db.rollback()
+                logger.exception(
+                    "Daily demo reset failed workspace=%s",
+                    workspace.id,
+                )
+            else:
+                if reset_state == "reset":
+                    logger.info("Daily demo reset completed workspace=%s", workspace.id)
+                    workspace = db.get(Workspace, workspace.id)
+                    if workspace is None or not workspace.is_active:
+                        return
+                elif reset_state == "missed_window":
+                    logger.warning(
+                        "Daily demo reset window missed workspace=%s; no daytime catch-up will run",
+                        workspace.id,
+                    )
+
         _heartbeat(db, workspace.id, now=now)
         _retire_booking_confirmation(db, workspace.id)
 
@@ -142,16 +165,20 @@ def run_workspace_tick(
 
         sync_claimed = False
         sync_reason = "sync_disabled"
+        policy = workspace_runtime_policy(workspace)
         schedule = db.get(ClinicIntegrationSyncSchedule, workspace.id)
         if schedule is not None and schedule.enabled:
-            sync = run_scheduled_sync_tick(
-                db,
-                workspace=workspace,
-                page_size=sync_page_size,
-                max_pages_per_domain=sync_max_pages,
-            )
-            sync_claimed = sync.claimed
-            sync_reason = sync.reason or (sync.cycle.status if sync.cycle else None)
+            if not policy.allow_external_sync:
+                sync_reason = "external_sync_blocked_for_demo"
+            else:
+                sync = run_scheduled_sync_tick(
+                    db,
+                    workspace=workspace,
+                    page_size=sync_page_size,
+                    max_pages_per_domain=sync_max_pages,
+                )
+                sync_claimed = sync.claimed
+                sync_reason = sync.reason or (sync.cycle.status if sync.cycle else None)
 
         logger.info(
             "automation_tick workspace=%s planned=%s cancelled=%s claimed=%s executed=%s failed=%s sync_claimed=%s sync_reason=%s",

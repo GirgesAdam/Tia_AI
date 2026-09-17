@@ -18,6 +18,7 @@ from app.core.meta_whatsapp_templates import (
 )
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
+from app.models.workspace import Workspace
 from app.schemas.whatsapp_setup import WhatsAppSetupState, WhatsAppTemplateSetupStatus
 from app.services.provider_credentials import (
     ProviderCredentialError,
@@ -26,6 +27,7 @@ from app.services.provider_credentials import (
     encrypt_provider_secret,
     provider_credential_encryption_ready,
 )
+from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 
 class MetaWhatsAppSetupError(RuntimeError):
@@ -395,6 +397,13 @@ def connect_direct_meta(
     access_token: str,
     callback_base_url: str,
 ) -> WhatsAppSetupState:
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
+        raise MetaWhatsAppConflictError("Workspace not found.")
+    if not workspace_runtime_policy(workspace).allow_external_configuration:
+        raise MetaWhatsAppConflictError(
+            "External provider configuration is disabled for demo workspaces."
+        )
     if not direct_setup_available():
         raise MetaWhatsAppConfigurationError(
             "Direct WhatsApp setup is not configured on the Tia platform."
@@ -560,6 +569,9 @@ def verify_direct_webhook_challenge(
         or connection.provider != "meta_cloud"
     ):
         return False
+    workspace = db.get(Workspace, connection.workspace_id)
+    if workspace is None or not workspace_runtime_policy(workspace).allow_external_configuration:
+        return False
     expected = str((connection.config_json or {}).get("webhook_verify_token") or "").strip()
     supplied = (verify_token or "").strip()
     if mode != "subscribe" or not expected or not supplied:
@@ -578,6 +590,13 @@ def finish_direct_meta_setup(
     *,
     workspace_id: UUID,
 ) -> WhatsAppSetupState:
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
+        raise MetaWhatsAppConflictError("Workspace not found.")
+    if not workspace_runtime_policy(workspace).allow_external_configuration:
+        raise MetaWhatsAppConflictError(
+            "External provider configuration is disabled for demo workspaces."
+        )
     connection = _connection_for_workspace(db, workspace_id)
     if connection is None:
         raise MetaWhatsAppConflictError("Connect the clinic WhatsApp account first.")
