@@ -321,9 +321,28 @@ def _set_provider_health(
     connection.config_json = config
 
 
+def _clinic_setup_ready_for_activation(db: Session, connection: ChannelConnection) -> bool:
+    if connection.status == "active":
+        return True
+    workspace = db.get(Workspace, connection.workspace_id)
+    if workspace is None or not workspace.is_active:
+        return False
+    from app.services.clinic_setup_v2 import build_setup_v2_snapshot
+
+    return build_setup_v2_snapshot(db, workspace=workspace).readiness.ready
+
+
 def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection) -> bool:
-    """Refresh provider metadata and make native transport ready without clinic-side credentials."""
+    """Refresh provider metadata and activate transport only for booking-ready clinics."""
     if connection.channel != "whatsapp" or connection.provider != "meta_cloud":
+        return False
+    if not _clinic_setup_ready_for_activation(db, connection):
+        config = dict(connection.config_json or {})
+        config["transport_ready"] = False
+        config["clinic_setup_ready"] = False
+        connection.config_json = config
+        connection.status = "paused"
+        db.commit()
         return False
 
     token, credential_error = _decrypt_connection_token(db, connection)
@@ -394,6 +413,7 @@ def refresh_meta_connection_readiness(db: Session, connection: ChannelConnection
             "ai_followup_templates": lead_refs,
             "ai_followup_template": lead_primary,
             "transport_ready": True,
+            "clinic_setup_ready": True,
             "transport": "tia_native_meta_cloud",
         }
     )

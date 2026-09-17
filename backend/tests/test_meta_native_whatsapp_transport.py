@@ -154,6 +154,35 @@ def _provider_error_connection():
     )
 
 
+def test_paused_connection_cannot_activate_before_clinic_setup_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        channel="whatsapp",
+        provider="meta_cloud",
+        status="paused",
+        config_json={"transport_ready": True},
+    )
+    commits = []
+    db = SimpleNamespace(commit=lambda: commits.append(True))
+    monkeypatch.setattr(
+        meta_transport,
+        "_clinic_setup_ready_for_activation",
+        lambda _db, _connection: False,
+    )
+    monkeypatch.setattr(
+        meta_transport,
+        "_decrypt_connection_token",
+        lambda *_args: pytest.fail("provider transport must not activate before clinic setup"),
+    )
+
+    assert refresh_meta_connection_readiness(db, connection) is False
+    assert connection.status == "paused"
+    assert connection.config_json["transport_ready"] is False
+    assert connection.config_json["clinic_setup_ready"] is False
+    assert commits == [True]
+
+
 def test_readiness_131031_surfaces_meta_account_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
