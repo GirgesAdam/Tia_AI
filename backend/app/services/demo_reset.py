@@ -219,17 +219,30 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
-def _uuid_parent_table(column: Any) -> str | None:
-    parents = {
-        fk.column.table.name
-        for fk in column.foreign_keys
-        if fk.column.table.name != "workspaces"
-    }
-    if len(parents) > 1:
+def _uuid_identity_table(column: Any, seen: set[tuple[str, str]] | None = None) -> str | None:
+    key = (column.table.name, column.name)
+    visited = set(seen or ())
+    if key in visited:
+        raise DemoResetError(f"UUID identity cycle at {column.table.name}.{column.name}")
+    visited.add(key)
+
+    identities: set[str] = set()
+    for fk in column.foreign_keys:
+        target = fk.column
+        if target.table.name == "workspaces":
+            continue
+        if target.primary_key or target.name == "id":
+            identities.add(target.table.name)
+            continue
+        identity = _uuid_identity_table(target, visited)
+        if identity is not None:
+            identities.add(identity)
+
+    if len(identities) > 1:
         raise DemoResetError(
-            f"Ambiguous UUID parent for {column.table.name}.{column.name}: {sorted(parents)}"
+            f"Ambiguous UUID identity for {column.table.name}.{column.name}: {sorted(identities)}"
         )
-    return next(iter(parents), None)
+    return next(iter(identities), None)
 
 
 def _encode_row(table: Any, row: dict[str, Any]) -> dict[str, Any]:
@@ -243,7 +256,7 @@ def _encode_row(table: Any, row: dict[str, Any]) -> dict[str, Any]:
             encoded[name] = None
             continue
         if isinstance(value, UUID):
-            parent = _uuid_parent_table(column)
+            parent = _uuid_identity_table(column)
             if parent == "users":
                 encoded[name] = None
                 continue

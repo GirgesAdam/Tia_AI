@@ -122,7 +122,7 @@ def db_workspace(monkeypatch):
     monkeypatch.setattr(sync_service, "record_activity_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "record_activity_event", lambda *args, **kwargs: None)
     with Session(engine) as db:
-        yield db, SimpleNamespace(id=workspace_id, timezone="Africa/Cairo")
+        yield db, SimpleNamespace(id=workspace_id, timezone="Africa/Cairo", is_demo=False)
 
 
 class OnePatientSource:
