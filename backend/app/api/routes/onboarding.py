@@ -52,29 +52,30 @@ def create_workspace(
     workspace = Workspace(
         name=payload.name,
         slug=payload.slug,
-        timezone="Africa/Cairo",
+        timezone=payload.timezone,
         is_active=True,
+        is_demo=False,
     )
     db.add(workspace)
-    db.flush()
-    db.add(
-        ClinicIntegration(
-            workspace_id=workspace.id,
-            mode="tia_native",
-            adapter_key="tia_database",
-            status="active",
-            config_json={},
-        )
-    )
-    db.add(
-        WorkspaceMember(
-            workspace_id=workspace.id,
-            user_id=user.id,
-            role="admin",
-            is_active=True,
-        )
-    )
     try:
+        db.flush()
+        db.add(
+            ClinicIntegration(
+                workspace_id=workspace.id,
+                mode="tia_native",
+                adapter_key="tia_database",
+                status="active",
+                config_json={},
+            )
+        )
+        db.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=user.id,
+                role="admin",
+                is_active=True,
+            )
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()

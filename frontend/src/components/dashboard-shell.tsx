@@ -1,4 +1,5 @@
-import { Bot, Building2, ChevronDown, LogOut } from "lucide-react";
+import Link from "next/link";
+import { Bot, Building2, ChevronDown, LogOut, Plus } from "lucide-react";
 
 import { logoutAction, switchWorkspace } from "@/app/(dashboard)/actions";
 import { DesktopNavigation, MobileNavigation } from "@/components/dashboard-navigation";
@@ -77,6 +78,9 @@ export function DashboardShell({
                     ))}
                   </select>
                   <Button size="sm" variant="outline">تبديل</Button>
+                  <Link href="/onboarding" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50">
+                    <Plus size={15} /> إضافة عيادة
+                  </Link>
                 </form>
               ) : (
                 <div>
@@ -129,6 +133,10 @@ export function DashboardShell({
                       <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800">{workspace.workspace_name}</div>
                     )}
                   </div>
+
+                  <Link href="/onboarding" className="mb-2 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50">
+                    <Plus size={17} /> إضافة عيادة
+                  </Link>
 
                   <form action={logoutAction} className="border-t border-slate-100 pt-2">
                     <button className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-bold text-rose-700 transition hover:bg-rose-50">

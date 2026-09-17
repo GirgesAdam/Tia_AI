@@ -102,7 +102,7 @@ def upsert_clinic_profile(
             address_line1=payload.address,
             city=payload.city,
             country_code="EG",
-            timezone="Africa/Cairo",
+            timezone=workspace.timezone,
             is_active=True,
         )
         db.add(branch)
@@ -113,11 +113,10 @@ def upsert_clinic_profile(
         branch.address_line1 = payload.address
         branch.city = payload.city
         branch.country_code = "EG"
-        branch.timezone = "Africa/Cairo"
+        branch.timezone = workspace.timezone
         branch.is_active = True
 
     workspace.primary_branch_id = branch.id
-    workspace.timezone = "Africa/Cairo"
 
     settings = db.scalar(
         select(BookingSettings).where(BookingSettings.workspace_id == workspace.id)
@@ -520,7 +519,7 @@ def replace_visiting_windows_v2(
             DoctorAvailabilityWindow.branch_id == branch.id,
         )
     )
-    tz = ZoneInfo("Africa/Cairo")
+    tz = ZoneInfo(workspace.timezone)
     now_utc = datetime.now(UTC)
     for item in payload.windows:
         start_at = datetime.combine(item.date, item.start_time, tzinfo=tz).astimezone(UTC)
@@ -690,7 +689,7 @@ def build_setup_v2_snapshot(db: Session, *, workspace: Workspace) -> ClinicSetup
             phone=branch.phone if branch else None,
             address=branch.address_line1 if branch else None,
             city=branch.city if branch else None,
-            timezone="Africa/Cairo",
+            timezone=workspace.timezone,
         ),
         services=[
             ClinicServiceReadV2(
