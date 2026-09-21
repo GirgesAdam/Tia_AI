@@ -9,7 +9,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.branch import Branch
 from app.models.service import Service
 from app.models.workspace import Workspace
-from app.services.demo_reset import DEMO_SEED_ACTION, DEMO_SEED_VERSION, reset_demo_workspace
+from app.services.demo_reset import (\n    DEMO_SEED_ACTION,\n    DEMO_SEED_VERSION,\n    RESET_RESEED_TABLES,\n    _table_rows,\n    _workspace_tables,\n)
 from app.services.workspace_runtime_policy import workspace_runtime_policy
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
@@ -43,9 +43,20 @@ def main() -> int:
         if expected_services < 0:
             raise RuntimeError("EVAL_INFRA_ERROR: seed service row count missing")
 
-        result = reset_demo_workspace(db, workspace_id=ws.id)
-        db.expire_all()
-        ws = db.get(Workspace, ws.id)
+        seed_tables = seed.get("tables")
+        if not isinstance(seed_tables, dict):
+            raise RuntimeError("EVAL_INFRA_ERROR: canonical seed tables missing")
+        workspace_tables = _workspace_tables()
+        changed_tables = []
+        for name in sorted(RESET_RESEED_TABLES):
+            current_rows = _table_rows(db, workspace_tables[name], ws.id)
+            if current_rows != seed_tables.get(name, []):
+                changed_tables.append(name)
+        if changed_tables:
+            raise RuntimeError(
+                "EVAL_INFRA_ERROR: Demo differs from canonical seed in "
+                + ", ".join(changed_tables)
+            )
 
         branches = list(db.scalars(select(Branch).where(
             Branch.workspace_id == ws.id,
@@ -93,9 +104,9 @@ def main() -> int:
         """), {"wid": ws.id}).scalar_one()
 
         report = {
-            "canonical_reset": "PASS",
+            "canonical_preflight": "PASS",
+            "canonical_reset": "NOT_NEEDED",
             "seed_version": DEMO_SEED_VERSION,
-            "reset_rows": result.reseeded_rows,
             "workspace_id": str(ws.id),
             "active_branch_count": len(branches),
             "branch_name": branches[0].name,
