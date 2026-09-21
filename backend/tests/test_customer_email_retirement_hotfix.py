@@ -69,6 +69,7 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert set(long_revisions) == {
         "0052_payment_reference_constraint_repair",
         "0061_clinic_ops_inventory_products",
+        "0073_appointment_additional_services",
     }
     assert "ALTER COLUMN version_num TYPE VARCHAR(255)" in long_revisions[
         "0052_payment_reference_constraint_repair"
@@ -76,7 +77,8 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert revisions["0033_sync_authority"] == "0032_external_sync_engine"
     assert revisions["0034_drop_customer_email"] == "0033_sync_authority"
     assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
-    assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
+    assert revisions["0073_appointment_additional_services"] == "0072_workspace_demo_policy"
+    assert revisions["0074_appt_extra_services_head"] == "0073_appointment_additional_services"
 
 
 def test_drop_patient_email_migration_is_explicit() -> None:

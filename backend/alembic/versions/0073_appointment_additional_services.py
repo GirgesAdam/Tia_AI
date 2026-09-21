@@ -1,6 +1,6 @@
 """Add billing-only additional services to appointments.
 
-Revision ID: 0073_appt_extra_services
+Revision ID: 0073_appointment_additional_services
 Revises: 0072_workspace_demo_policy
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0073_appt_extra_services"
+revision: str = "0073_appointment_additional_services"
 down_revision: str | Sequence[str] | None = "0072_workspace_demo_policy"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
