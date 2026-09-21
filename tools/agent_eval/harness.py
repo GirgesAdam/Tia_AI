@@ -6,12 +6,9 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo
-
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.integrations.clinic.base import AvailabilityRequest, ClinicCapability
@@ -29,6 +26,8 @@ from app.services.agent_v2 import live_chat as live_chat_module
 from app.services.agent_v2.live_chat import run_agent_chat
 from app.services.patient_packages import list_patient_packages
 from app.services.workspace_runtime_policy import workspace_runtime_policy
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -174,7 +173,7 @@ class RuntimeProbe:
         self._original_generate = None
         self._original_orchestrate = None
 
-    def __enter__(self) -> "RuntimeProbe":
+    def __enter__(self) -> Self:
         from langchain_openai import ChatOpenAI
 
         self._original_generate = ChatOpenAI._generate
