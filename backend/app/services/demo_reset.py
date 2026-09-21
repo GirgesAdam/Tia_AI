@@ -40,6 +40,7 @@ PRESERVE_TABLES = frozenset({
 })
 
 RESET_RESEED_TABLES = frozenset({
+    "appointment_additional_services",
     "appointment_product_lines",
     "appointment_status_history",
     "appointments",

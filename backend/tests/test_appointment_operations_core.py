@@ -120,8 +120,10 @@ def test_appointment_operations_ui_uses_verified_slots_and_backend_actions() -> 
     assert "/cancel`" in actions
     assert "/reschedule`" in actions
     assert "/status`" in actions
-    assert 'scope: "today"' not in listing  # default is derived, not hard-coded into API behavior
-    assert 'const defaultScope = patientId ? "all" : "today"' in listing
+    assert 'scope: "today"' not in listing
+    assert 'date: selectedDate' in listing
+    assert 'branch_id' in listing
+    assert 'working_hours' in listing
 
 
 def test_check_in_and_in_progress_are_not_exposed_as_new_operations() -> None:
