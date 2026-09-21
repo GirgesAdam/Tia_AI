@@ -397,6 +397,11 @@ def appointment_snapshot(
             "patient_package_id": (
                 str(row.patient_package_id) if row.patient_package_id else None
             ),
+            "rescheduled_from_appointment_id": (
+                str(row.rescheduled_from_appointment_id)
+                if row.rescheduled_from_appointment_id
+                else None
+            ),
         }
         for row in rows
     ]
