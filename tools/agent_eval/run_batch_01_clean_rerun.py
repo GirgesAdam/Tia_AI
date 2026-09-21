@@ -19,7 +19,12 @@ from app.services.demo_reset import acquire_demo_request_lock
 from tools.agent_eval import harness
 from tools.agent_eval import run_batch_01 as batch
 
-AFFECTED = [\n    batch.case_ambiguous_laser,\n    batch.case_package_other_service,\n    batch.case_multi_question,\n]\nGENERIC_SLUGS = {"hydrafacial"}
+AFFECTED = [
+    batch.case_ambiguous_laser,
+    batch.case_package_other_service,
+    batch.case_multi_question,
+]
+GENERIC_SLUGS = {"hydrafacial"}
 _fixture_context: dict = {}
 
 
