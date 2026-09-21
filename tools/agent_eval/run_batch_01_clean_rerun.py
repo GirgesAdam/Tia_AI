@@ -218,6 +218,21 @@ def run_case(engine, slug: str, case_fn):
         connection.close()
 
 
+def _emit_report(payload: dict) -> None:
+    encoded = base64.b64encode(
+        json.dumps(payload, ensure_ascii=False, default=str).encode()
+    ).decode()
+    print("CLEAN_RERUN_B64_BEGIN", flush=True)
+    for i in range(0, len(encoded), 3000):
+        print("CLEAN_RERUN_B64=" + encoded[i:i + 3000], flush=True)
+    print("CLEAN_RERUN_B64_END", flush=True)
+    print(
+        "CLEAN_RERUN_SUMMARY="
+        + json.dumps(payload["summary"], ensure_ascii=False),
+        flush=True,
+    )
+
+
 def main() -> int:
     if os.getenv("TIA_AGENT_EVAL_CONFIRM_DEMO") != "1":
         raise RuntimeError("Set TIA_AGENT_EVAL_CONFIRM_DEMO=1")
@@ -236,12 +251,7 @@ def main() -> int:
             "tokens": _token_summary(rows),
         },
     }
-    encoded=base64.b64encode(json.dumps(payload,ensure_ascii=False,default=str).encode()).decode()
-    print("CLEAN_RERUN_B64_BEGIN",flush=True)
-    for i in range(0,len(encoded),3000):
-        print("CLEAN_RERUN_B64="+encoded[i:i+3000],flush=True)
-    print("CLEAN_RERUN_B64_END",flush=True)
-    print("CLEAN_RERUN_SUMMARY="+json.dumps(payload["summary"],ensure_ascii=False),flush=True)
+    _emit_report(payload)
     engine.dispose()
     return 0 if not infra else 3
 
