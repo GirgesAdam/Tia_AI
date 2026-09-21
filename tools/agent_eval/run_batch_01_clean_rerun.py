@@ -73,7 +73,9 @@ def _bookable_context(db: Session, workspace: Workspace, *, service_slug: str | 
                     doctor_id=str(doctor["id"]),
                 ))
                 if available.slots:
-                    db_service = db.get(harness.Service, UUID(service_id))\n                    if db_service is None or not db_service.is_active:\n                        raise RuntimeError("EVAL_INFRA_ERROR: catalog service missing from active DB services")
+                    db_service = db.get(harness.Service, UUID(service_id))
+                    if db_service is None or not db_service.is_active:
+                        raise RuntimeError("EVAL_INFRA_ERROR: catalog service missing from active DB services")
                     device_prices = db.execute(text("""
                         SELECT device_key, device_name, price_minor
                         FROM service_device_prices
