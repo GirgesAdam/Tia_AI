@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest
@@ -17,6 +13,8 @@ from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.workspace import Workspace
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import Session
 from tools.agent_eval.harness import (
     ScenarioResult,
     active_branch_id,
@@ -356,8 +354,10 @@ def case_unavailable(db: Session, workspace: Workspace):
         patient,
         "unavailable_time",
         [
-            f"عايزه احجز {service['name']} مع {doctor_name(doctor)} "
-            f"يوم {date_text} الساعة 03:17"
+            (
+                f"عايزه احجز {service['name']} مع {doctor_name(doctor)} "
+                f"يوم {date_text} الساعة 03:17"
+            )
         ],
     )
     after = state_snapshot(db, workspace, patient)
@@ -801,8 +801,10 @@ def case_multi_question(db: Session, workspace: Workspace):
         patient,
         "multi_question",
         [
-            f"جلسة {service['name']} بكام "
-            f"وممكن احجز يوم {date_text}؟"
+            (
+                f"جلسة {service['name']} بكام "
+                f"وممكن احجز يوم {date_text}؟"
+            )
         ],
     )
     after = state_snapshot(db, workspace, patient)
@@ -1039,7 +1041,7 @@ def run_case(engine, slug: str, case_fn) -> ScenarioResult:
             issues=issues,
             token_usage=aggregate_tokens(turns),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         name = case_fn.__name__.removeprefix("case_")
         return ScenarioResult(
             id=name,
