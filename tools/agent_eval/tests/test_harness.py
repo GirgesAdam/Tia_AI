@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.agent_eval.harness import TokenUsage, assert_demo_only
+from tools.agent_eval.run_batch_01 import _reschedule_relationships_moved
 
 
 def test_token_usage_aggregates_actual_metadata():
@@ -50,3 +51,43 @@ def test_demo_guard_rejects_external_side_effects(monkeypatch):
     )
     with pytest.raises(RuntimeError):
         assert_demo_only(SimpleNamespace(is_active=True))
+
+
+def test_reschedule_relationship_contract_requires_exact_transfer():
+    before = {
+        "payment_allocation_ids": ["allocation-1"],
+        "payment_transaction_ids": ["payment-1"],
+        "package_usage_ids": ["usage-1"],
+    }
+    empty = {
+        "payment_allocation_ids": [],
+        "payment_transaction_ids": [],
+        "package_usage_ids": [],
+    }
+    assert _reschedule_relationships_moved(before, empty, before) is True
+
+    retained_on_original = {
+        **empty,
+        "payment_allocation_ids": ["allocation-1"],
+    }
+    assert (
+        _reschedule_relationships_moved(
+            before,
+            retained_on_original,
+            before,
+        )
+        is False
+    )
+
+    duplicated_on_replacement = {
+        **before,
+        "package_usage_ids": ["usage-1", "usage-2"],
+    }
+    assert (
+        _reschedule_relationships_moved(
+            before,
+            empty,
+            duplicated_on_replacement,
+        )
+        is False
+    )
