@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
+from app.models.booking_settings import BookingSettings
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.workspace import Workspace
@@ -484,124 +485,121 @@ def case_change_mind(db: Session, workspace: Workspace):
 
 def case_reschedule(db: Session, workspace: Workspace):
     patient = quiet_patient(db, workspace)
-    context = booking_context(
-        db,
-        workspace,
-        service_slug="hydrafacial",
-    )
+    context = booking_context(db, workspace, service_slug="hydrafacial")
     existing = seed_appointment(db, workspace, patient, context)
     before = state_snapshot(db, workspace, patient)
     slot, available = alternate_slot(db, workspace, context)
     date_text, time_text = local_slot(available, slot)
     turns = run_messages(
-        db,
-        workspace,
-        patient,
-        "reschedule_existing",
-        [
-            "ممكن أغير ميعادي؟",
-            f"خليه يوم {date_text} الساعة {time_text}",
-        ],
+        db, workspace, patient, "reschedule_existing",
+        ["ممكن أغير ميعادي؟", f"خليه يوم {date_text} الساعة {time_text}"],
     )
     after = state_snapshot(db, workspace, patient)
-    rows = [
-        row
-        for row in after["appointments"]
-        if row["id"] == str(existing.id)
+    original = next((row for row in after["appointments"] if row["id"] == str(existing.id)), None)
+    replacements = [
+        row for row in after["appointments"]
+        if row.get("rescheduled_from_appointment_id") == str(existing.id)
     ]
-    duplicates = len(created_appointments(before, after))
     target_iso = slot.start_at.isoformat()
+    replacement = replacements[0] if len(replacements) == 1 else None
     ok = (
-        bool(rows)
-        and rows[0]["start_at"] == target_iso
-        and duplicates == 0
+        original is not None
+        and original["status"] == "rescheduled"
+        and replacement is not None
+        and replacement["start_at"] == target_iso
+        and replacement["patient_package_id"] == (
+            str(existing.patient_package_id) if existing.patient_package_id else None
+        )
+        and replacement["service_id"] == str(existing.service_id)
+        and replacement["doctor_id"] == str(existing.doctor_id)
+        and replacement["branch_id"] == str(existing.branch_id)
+        and len(replacements) == 1
     )
     issues = classify_issue(
         ok,
         severity="P1",
-        title="Reschedule state incorrect",
-        detail=(
-            f"Expected same appointment moved to {target_iso} "
-            "with no duplicate."
-        ),
+        title="Reschedule lineage/final state incorrect",
+        detail="Expected original status=rescheduled and exactly one linked replacement at the requested target.",
     )
     return (
-        "reschedule_existing",
-        "reschedule",
+        "reschedule_existing", "reschedule",
         "Verified read then reschedule the real upcoming appointment.",
-        turns,
-        before,
-        after,
+        turns, before, after,
         {
             "appointment_id": str(existing.id),
             "target_start": target_iso,
-            "same_row_rescheduled": ok,
-            "duplicate_count": duplicates,
+            "original_status": original["status"] if original else None,
+            "replacement_count": len(replacements),
+            "replacement": replacement,
+            "canonical_reschedule_contract_correct": ok,
         },
-        default_evaluation(action_ok=ok, db_ok=ok),
-        issues,
+        default_evaluation(action_ok=ok, db_ok=ok), issues,
     )
+
+
+def _safe_cancellation_context(db: Session, workspace: Workspace):
+    settings_row = db.scalar(
+        select(BookingSettings).where(BookingSettings.workspace_id == workspace.id)
+    )
+    notice_minutes = int(settings_row.cancellation_notice_minutes if settings_row else 720)
+    safe_after = datetime.now(UTC) + timedelta(minutes=notice_minutes, hours=2)
+    catalog = booking_context(db, workspace, service_slug="hydrafacial")
+    _, service, doctor, branch_id, _, _ = catalog
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    today = datetime.now(UTC).date()
+    for offset in range(1, 91):
+        day = today + timedelta(days=offset)
+        available = adapter.get_availability(
+            AvailabilityRequest(
+                branch_id=branch_id,
+                service_id=str(service["id"]),
+                booking_date=day,
+                doctor_id=str(doctor["id"]),
+            )
+        )
+        safe_slots = [slot for slot in available.slots if slot.start_at > safe_after]
+        if safe_slots:
+            available.slots = safe_slots
+            return (catalog[0], service, doctor, branch_id, day, available), notice_minutes
+    raise RuntimeError("EVAL_INFRA_ERROR: no cancellation fixture outside notice window")
 
 
 def case_cancel(db: Session, workspace: Workspace):
     patient = quiet_patient(db, workspace)
-    existing = seed_appointment(
-        db,
-        workspace,
-        patient,
-        booking_context(
-            db,
-            workspace,
-            service_slug="hydrafacial",
-        ),
-    )
+    context, notice_minutes = _safe_cancellation_context(db, workspace)
+    existing = seed_appointment(db, workspace, patient, context)
     before = state_snapshot(db, workspace, patient)
     turns = run_messages(
-        db,
-        workspace,
-        patient,
-        "cancel_existing",
+        db, workspace, patient, "cancel_existing",
         ["عايزة ألغي ميعادي", "ايوه الغيه"],
     )
     after = state_snapshot(db, workspace, patient)
-    row = next(
-        (
-            item
-            for item in after["appointments"]
-            if item["id"] == str(existing.id)
-        ),
-        None,
-    )
-    ok = (
-        row is not None
-        and row["status"] == "cancelled"
-        and len(created_appointments(before, after)) == 0
-    )
+    row = next((item for item in after["appointments"] if item["id"] == str(existing.id)), None)
+    created = created_appointments(before, after)
+    handed_off = any(turn.handoff_state for turn in turns)
+    ok = row is not None and row["status"] == "cancelled" and not created and not handed_off
     issues = classify_issue(
         ok,
         severity="P1",
         title="Cancellation final state incorrect",
-        detail=(
-            "The selected appointment should be cancelled "
-            "without a duplicate write."
-        ),
+        detail="Outside the notice window the appointment should cancel without handoff or unrelated duplicate writes.",
     )
     return (
-        "cancel_existing",
-        "cancellation",
-        "Resolve and cancel the customer's real upcoming appointment.",
-        turns,
-        before,
-        after,
+        "cancel_existing", "cancellation",
+        "Resolve and cancel the customer's real upcoming appointment outside the notice window.",
+        turns, before, after,
         {
             "appointment_id": str(existing.id),
+            "cancellation_notice_minutes": notice_minutes,
+            "fixture_start_at": existing.start_at.isoformat(),
+            "outside_notice_window": existing.start_at > datetime.now(UTC) + timedelta(minutes=notice_minutes),
             "final_status": row["status"] if row else None,
+            "handoff": handed_off,
+            "created": created,
             "correct": ok,
         },
-        default_evaluation(action_ok=ok, db_ok=ok),
-        issues,
+        default_evaluation(action_ok=ok, db_ok=ok, handoff_ok=not handed_off), issues,
     )
-
 
 def case_package_remaining(db: Session, workspace: Workspace):
     patient, package = package_patient(db, workspace)
