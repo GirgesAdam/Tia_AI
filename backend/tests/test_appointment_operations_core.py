@@ -1,7 +1,10 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.integrations.clinic.base import CancelAppointmentRequest, ClinicActionRequiresHuman
+from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.services.appointment_operations import (
+    AppointmentCancellationOverrideRequired,
     appointment_allowed_actions,
     cancellation_override_required,
 )
@@ -175,3 +178,94 @@ def test_ai_cancellation_inside_notice_maps_to_human_handoff_contract() -> None:
     assert "actor_is_admin=False" in cancel_block
     assert "except AppointmentCancellationOverrideRequired" in cancel_block
     assert "raise ClinicActionRequiresHuman(" in cancel_block
+
+
+
+def test_ai_cancellation_outside_notice_calls_customer_path_without_override(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    workspace_id = UUID("11111111-1111-1111-1111-111111111111")
+    patient_id = UUID("22222222-2222-2222-2222-222222222222")
+    appointment_id = UUID("33333333-3333-3333-3333-333333333333")
+    now = datetime(2026, 9, 21, 18, 0, tzinfo=UTC)
+    captured = {}
+
+    def fake_cancel(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=appointment_id)
+
+    adapter = TiaDatabaseClinicAdapter(
+        db=SimpleNamespace(),
+        workspace=SimpleNamespace(id=workspace_id),
+    )
+    monkeypatch.setattr(adapter, "_require_local_appointment_write", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_appointment_record",
+        lambda *, appointment_id: SimpleNamespace(id=str(appointment_id)),
+    )
+    monkeypatch.setattr(
+        "app.integrations.clinic.tia_database.cancel_appointment_operation",
+        fake_cancel,
+    )
+
+    result = adapter.cancel_appointment(
+        CancelAppointmentRequest(
+            patient_id=str(patient_id),
+            appointment_id=str(appointment_id),
+            operation_id="cancel-outside-window",
+            reason="customer requested",
+            now=now,
+        )
+    )
+
+    assert result.appointment.id == str(appointment_id)
+    assert captured["override_policy"] is False
+    assert captured["actor_is_admin"] is False
+    assert captured["actor_type"] == "ai"
+    assert captured["now"] == now
+
+
+def test_ai_cancellation_inside_notice_maps_to_human_handoff(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    workspace_id = UUID("44444444-4444-4444-4444-444444444444")
+    patient_id = UUID("55555555-5555-5555-5555-555555555555")
+    appointment_id = UUID("66666666-6666-6666-6666-666666666666")
+
+    def requires_override(db, **kwargs):
+        raise AppointmentCancellationOverrideRequired("inside notice window")
+
+    adapter = TiaDatabaseClinicAdapter(
+        db=SimpleNamespace(),
+        workspace=SimpleNamespace(id=workspace_id),
+    )
+    monkeypatch.setattr(adapter, "_require_local_appointment_write", lambda: None)
+    monkeypatch.setattr(
+        "app.integrations.clinic.tia_database.cancel_appointment_operation",
+        requires_override,
+    )
+
+    try:
+        adapter.cancel_appointment(
+            CancelAppointmentRequest(
+                patient_id=str(patient_id),
+                appointment_id=str(appointment_id),
+                operation_id="cancel-inside-window",
+                reason="customer requested",
+            )
+        )
+    except ClinicActionRequiresHuman as exc:
+        assert exc.appointment_id == str(appointment_id)
+    else:
+        raise AssertionError("Expected customer cancellation inside notice window to require human handoff")
+
+
+def test_eval_preflight_is_read_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "tools/agent_eval/clean_preflight.py").read_text(encoding="utf-8")
+    assert "reset_demo_workspace(" not in source
+    assert "_table_rows(" in source
+    assert "canonical_reset\": \"NOT_NEEDED" in source
