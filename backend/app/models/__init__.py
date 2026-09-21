@@ -2,6 +2,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.agent_action import AgentAction
 from app.models.analytics_saved_view import AnalyticsSavedView
 from app.models.appointment import Appointment
+from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
@@ -70,6 +71,7 @@ __all__ = [
     "AnalyticsSavedView",
     "AgentAction",
     "Appointment",
+    "AppointmentAdditionalService",
     "AppointmentProductLine",
     "AppointmentStatusHistory",
     "AutomationJob",
