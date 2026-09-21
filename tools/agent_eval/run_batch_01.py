@@ -1092,13 +1092,14 @@ def summarize(results: list[ScenarioResult]) -> dict:
         for row in results
     )
     minor = sum(
-        row.execution_error is None
-        and row.issues
+        1
+        for row in results
+        if row.execution_error is None
+        and bool(row.issues)
         and all(
             issue["severity"] in {"P2", "P3"}
             for issue in row.issues
         )
-        for row in results
     )
     failed = len(results) - fully_correct - minor
     tokens = batch_token_summary(results)
