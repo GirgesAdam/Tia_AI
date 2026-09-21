@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import unicodedata
 from collections import Counter
-from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.activity_event import ActivityEvent
@@ -13,6 +11,8 @@ from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.demo_reset import DEMO_SEED_ACTION, DEMO_SEED_VERSION, reset_demo_workspace
 from app.services.workspace_runtime_policy import workspace_runtime_policy
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import Session
 
 
 def norm(value: str) -> str:
