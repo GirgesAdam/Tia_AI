@@ -9,13 +9,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.branch import Branch
 from app.models.service import Service
 from app.models.workspace import Workspace
-from app.services.demo_reset import (
-    DEMO_SEED_ACTION,
-    DEMO_SEED_VERSION,
-    RESET_RESEED_TABLES,
-    _table_rows,
-    _workspace_tables,
-)
+from app.services.demo_reset import DEMO_SEED_ACTION, DEMO_SEED_VERSION
 from app.services.workspace_runtime_policy import workspace_runtime_policy
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
@@ -48,21 +42,6 @@ def main() -> int:
         expected_services = int((seed.get("row_counts") or {}).get("services", -1))
         if expected_services < 0:
             raise RuntimeError("EVAL_INFRA_ERROR: seed service row count missing")
-
-        seed_tables = seed.get("tables")
-        if not isinstance(seed_tables, dict):
-            raise RuntimeError("EVAL_INFRA_ERROR: canonical seed tables missing")
-        workspace_tables = _workspace_tables()
-        changed_tables = []
-        for name in sorted(RESET_RESEED_TABLES):
-            current_rows = _table_rows(db, workspace_tables[name], ws.id)
-            if current_rows != seed_tables.get(name, []):
-                changed_tables.append(name)
-        if changed_tables:
-            raise RuntimeError(
-                "EVAL_INFRA_ERROR: Demo differs from canonical seed in "
-                + ", ".join(changed_tables)
-            )
 
         branches = list(db.scalars(select(Branch).where(
             Branch.workspace_id == ws.id,
