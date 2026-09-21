@@ -151,3 +151,27 @@ def test_completion_and_no_show_require_appointment_start_time() -> None:
     assert 'target_status in {"completed", "no_show"} and now < appointment.start_at' in source
     assert '"confirmed": {"completed", "no_show"}' in source
     assert '"pending": {"completed", "no_show"}' in source
+
+
+def test_reschedule_canonical_contract_preserves_lineage_and_relationship_transfers() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    source = (backend / "app/services/appointment_operations.py").read_text(encoding="utf-8")
+
+    assert "rescheduled_from_appointment_id=current.id" in source
+    assert 'current.status = "rescheduled"' in source
+    assert "from_appointment_id=current.id" in source
+    assert "to_appointment_id=replacement.id" in source
+    assert "transfer_package_usage(" in source
+    assert "from_appointment=current" in source
+    assert "to_appointment=replacement" in source
+
+
+def test_ai_cancellation_inside_notice_maps_to_human_handoff_contract() -> None:
+    backend = Path(__file__).resolve().parent.parent
+    source = (backend / "app/integrations/clinic/tia_database.py").read_text(encoding="utf-8")
+
+    cancel_block = source.split("def cancel_appointment(", 1)[1].split("def reschedule_appointment(", 1)[0]
+    assert "override_policy=False" in cancel_block
+    assert "actor_is_admin=False" in cancel_block
+    assert "except AppointmentCancellationOverrideRequired" in cancel_block
+    assert "raise ClinicActionRequiresHuman(" in cancel_block
