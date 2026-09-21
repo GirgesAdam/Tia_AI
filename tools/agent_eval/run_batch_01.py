@@ -1208,6 +1208,10 @@ def main() -> int:
     json_path = output_dir / f"batch_01_{timestamp}.json"
     md_path = output_dir / f"batch_01_{timestamp}.md"
     write_reports(payload, json_path, md_path)
+    print("EVAL_REPORT_JSON_BEGIN", flush=True)
+    import json
+    print(json.dumps(payload, ensure_ascii=False, default=str), flush=True)
+    print("EVAL_REPORT_JSON_END", flush=True)
     print(f"JSON_RESULT={json_path}")
     print(f"MD_RESULT={md_path}")
     print(f"SCENARIOS_RUN={len(results)}")
