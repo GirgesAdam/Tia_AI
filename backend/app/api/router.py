@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes.agent import router as agent_router
 from app.api.routes.analytics import router as analytics_router
 from app.api.routes.analytics_views import router as analytics_views_router
+from app.api.routes.appointment_commerce import router as appointment_commerce_router
 from app.api.routes.appointment_edits import router as appointment_edits_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.automations import router as automations_router
@@ -41,6 +42,7 @@ api_router.include_router(automations_router, prefix="/automations", tags=["auto
 api_router.include_router(booking_router, prefix="/booking", tags=["booking"])
 api_router.include_router(doctor_calendar_router, prefix="/booking", tags=["booking"])
 api_router.include_router(appointment_edits_router, prefix="/booking", tags=["booking"])
+api_router.include_router(appointment_commerce_router, prefix="/booking", tags=["booking"])
 api_router.include_router(package_offers_router, prefix="/booking", tags=["booking"])
 api_router.include_router(channels_router, prefix="/channels", tags=["channels"])
 api_router.include_router(

@@ -155,6 +155,80 @@ export async function removeAppointmentProduct(formData: FormData) {
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 
+function appointmentCommerceError(error: unknown) {
+  if (!(error instanceof TiaApiError)) return "تعذر حفظ تعديل الزيارة. حاول مرة أخرى.";
+  const detail = error.technicalMessage || "";
+  if (detail.includes("primary appointment service")) return "الخدمة الأساسية موجودة بالفعل في الموعد.";
+  if (detail.includes("already attached")) return "الخدمة الإضافية موجودة بالفعل في الزيارة.";
+  if (detail.includes("laser device")) return "اختار جهاز الليزر الصحيح للخدمة.";
+  if (detail.includes("existing appointment payment")) return "فيه دفعة مسجلة على الموعد. راجعها أو استردها أولًا قبل تحويل الجلسة لباكيدج.";
+  if (detail.includes("different service") || detail.includes("different laser device")) return "الباكيدج المختارة لا تطابق الخدمة أو جهاز الليزر في الموعد.";
+  if (detail.includes("already linked to a package")) return "الموعد مرتبط بباكيدج بالفعل.";
+  return error.message;
+}
+
+export async function addAppointmentAdditionalService(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const serviceId = String(formData.get("service_id") || "");
+  const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
+  if (!appointmentId || !serviceId) return;
+  let errorMessage: string | null = null;
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/additional-services`, {
+      method: "POST",
+      body: JSON.stringify({ service_id: serviceId, laser_device_key: laserDeviceKey || null }),
+    });
+  } catch (error) {
+    errorMessage = appointmentCommerceError(error);
+  }
+  if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=service`);
+}
+
+export async function removeAppointmentAdditionalService(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const lineId = String(formData.get("line_id") || "");
+  if (!appointmentId || !lineId) return;
+  let errorMessage: string | null = null;
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/additional-services/${lineId}`, { method: "DELETE" });
+  } catch (error) {
+    errorMessage = appointmentCommerceError(error);
+  }
+  if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=service_removed`);
+}
+
+export async function purchasePackageFromAppointment(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const offerId = String(formData.get("offer_id") || "");
+  const paymentMethod = String(formData.get("payment_method") || "");
+  const externalReference = String(formData.get("external_reference") || "").trim();
+  if (!appointmentId || !offerId || !paymentMethod) return;
+  let errorMessage: string | null = null;
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/package-offer`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `appointment-package:${randomUUID()}` },
+      body: JSON.stringify({
+        offer_id: offerId,
+        payment_method: paymentMethod,
+        external_reference: externalReference || null,
+      }),
+    });
+  } catch (error) {
+    errorMessage = appointmentCommerceError(error);
+  }
+  if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=package`);
+}
+
 export async function refundAppointmentPayment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");

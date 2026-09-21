@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -558,6 +558,7 @@ def list_appointments(
     patient_id: UUID | None = None,
     doctor_id: UUID | None = None,
     branch_id: UUID | None = None,
+    appointment_date: Annotated[date | None, Query(alias="date")] = None,
     appointment_status: Annotated[AppointmentStatus | None, Query(alias="status")] = None,
     scope: AppointmentListScope = "all",
     start_from: datetime | None = None,
@@ -575,7 +576,23 @@ def list_appointments(
     if appointment_status:
         stmt = stmt.where(Appointment.status == appointment_status)
     now = datetime.now(UTC)
-    if scope == "today":
+    if appointment_date is not None:
+        branch = None
+        if branch_id is not None:
+            branch = db.scalar(
+                select(Branch).where(
+                    Branch.workspace_id == access.workspace.id,
+                    Branch.id == branch_id,
+                )
+            )
+        tz = workspace_timezone(access, branch)
+        local_start = datetime.combine(appointment_date, time.min, tzinfo=tz)
+        local_end = local_start + timedelta(days=1)
+        stmt = stmt.where(
+            Appointment.start_at >= local_start.astimezone(UTC),
+            Appointment.start_at < local_end.astimezone(UTC),
+        )
+    elif scope == "today":
         tz = workspace_timezone(access)
         local_now = now.astimezone(tz)
         local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)

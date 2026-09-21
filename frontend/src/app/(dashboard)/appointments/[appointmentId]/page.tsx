@@ -7,6 +7,7 @@ import {
   CircleX,
   History,
   PackagePlus,
+  Plus,
   ReceiptText,
   Stethoscope,
   Trash2,
@@ -24,11 +25,14 @@ import { appointmentLabels, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type { AppointmentOperationsDetail, AppointmentPaymentSummary, Doctor, Staff } from "@/lib/types";
 import {
+  addAppointmentAdditionalService,
   addAppointmentProduct,
   cancelAppointment,
   confirmAppointment,
+  purchasePackageFromAppointment,
   recordAppointmentPayment,
   refundAppointmentPayment,
+  removeAppointmentAdditionalService,
   removeAppointmentProduct,
   updateAppointmentStatus,
 } from "./actions";
@@ -71,15 +75,45 @@ type AppointmentProductLine = {
 type PaymentSummaryWithProducts = AppointmentPaymentSummary & {
   service_price_minor?: number;
   products_total_minor?: number;
+  additional_services_total_minor?: number;
+};
+
+type AppointmentAdditionalService = {
+  id: string;
+  appointment_id: string;
+  service_id: string;
+  service_name: string;
+  unit_price_minor: number;
+  currency: string;
+  laser_device_key: string | null;
+  laser_device_name: string | null;
+};
+
+type PackageOffer = {
+  id: string;
+  service_id: string;
+  service_name: string;
+  device_key: string;
+  device_name: string;
+  sessions_count: number;
+  price_minor: number;
+  currency: string;
 };
 
 function minorInput(value: number) {
   return (value / 100).toFixed(2);
 }
 
-export default async function AppointmentOperationsPage({ params }: { params: Promise<{ appointmentId: string }> }) {
+export default async function AppointmentOperationsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ appointmentId: string }>;
+  searchParams: Promise<{ visit_error?: string; visit_saved?: string }>;
+}) {
   const { appointmentId } = await params;
-  const [detail, payments, products, productLines, services, devicePrices, doctors, staff] = await Promise.all([
+  const feedback = await searchParams;
+  const [detail, payments, products, productLines, services, devicePrices, doctors, staff, additionalServices, packageOffers] = await Promise.all([
     tiaRequest<AppointmentOperationsDetail>(`/booking/appointments/${appointmentId}/operations`),
     tiaRequest<PaymentSummaryWithProducts>(`/payments/appointments/${appointmentId}`),
     tiaRequest<ClinicProduct[]>("/inventory/products").catch(() => []),
@@ -88,6 +122,8 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
     tiaRequest<AppointmentDevicePrice[]>("/inventory/laser-prices").catch(() => []),
     tiaRequest<Doctor[]>("/clinic/doctors").catch(() => []),
     tiaRequest<Staff[]>("/clinic/staff").catch(() => []),
+    tiaRequest<AppointmentAdditionalService[]>(`/booking/appointments/${appointmentId}/additional-services`).catch(() => []),
+    tiaRequest<PackageOffer[]>("/booking/package-offers?active_only=true").catch(() => []),
   ]);
   const { appointment } = detail;
   const allowed = new Set(detail.allowed_actions);
@@ -101,6 +137,12 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
     appointment.patient_package_id || appointment.billing_context === "package_prepaid" || appointment.package_external_id,
   );
   const overpaidMinor = Math.max(payments.net_paid_minor - payments.price_minor, 0);
+  const canEditVisitCharges = ["pending", "confirmed", "checked_in", "in_progress", "completed"].includes(appointment.status);
+  const compatiblePackageOffers = packageOffers.filter(
+    (offer) =>
+      offer.service_id === appointment.service_id &&
+      (!laserAppointment.laser_device_key || offer.device_key === laserAppointment.laser_device_key),
+  );
   const staffMap = new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()]));
   const doctorOptions = doctors
     .filter((item) => item.is_active)
@@ -117,6 +159,17 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
           </Link>
         }
       />
+
+      {feedback.visit_error && (
+        <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-800">
+          {feedback.visit_error}
+        </div>
+      )}
+      {feedback.visit_saved && !feedback.visit_error && (
+        <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm font-bold text-teal-800">
+          {feedback.visit_saved === "package" ? "تم شراء الباكيدج واحتساب الجلسة الحالية منها." : "تم تحديث خدمات الزيارة والحساب."}
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-5">
@@ -222,11 +275,107 @@ export default async function AppointmentOperationsPage({ params }: { params: Pr
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">قيمة الخدمة</div><b className="mt-1 block">{formatMoney(payments.service_price_minor ?? appointment.price_minor, payments.currency)}</b></div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الخدمة الأساسية</div><b className="mt-1 block">{packageBacked ? "ضمن الباكيدج" : formatMoney(payments.service_price_minor ?? appointment.price_minor, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">خدمات إضافية</div><b className="mt-1 block">{formatMoney(payments.additional_services_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المنتجات</div><b className="mt-1 block">{formatMoney(payments.products_total_minor ?? 0, payments.currency)}</b></div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي المستحق</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي المستحق للزيارة</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
               </div>
+
+              <details className="rounded-xl border border-slate-200 p-3" open={additionalServices.length > 0 ? true : undefined}>
+                <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900"><Stethoscope size={16} /> خدمات إضافية أثناء الزيارة</summary>
+                <div className="mt-4 space-y-3">
+                  {additionalServices.length > 0 && (
+                    <div className="space-y-2">
+                      {additionalServices.map((line) => (
+                        <div key={line.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-3">
+                          <div>
+                            <div className="text-sm font-black">{line.service_name}</div>
+                            <div className="mt-1 text-xs text-[var(--muted)]">
+                              {line.laser_device_name ? `${line.laser_device_name} · ` : ""}{formatMoney(line.unit_price_minor, line.currency)}
+                            </div>
+                          </div>
+                          {canEditVisitCharges && (
+                            <form action={removeAppointmentAdditionalService}>
+                              <input type="hidden" name="appointment_id" value={appointment.id} />
+                              <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                              <input type="hidden" name="line_id" value={line.id} />
+                              <Button size="sm" variant="ghost" aria-label={`حذف ${line.service_name}`}><Trash2 size={14} /></Button>
+                            </form>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {canEditVisitCharges ? (
+                    <form action={addAppointmentAdditionalService} className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(150px,220px)_auto] md:items-end">
+                      <input type="hidden" name="appointment_id" value={appointment.id} />
+                      <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                      <label className="text-xs font-bold">
+                        الخدمة
+                        <select name="service_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
+                          <option value="" disabled>اختار خدمة إضافية</option>
+                          {services.filter((item) => item.is_active && item.id !== appointment.service_id).map((item) => (
+                            <option key={item.id} value={item.id}>{item.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs font-bold">
+                        جهاز الليزر - عند الحاجة
+                        <select name="laser_device_key" defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
+                          <option value="">غير مطلوب</option>
+                          {[...new Map(devicePrices.filter((item) => item.configured).map((item) => [item.device_key, item.device_name])).entries()].map(([key, name]) => (
+                            <option key={key} value={key}>{name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <Button><Plus size={14} /> إضافة للخدمة والحساب</Button>
+                    </form>
+                  ) : (
+                    <div className="text-xs text-[var(--muted)]">لا يمكن تعديل خدمات زيارة ملغاة أو عدم حضور أو موعد تم تغييره.</div>
+                  )}
+                  <div className="text-xs leading-5 text-[var(--muted)]">
+                    الخدمة الإضافية تُضاف للحساب فقط ولا تغيّر وقت الموعد المحجوز أو مدته في الجدول.
+                  </div>
+                </div>
+              </details>
+
+              {!packageBacked && compatiblePackageOffers.length > 0 && canEditVisitCharges && (
+                <details className="rounded-xl border border-teal-200 bg-teal-50/40 p-3">
+                  <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-teal-950"><PackagePlus size={16} /> تحويل الجلسة الحالية إلى باكيدج</summary>
+                  <form action={purchasePackageFromAppointment} className="mt-4 grid gap-3 md:grid-cols-2">
+                    <input type="hidden" name="appointment_id" value={appointment.id} />
+                    <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                    <label className="text-xs font-bold">
+                      الباكيدج
+                      <select name="offer_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
+                        <option value="" disabled>اختار الباكيدج</option>
+                        {compatiblePackageOffers.map((offer) => (
+                          <option key={offer.id} value={offer.id}>
+                            {offer.sessions_count} جلسات · {offer.device_name} · {formatMoney(offer.price_minor, offer.currency)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold">
+                      طريقة الدفع
+                      <select name="payment_method" defaultValue="cash" className="form-control mt-1.5 h-10 min-h-10">
+                        <option value="cash">Cash</option>
+                        <option value="visa">Visa</option>
+                        <option value="instapay">InstaPay</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold md:col-span-2">
+                      رقم الإيصال أو المرجع - اختياري
+                      <input name="external_reference" maxLength={128} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: رقم الإيصال" />
+                    </label>
+                    <div className="rounded-xl border border-teal-200 bg-white p-3 text-xs leading-5 text-teal-950 md:col-span-2">
+                      عند التأكيد سيتسجل سعر الباكيدج كاملًا، والجلسة الحالية هتتحسب تلقائيًا كأول جلسة منها بدل سعر الجلسة الفردية. أي خدمات إضافية أو منتجات تفضل على حساب الزيارة بشكل مستقل.
+                    </div>
+                    <div className="md:col-span-2"><Button><PackagePlus size={15} /> شراء الباكيدج واحتساب الجلسة</Button></div>
+                  </form>
+                </details>
+              )}
 
               {overpaidMinor > 0 && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">

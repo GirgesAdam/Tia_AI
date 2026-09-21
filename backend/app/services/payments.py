@@ -12,6 +12,7 @@ from app.integrations.clinic.authority import (
     require_tia_workspace_domain_write,
 )
 from app.models.appointment import Appointment
+from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.clinic_inventory import AppointmentProductLine
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
 from app.schemas.payments import AppointmentPaymentSummaryRead, PaymentTransactionRead
@@ -106,12 +107,11 @@ def _appointment_charge_breakdown(
     *,
     workspace_id: UUID,
     appointment: Appointment,
-) -> tuple[int, int, int]:
-    """Return service charge, product charge and total amount due.
+) -> tuple[int, int, int, int]:
+    """Return primary service, products, extra services, and total amount due.
 
-    A package-prepaid appointment contributes no appointment-level service charge;
-    products sold during that visit remain ordinary appointment revenue and must
-    still be collected. Standard appointments owe both service and products.
+    A package-backed appointment contributes no charge for its primary scheduled
+    service. Products and manually-added services remain ordinary visit revenue.
     """
     products_total = int(
         db.scalar(
@@ -129,13 +129,32 @@ def _appointment_charge_breakdown(
         )
         or 0
     )
+    additional_services_total = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(AppointmentAdditionalService.unit_price_minor),
+                    0,
+                )
+            ).where(
+                AppointmentAdditionalService.workspace_id == workspace_id,
+                AppointmentAdditionalService.appointment_id == appointment.id,
+            )
+        )
+        or 0
+    )
     service_price = int(appointment.price_minor)
     service_due = (
         0
         if getattr(appointment, "billing_context", "standard") == "package_prepaid"
         else service_price
     )
-    return service_price, products_total, service_due + products_total
+    return (
+        service_price,
+        products_total,
+        additional_services_total,
+        service_due + products_total + additional_services_total,
+    )
 
 
 def _payment_totals(
@@ -334,7 +353,7 @@ def refresh_appointment_payment_snapshots(
             appointment_id=appointment_id,
             for_update=True,
         )
-        _service_price, _products_total, due = _appointment_charge_breakdown(
+        _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
             db,
             workspace_id=workspace_id,
             appointment=appointment,
@@ -358,7 +377,7 @@ def get_appointment_payment_summary(
     if appointment is None:
         raise PaymentOperationNotFound("Appointment not found.")
     rows = _ledger_rows(db, workspace_id=workspace_id, appointment_id=appointment.id)
-    service_price, products_total, due = _appointment_charge_breakdown(
+    service_price, products_total, additional_services_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -371,6 +390,7 @@ def get_appointment_payment_summary(
         price_minor=due,
         service_price_minor=service_price,
         products_total_minor=products_total,
+        additional_services_total_minor=additional_services_total,
         gross_paid_minor=totals.gross_paid_minor,
         refunded_minor=totals.refunded_minor,
         net_paid_minor=totals.net_paid_minor,
@@ -450,7 +470,7 @@ def record_payment(
         appointment_id=appointment.id,
         for_update=True,
     )
-    _service_price, _products_total, due = _appointment_charge_breakdown(
+    _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -630,7 +650,7 @@ def record_refund(
             allocated_amount_minor=amount_minor,
         )
     )
-    _service_price, _products_total, due = _appointment_charge_breakdown(
+    _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
