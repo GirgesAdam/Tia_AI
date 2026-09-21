@@ -140,6 +140,7 @@ def run_case(engine, slug: str, case_fn):
     outer = connection.begin()
     db = Session(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
     original = batch.booking_context
+    original_run_messages = batch.run_messages
     try:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == slug))
         if workspace is None:
@@ -148,6 +149,39 @@ def run_case(engine, slug: str, case_fn):
         acquire_demo_request_lock(db, workspace)
         batch.booking_context = _bookable_context
         _fixture_context.clear()
+
+        def validated_run_messages(run_db, run_workspace, patient, scenario_id, messages):
+            evidence = _fixture_context
+            evidence["patient_id"] = str(patient.id)
+            required = (
+                "workspace_id", "branch_id", "service_id", "doctor_id",
+                "doctor_service_relationship_verified",
+                "doctor_branch_relationship_verified",
+                "working_hours_verified", "selected_exact_slot",
+            )
+            missing = [key for key in required if not evidence.get(key)]
+            if missing:
+                raise RuntimeError(f"EVAL_INFRA_ERROR: incomplete fixture evidence before LLM: {missing}")
+            if evidence.get("requires_laser_device") and not evidence.get("laser_device_prices"):
+                raise RuntimeError("EVAL_INFRA_ERROR: laser fixture missing device prices")
+            if scenario_id == "package_holder_other_service":
+                package = run_db.execute(text("""
+                    SELECT id, service_id
+                    FROM patient_packages
+                    WHERE workspace_id=:wid AND patient_id=:pid AND status='active'
+                    ORDER BY purchased_at DESC
+                    LIMIT 1
+                """), {"wid": run_workspace.id, "pid": patient.id}).mappings().first()
+                if not package:
+                    raise RuntimeError("EVAL_INFRA_ERROR: package scenario missing active package")
+                evidence["package_id"] = str(package["id"])
+                evidence["package_service_id"] = str(package["service_id"])
+                if evidence["package_service_id"] == evidence["service_id"]:
+                    raise RuntimeError("EVAL_INFRA_ERROR: package scenario service is not different")
+            evidence["fixture_valid"] = True
+            return original_run_messages(run_db, run_workspace, patient, scenario_id, messages)
+
+        batch.run_messages = validated_run_messages
         case = case_fn(db, workspace)
         scenario_id, category, purpose, turns, before, after, verification, evaluation, issues = case
         evidence = dict(_fixture_context)
@@ -179,6 +213,7 @@ def run_case(engine, slug: str, case_fn):
         )
     finally:
         batch.booking_context = original
+        batch.run_messages = original_run_messages
         db.close()
         if outer.is_active:
             outer.rollback()
