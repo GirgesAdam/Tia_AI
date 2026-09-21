@@ -1,0 +1,26 @@
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app/backend:/app
+
+WORKDIR /app
+
+RUN addgroup --system app && adduser --system --ingroup app app
+
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install -r /app/backend/requirements.txt
+
+COPY backend/alembic.ini /app/backend/alembic.ini
+COPY backend/alembic /app/backend/alembic
+COPY backend/app /app/backend/app
+COPY tools/agent_eval /app/tools/agent_eval
+
+RUN mkdir -p /app/backend/eval_results \
+    && chown -R app:app /app/backend/eval_results
+
+USER app
+
+CMD ["python", "-m", "tools.agent_eval.run_batch_01", "--workspace-slug", "tia", "--output-dir", "/app/backend/eval_results"]
