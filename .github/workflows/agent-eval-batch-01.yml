@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: agent-eval-batch-01
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   evaluate:
