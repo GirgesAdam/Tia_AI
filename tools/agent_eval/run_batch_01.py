@@ -5,6 +5,7 @@ import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
@@ -13,6 +14,8 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
 from app.models.booking_settings import BookingSettings
 from app.models.patient import Patient
+from app.models.patient_package import PackageUsage
+from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.models.workspace import Workspace
 from sqlalchemy import create_engine, select, text
@@ -484,11 +487,66 @@ def case_change_mind(db: Session, workspace: Workspace):
     )
 
 
+def _appointment_relationship_snapshot(
+    db: Session,
+    workspace: Workspace,
+    appointment_id,
+) -> dict[str, list[str]]:
+    return {
+        "payment_allocation_ids": sorted(
+            str(value)
+            for value in db.scalars(
+                select(PaymentAllocation.id).where(
+                    PaymentAllocation.workspace_id == workspace.id,
+                    PaymentAllocation.appointment_id == appointment_id,
+                )
+            )
+        ),
+        "payment_transaction_ids": sorted(
+            str(value)
+            for value in db.scalars(
+                select(PaymentTransaction.id).where(
+                    PaymentTransaction.workspace_id == workspace.id,
+                    PaymentTransaction.appointment_id == appointment_id,
+                )
+            )
+        ),
+        "package_usage_ids": sorted(
+            str(value)
+            for value in db.scalars(
+                select(PackageUsage.id).where(
+                    PackageUsage.workspace_id == workspace.id,
+                    PackageUsage.appointment_id == appointment_id,
+                )
+            )
+        ),
+    }
+
+
+def _reschedule_relationships_moved(
+    before: dict[str, list[str]],
+    original_after: dict[str, list[str]],
+    replacement_after: dict[str, list[str]],
+) -> bool:
+    return all(
+        original_after.get(key, []) == []
+        and replacement_after.get(key, []) == before.get(key, [])
+        for key in (
+            "payment_allocation_ids",
+            "payment_transaction_ids",
+            "package_usage_ids",
+        )
+    )
+
+
 def case_reschedule(db: Session, workspace: Workspace):
     patient = quiet_patient(db, workspace)
     context = booking_context(db, workspace, service_slug="hydrafacial")
     existing = seed_appointment(db, workspace, patient, context)
     before = state_snapshot(db, workspace, patient)
+    relationships_before = _appointment_relationship_snapshot(
+        db, workspace, existing.id
+    )
     slot, available = alternate_slot(db, workspace, context)
     date_text, time_text = local_slot(available, slot)
     turns = run_messages(
@@ -503,6 +561,25 @@ def case_reschedule(db: Session, workspace: Workspace):
     ]
     target_iso = slot.start_at.isoformat()
     replacement = replacements[0] if len(replacements) == 1 else None
+    original_relationships_after = _appointment_relationship_snapshot(
+        db, workspace, existing.id
+    )
+    replacement_relationships_after = (
+        _appointment_relationship_snapshot(
+            db, workspace, UUID(replacement["id"])
+        )
+        if replacement is not None
+        else {
+            "payment_allocation_ids": [],
+            "payment_transaction_ids": [],
+            "package_usage_ids": [],
+        }
+    )
+    relationships_ok = _reschedule_relationships_moved(
+        relationships_before,
+        original_relationships_after,
+        replacement_relationships_after,
+    )
     ok = (
         original is not None
         and original["status"] == "rescheduled"
@@ -515,6 +592,7 @@ def case_reschedule(db: Session, workspace: Workspace):
         and replacement["doctor_id"] == str(existing.doctor_id)
         and replacement["branch_id"] == str(existing.branch_id)
         and len(replacements) == 1
+        and relationships_ok
     )
     issues = classify_issue(
         ok,
@@ -532,6 +610,10 @@ def case_reschedule(db: Session, workspace: Workspace):
             "original_status": original["status"] if original else None,
             "replacement_count": len(replacements),
             "replacement": replacement,
+            "relationships_before": relationships_before,
+            "original_relationships_after": original_relationships_after,
+            "replacement_relationships_after": replacement_relationships_after,
+            "payment_package_relationships_valid": relationships_ok,
             "canonical_reschedule_contract_correct": ok,
         },
         default_evaluation(action_ok=ok, db_ok=ok), issues,
