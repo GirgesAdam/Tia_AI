@@ -267,5 +267,5 @@ def test_eval_preflight_is_read_only() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "tools/agent_eval/clean_preflight.py").read_text(encoding="utf-8")
     assert "reset_demo_workspace(" not in source
-    assert "_table_rows(" in source
+    assert "services_expected_from_seed" in source
     assert "canonical_reset\": \"NOT_NEEDED" in source
