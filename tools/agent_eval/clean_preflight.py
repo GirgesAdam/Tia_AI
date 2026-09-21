@@ -9,7 +9,13 @@ from app.models.activity_event import ActivityEvent
 from app.models.branch import Branch
 from app.models.service import Service
 from app.models.workspace import Workspace
-from app.services.demo_reset import (\n    DEMO_SEED_ACTION,\n    DEMO_SEED_VERSION,\n    RESET_RESEED_TABLES,\n    _table_rows,\n    _workspace_tables,\n)
+from app.services.demo_reset import (
+    DEMO_SEED_ACTION,
+    DEMO_SEED_VERSION,
+    RESET_RESEED_TABLES,
+    _table_rows,
+    _workspace_tables,
+)
 from app.services.workspace_runtime_policy import workspace_runtime_policy
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
