@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -559,7 +560,7 @@ def _safe_cancellation_context(db: Session, workspace: Workspace):
         )
         safe_slots = [slot for slot in available.slots if slot.start_at > safe_after]
         if safe_slots:
-            available.slots = safe_slots
+            available = replace(available, slots=tuple(safe_slots))
             return (catalog[0], service, doctor, branch_id, day, available), notice_minutes
     raise RuntimeError("EVAL_INFRA_ERROR: no cancellation fixture outside notice window")
 
