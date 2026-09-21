@@ -5,17 +5,15 @@ import json
 import os
 import statistics
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import UUID
-
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest, ClinicCapability
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.workspace import Workspace
 from app.services.demo_reset import acquire_demo_request_lock
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import Session
 from tools.agent_eval import harness
 from tools.agent_eval import run_batch_01 as batch
 
@@ -199,7 +197,7 @@ def run_case(engine, slug: str, case_fn):
             state_before=before, state_after=after, db_verification=verification,
             evaluation=evaluation, issues=issues, token_usage=harness.aggregate_tokens(turns),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - eval infra classifies unexpected failures
         return harness.ScenarioResult(
             id=case_fn.__name__.removeprefix("case_"),
             category="eval_infra",
