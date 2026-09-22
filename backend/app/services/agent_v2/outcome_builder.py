@@ -172,39 +172,107 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     return details
 
 
-def _service_catalog_facts(result: ReadResult, requested_details: set[str]) -> dict[str, object]:
-    visible = _visible_value(result.payload)
-    if not isinstance(visible, dict):
-        return {}
-    service = visible.get("service")
-    if not isinstance(service, dict):
-        return visible
+def _priced_laser_devices(service: dict[str, object]) -> list[dict[str, object]]:
+    raw_devices = service.get("laser_devices")
+    if not isinstance(raw_devices, list):
+        return []
+    priced: list[dict[str, object]] = []
+    for device in raw_devices:
+        if not isinstance(device, dict) or device.get("configured") is False:
+            continue
+        price = _money(device.get("price_minor"), device.get("currency"))
+        if price is None:
+            continue
+        priced.append(
+            {
+                "device_key": device.get("device_key"),
+                "device_name": device.get("device_name"),
+                "price": price,
+            }
+        )
+    return priced
+
+
+def _service_catalog_facts(
+    result: ReadResult,
+    requested_details: set[str],
+    *,
+    selected_device_key: str | None = None,
+) -> dict[str, object]:
+    raw_service = result.payload.get("service")
+    if not isinstance(raw_service, dict):
+        visible = _visible_value(result.payload)
+        return visible if isinstance(visible, dict) else {}
 
     shaped: dict[str, object] = {}
-    if service.get("name") not in (None, ""):
-        shaped["name"] = service["name"]
+    if raw_service.get("name") not in (None, ""):
+        shaped["name"] = raw_service["name"]
+
+    priced_devices = _priced_laser_devices(raw_service)
+    requires_device = bool(raw_service.get("requires_laser_device")) or bool(priced_devices)
     if "price" in requested_details:
-        for key in ("price", "currency"):
-            if service.get(key) not in (None, ""):
-                shaped[key] = service[key]
-    if "duration" in requested_details:
-        if service.get("customer_duration_text") not in (None, ""):
-            shaped["customer_duration_text"] = service["customer_duration_text"]
-        elif service.get("duration_minutes") not in (None, ""):
-            shaped["duration_minutes"] = service["duration_minutes"]
-    if "description" in requested_details and service.get("description") not in (None, ""):
-        shaped["description"] = service["description"]
-    if "devices" in requested_details and service.get("laser_devices") not in (None, [], {}):
-        shaped["laser_devices"] = service["laser_devices"]
+        if requires_device:
+            shaped["requires_laser_device"] = True
+            selected = next(
+                (
+                    device
+                    for device in priced_devices
+                    if selected_device_key is not None
+                    and str(device.get("device_key")) == selected_device_key
+                ),
+                None,
+            )
+            if selected is None and selected_device_key is None and len(priced_devices) == 1:
+                selected = priced_devices[0]
+            if selected is not None:
+                shaped["selected_laser_device"] = {
+                    "device_name": selected.get("device_name"),
+                    "price": selected["price"],
+                }
+            elif priced_devices:
+                shaped["laser_devices"] = [
+                    {
+                        "device_name": device.get("device_name"),
+                        "price": device["price"],
+                    }
+                    for device in priced_devices
+                ]
+        else:
+            price = _money(raw_service.get("price_minor"), raw_service.get("currency"))
+            if price is None and raw_service.get("price") not in (None, ""):
+                price = str(raw_service["price"])
+            if price is not None:
+                shaped["price"] = price
+
+    visible_service = _visible_value(raw_service)
+    if isinstance(visible_service, dict):
+        if "duration" in requested_details:
+            if visible_service.get("customer_duration_text") not in (None, ""):
+                shaped["customer_duration_text"] = visible_service["customer_duration_text"]
+            elif visible_service.get("duration_minutes") not in (None, ""):
+                shaped["duration_minutes"] = visible_service["duration_minutes"]
+        if "description" in requested_details and visible_service.get("description") not in (None, ""):
+            shaped["description"] = visible_service["description"]
+        if "devices" in requested_details and visible_service.get("laser_devices") not in (None, [], {}):
+            shaped["laser_devices"] = visible_service["laser_devices"]
     return {"service": shaped}
 
 
-def _read_facts(result: ReadResult, *, requested_service_details: set[str]) -> dict[str, object]:
+def _read_facts(
+    result: ReadResult,
+    *,
+    requested_service_details: set[str],
+    selected_device_key: str | None = None,
+) -> dict[str, object]:
     if result.kind == "availability":
         return {"availability": _availability_facts(result)}
     if result.kind == "service_catalog":
         return {
-            "service_catalog": _service_catalog_facts(result, requested_service_details)
+            "service_catalog": _service_catalog_facts(
+                result,
+                requested_service_details,
+                selected_device_key=selected_device_key,
+            )
         }
     return {result.kind: _visible_value(result.payload)}
 
@@ -213,12 +281,17 @@ def _facts_from_reads(
     bundle: ReadExecutionBundle | None,
     *,
     requested_service_details: set[str],
+    selected_device_key: str | None = None,
 ) -> dict[str, object]:
     if bundle is None:
         return {}
     facts: dict[str, object] = {}
     for result in bundle.results:
-        current = _read_facts(result, requested_service_details=requested_service_details)
+        current = _read_facts(
+            result,
+            requested_service_details=requested_service_details,
+            selected_device_key=selected_device_key,
+        )
         for key, value in current.items():
             if key not in facts:
                 facts[key] = value
@@ -480,7 +553,16 @@ def build_step_outcome(
 ) -> TurnOutcome:
     """Convert deterministic planning/execution facts into one responder-safe outcome."""
     requested_details = _requested_service_details(step, turn)
-    read_facts = _facts_from_reads(reads, requested_service_details=requested_details)
+    selected_device_key = (
+        str(step.facts["device_key"])
+        if step.facts.get("device_key") not in (None, "")
+        else None
+    )
+    read_facts = _facts_from_reads(
+        reads,
+        requested_service_details=requested_details,
+        selected_device_key=selected_device_key,
+    )
     base_facts = {**_visible_dict(step.facts), **read_facts}
     active_summary = _visible_dict(dict(active_task_summary or {}))
 
