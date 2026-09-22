@@ -243,6 +243,8 @@ def _service_catalog_facts(
                 price = str(raw_service["price"])
             if price is not None:
                 shaped["price"] = price
+                if raw_service.get("currency") not in (None, ""):
+                    shaped["currency"] = str(raw_service["currency"]).upper()
 
     visible_service = _visible_value(raw_service)
     if isinstance(visible_service, dict):
