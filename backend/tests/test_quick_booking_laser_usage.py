@@ -46,6 +46,7 @@ def test_quick_booking_and_laser_usage_schemas_validate_staff_input() -> None:
 def test_quick_booking_backend_is_an_audited_override() -> None:
     root = _root()
     route = (root / "backend/app/api/routes/booking.py").read_text(encoding="utf-8")
+    schema = (root / "backend/app/schemas/booking.py").read_text(encoding="utf-8")
     model = (root / "backend/app/models/appointment.py").read_text(encoding="utf-8")
     migration = (root / "backend/alembic/versions/0079_quick_booking_laser_usage.py").read_text(encoding="utf-8")
     device_override = (
@@ -53,6 +54,7 @@ def test_quick_booking_backend_is_an_audited_override() -> None:
     ).read_text(encoding="utf-8")
     assert '@router.post(\n    "/appointments/quick"' in route
     assert "is_quick_booking=True" in route
+    assert "is_quick_booking: bool = False" in schema
     assert "doctor_assignment_known=True" in route
     assert 'action="appointment.quick_created"' in route
     assert "quick_booking_integrity_detail" in route
