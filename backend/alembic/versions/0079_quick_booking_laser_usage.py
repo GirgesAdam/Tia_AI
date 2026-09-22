@@ -4,7 +4,9 @@ Revision ID: 0079_quick_booking_laser_usage
 Revises: 0078_repair_schedule_billing_categories
 """
 from collections.abc import Sequence
+
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0079_quick_booking_laser_usage"

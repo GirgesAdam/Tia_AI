@@ -42,9 +42,9 @@ from app.schemas.booking import (
     AppointmentReschedule,
     AppointmentStatus,
     AppointmentStatusHistoryRead,
-    QuickAppointmentCreate,
     AvailabilityResponse,
     AvailabilitySlot,
+    QuickAppointmentCreate,
 )
 from app.schemas.patient_packages import (
     PatientPackageCancelRefundCreate,
@@ -441,9 +441,12 @@ def create_quick_appointment(
     service = db.scalar(select(Service).where(
         Service.workspace_id == access.workspace.id, Service.id == payload.service_id, Service.is_active.is_(True)
     ))
-    if branch is None: raise not_found("Branch")
-    if doctor is None: raise not_found("Doctor")
-    if service is None: raise not_found("Service")
+    if branch is None:
+        raise not_found("Branch")
+    if doctor is None:
+        raise not_found("Doctor")
+    if service is None:
+        raise not_found("Service")
 
     if service.requires_laser_device:
         if payload.laser_device_key is None:
@@ -919,7 +922,8 @@ def update_appointment_laser_usage(
             Appointment.id == appointment_id,
         ).with_for_update()
     )
-    if appointment is None: raise not_found("Appointment")
+    if appointment is None:
+        raise not_found("Appointment")
     if appointment.laser_device_key is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="Laser pulses can only be recorded for a laser appointment.")
