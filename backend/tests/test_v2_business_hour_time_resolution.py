@@ -203,4 +203,5 @@ def test_different_branch_schedules_are_not_merged_or_guessed() -> None:
 
     context = build_semantic_context(catalog)
 
-    assert context.model_input["clinic_operating_hours"] == []
+    assert "clinic_operating_hours" not in context.model_input
+    assert context.server_metadata["clinic_operating_hours"] == []
