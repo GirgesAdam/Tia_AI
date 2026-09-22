@@ -26,7 +26,6 @@ from tools.agent_eval.run_batch_01 import (
     case_price,
     classify_issue,
     quiet_patient,
-    run_case,
     run_messages,
     summarize,
 )
@@ -43,12 +42,7 @@ def _neighbor_normal_service(db: Session, workspace: Workspace):
             Service.is_active.is_(True),
             Service.slug != "prp-skin",
             Service.price_minor > 0,
-            ~text(
-                "EXISTS (SELECT 1 FROM service_device_prices sdp "
-                "WHERE sdp.workspace_id = services.workspace_id "
-                "AND sdp.service_id = services.id "
-                "AND sdp.is_active IS TRUE)"
-            ),
+            Service.requires_laser_device.is_(False),
         )
         .order_by(Service.name)
         .limit(1)
@@ -221,12 +215,61 @@ def _locked_run_case(engine, slug: str, case_fn) -> ScenarioResult:
             raise RuntimeError("EVAL_INFRA_ERROR: workspace missing")
         assert_demo_only(workspace)
         acquire_demo_request_lock(db, workspace)
+        (
+            scenario_id,
+            category,
+            purpose,
+            turns,
+            before,
+            after,
+            verification,
+            evaluation,
+            issues,
+        ) = case_fn(db, workspace)
+        return ScenarioResult(
+            id=scenario_id,
+            category=category,
+            purpose=purpose,
+            turns=turns,
+            state_before=before,
+            state_after=after,
+            db_verification=verification,
+            evaluation=evaluation,
+            issues=issues,
+            token_usage=aggregate_tokens(turns),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ScenarioResult(
+            id=case_fn.__name__.removeprefix("case_").removeprefix("_neighbor_"),
+            category="eval_infra",
+            purpose="Targeted pricing evaluation infrastructure failure.",
+            turns=[],
+            state_before={},
+            state_after={},
+            db_verification={},
+            evaluation={"status": "EVAL_INFRA_ERROR"},
+            issues=[
+                {
+                    "severity": "EVAL_INFRA_ERROR",
+                    "title": "Evaluation infrastructure error",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                }
+            ],
+            token_usage={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "total_tokens": 0,
+                "calls": 0,
+                "metadata_missing_calls": 0,
+            },
+            execution_error=f"{type(exc).__name__}: {exc}",
+        )
     finally:
         db.close()
         if outer.is_active:
             outer.rollback()
         connection.close()
-    return run_case(engine, slug, case_fn)
 
 
 def _emit(payload: dict) -> None:
@@ -258,6 +301,9 @@ def main() -> int:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     results = [_locked_run_case(engine, "tia", case_fn) for case_fn in cases]
     summary = summarize(results)
+    summary["eval_infra_errors"] = sum(
+        row.execution_error is not None for row in results
+    )
     payload = {
         "run_metadata": {
             "kind": "pricing_fix_targeted",
@@ -271,6 +317,8 @@ def main() -> int:
     }
     _emit(payload)
     engine.dispose()
+    if summary["eval_infra_errors"]:
+        return 3
     return 0 if not summary["P0"] and not summary["P1"] else 2
 
 
