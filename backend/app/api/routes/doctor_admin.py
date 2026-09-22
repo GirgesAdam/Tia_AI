@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -17,12 +17,16 @@ from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
-from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.schemas.clinic import DoctorRead, DoctorWorkingHourRead, WorkingHoursReplace
 from app.services.activity import record_activity_event
+from app.services.doctor_categories import (
+    categories_from_service_ids,
+    normalized_service_categories,
+    sync_doctor_service_assignments,
+)
 
 router = APIRouter()
 
@@ -34,7 +38,8 @@ class DoctorAdminCreate(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
-    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
+    service_categories: list[Literal["laser", "dermatology", "slimming"]] | None = None
+    service_ids: list[UUID] | None = Field(default=None, max_length=200)
     working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
     booking_enabled: bool = True
 
@@ -46,7 +51,8 @@ class DoctorAdminUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
-    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
+    service_categories: list[Literal["laser", "dermatology", "slimming"]] | None = None
+    service_ids: list[UUID] | None = Field(default=None, max_length=200)
     booking_enabled: bool = True
 
 
@@ -69,30 +75,22 @@ def _stored_doctor_name(
     return ((first_name or "").strip(), (last_name or "").strip())
 
 
-def _active_service_ids(
+def _requested_categories(
     db: Session,
     *,
     workspace_id: UUID,
-    service_ids: list[UUID],
-) -> set[UUID]:
-    unique_ids = set(service_ids)
-    if not unique_ids:
-        return set()
-    rows = set(
-        db.scalars(
-            select(Service.id).where(
-                Service.workspace_id == workspace_id,
-                Service.id.in_(unique_ids),
-                Service.is_active.is_(True),
-            )
-        )
-    )
-    if rows != unique_ids:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="One or more selected services are missing or inactive.",
-        )
-    return rows
+    service_categories: list[str] | None,
+    service_ids: list[UUID] | None,
+    current: list[str] | None = None,
+) -> list[str]:
+    try:
+        if service_categories is not None:
+            return normalized_service_categories(service_categories)
+        if service_ids is not None:
+            return categories_from_service_ids(db, workspace_id=workspace_id, service_ids=service_ids)
+        return normalized_service_categories(current)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 def _operational_branch(db: Session, workspace: Workspace) -> Branch:
@@ -218,10 +216,12 @@ def create_doctor_from_admin(
     db: Annotated[Session, Depends(get_db)],
 ) -> Doctor:
     workspace = access.workspace
-    service_ids = _active_service_ids(
+    categories = _requested_categories(
         db,
         workspace_id=workspace.id,
+        service_categories=payload.service_categories,
         service_ids=payload.service_ids,
+        current=[],
     )
     first_name, last_name = _stored_doctor_name(
         name=payload.name,
@@ -245,22 +245,15 @@ def create_doctor_from_admin(
         staff_id=staff.id,
         doctor_type="regular",
         specialization=_clean_optional(payload.specialization),
+        service_categories=categories,
         booking_enabled=payload.booking_enabled,
     )
     db.add(doctor)
     db.flush()
 
     _doctor_operational_branch(db, workspace=workspace, doctor_id=doctor.id)
-    db.add_all(
-        [
-            DoctorService(
-                workspace_id=workspace.id,
-                doctor_id=doctor.id,
-                service_id=service_id,
-                is_active=True,
-            )
-            for service_id in sorted(service_ids, key=str)
-        ]
+    service_ids = sync_doctor_service_assignments(
+        db, workspace_id=workspace.id, doctor=doctor, categories=categories
     )
     _replace_doctor_hours(
         db,
@@ -279,6 +272,7 @@ def create_doctor_from_admin(
         summary="Doctor created from doctors schedule page.",
         metadata={
             "service_ids": sorted(str(item) for item in service_ids),
+            "service_categories": categories,
             "working_hour_intervals": len(payload.working_hours.intervals),
         },
         flush=False,
@@ -311,10 +305,12 @@ def update_doctor_from_admin(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
     doctor, staff = row
-    service_ids = _active_service_ids(
+    categories = _requested_categories(
         db,
         workspace_id=workspace_id,
+        service_categories=payload.service_categories,
         service_ids=payload.service_ids,
+        current=list(doctor.service_categories or []),
     )
     first_name, last_name = _stored_doctor_name(
         name=payload.name,
@@ -328,27 +324,9 @@ def update_doctor_from_admin(
     doctor.specialization = _clean_optional(payload.specialization)
     doctor.booking_enabled = payload.booking_enabled
 
-    assignments = list(
-        db.scalars(
-            select(DoctorService).where(
-                DoctorService.workspace_id == workspace_id,
-                DoctorService.doctor_id == doctor.id,
-            )
-        )
+    service_ids = sync_doctor_service_assignments(
+        db, workspace_id=workspace_id, doctor=doctor, categories=categories
     )
-    by_service = {item.service_id: item for item in assignments}
-    for assignment in assignments:
-        assignment.is_active = assignment.service_id in service_ids
-    for service_id in service_ids:
-        if service_id not in by_service:
-            db.add(
-                DoctorService(
-                    workspace_id=workspace_id,
-                    doctor_id=doctor.id,
-                    service_id=service_id,
-                    is_active=True,
-                )
-            )
 
     record_activity_event(
         db,
@@ -361,6 +339,7 @@ def update_doctor_from_admin(
         summary="Doctor updated from doctors schedule page.",
         metadata={
             "service_ids": sorted(str(item) for item in service_ids),
+            "service_categories": categories,
             "booking_enabled": doctor.booking_enabled,
         },
         flush=False,

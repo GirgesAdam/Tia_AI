@@ -75,6 +75,7 @@ from app.schemas.clinic_integration import (
     ClinicSyncScheduleUpsert,
 )
 from app.services.activity import record_activity_event
+from app.services.doctor_categories import sync_service_doctor_assignments
 from app.services.agent_knowledge import build_agent_knowledge_snapshot
 from app.services.agent_knowledge_edit import (
     KnowledgeEditConflictError,
@@ -418,7 +419,13 @@ def create_service(
     db: Session = Depends(get_db),
 ) -> Service:
     service = Service(workspace_id=workspace.id, **payload.model_dump())
+    if service.requires_laser_device and service.category != "laser":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Services that require a laser device must use the laser category.",
+        )
     db.add(service)
+    sync_service_doctor_assignments(db, workspace_id=workspace.id, service=service)
     record_activity_event(
         db, workspace_id=workspace.id, actor_type="staff", actor_user_id=actor_user_id,
         action="clinic.service_created", entity_type="service", entity_id=service.id,
@@ -455,8 +462,16 @@ def update_service(
     if service is None:
         raise not_found("Service")
     changes = payload.model_dump(exclude_unset=True)
+    final_category = changes.get("category", service.category)
+    final_requires_laser = changes.get("requires_laser_device", service.requires_laser_device)
+    if final_requires_laser and final_category != "laser":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Services that require a laser device must use the laser category.",
+        )
     for key, value in changes.items():
         setattr(service, key, value)
+    sync_service_doctor_assignments(db, workspace_id=workspace.id, service=service)
     record_activity_event(
         db, workspace_id=workspace.id, actor_type="staff", actor_user_id=actor_user_id,
         action="clinic.service_updated", entity_type="service", entity_id=service.id,

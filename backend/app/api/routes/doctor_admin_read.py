@@ -44,6 +44,7 @@ class DoctorAdminListItem(BaseModel):
     booking_enabled: bool
     is_active: bool
     services: list[DoctorAdminNamedLink]
+    service_categories: list[str] = Field(default_factory=list)
     working_hours: list[DoctorAdminHour] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
@@ -159,6 +160,7 @@ def list_doctors_for_admin(
             booking_enabled=doctor.booking_enabled,
             is_active=doctor.is_active,
             services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
+            service_categories=list(doctor.service_categories or []),
             working_hours=hours_by_doctor.get(doctor.id, []),
         )
         for doctor, staff in rows
