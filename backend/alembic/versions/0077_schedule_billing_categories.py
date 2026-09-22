@@ -112,6 +112,19 @@ def upgrade() -> None:
             """
         )
     )
+    # Backend-owned workspace data must not become directly CRUDable through
+    # the Supabase Data API. Keep the same security posture as the other
+    # workspace-scoped operational tables.
+    op.execute(
+        sa.text(
+            'ALTER TABLE public."doctor_service_categories" ENABLE ROW LEVEL SECURITY'
+        )
+    )
+    op.execute(
+        sa.text(
+            'REVOKE ALL ON TABLE public."doctor_service_categories" FROM anon, authenticated'
+        )
+    )
 
 
 def downgrade() -> None:

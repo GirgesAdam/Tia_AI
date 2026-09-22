@@ -142,7 +142,9 @@ def test_package_refund_reprices_consumed_sessions_at_purchase_day_standalone_pr
             cancelled,
             collected,
             consumed_value,
+            settlement_target,
             previously_refunded,
+            collected_now,
             refunded_now,
             refunds,
         ) = package_service.cancel_patient_package_with_refund(
@@ -156,7 +158,9 @@ def test_package_refund_reprices_consumed_sessions_at_purchase_day_standalone_pr
 
         assert collected == 1_200_000
         assert consumed_value == 250_000
+        assert settlement_target == 250_000
         assert previously_refunded == 0
+        assert collected_now == 0
         assert refunded_now == 950_000
         assert sum(row.amount_minor for row in refunds) == 950_000
         assert cancelled.status == "cancelled"
@@ -223,7 +227,7 @@ def test_package_installments_refund_only_actual_collections_and_never_overpay(m
         )
         assert result[1] == 1_200_000
         assert result[2] == 250_000
-        assert result[4] == 950_000
+        assert result[6] == 950_000
         refunds = db.scalars(
             select(PaymentTransaction).where(
                 PaymentTransaction.patient_package_id == package.id,
@@ -249,7 +253,7 @@ def test_package_installments_refund_only_actual_collections_and_never_overpay(m
             )
         )
         assert count_after == count_before
-        assert repeated[4] == 0
+        assert repeated[6] == 0
 
 
 def test_partial_collection_refunds_only_collected_cash_after_consumed_value(monkeypatch) -> None:
@@ -285,8 +289,96 @@ def test_partial_collection_refunds_only_collected_cash_after_consumed_value(mon
         )
         assert result[1] == 600_000
         assert result[2] == 250_000
-        assert result[4] == 350_000
+        assert result[6] == 350_000
 
+
+
+def test_package_cancellation_collects_missing_consumed_session_value(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(
+            db, service_price_minor=250_000
+        )
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Full Body sessions",
+            sessions_purchased=6,
+            sale_price_minor=1_200_000,
+            amount_paid_minor=100_000,
+            payment_method="cash",
+            created_by_user_id=None,
+        )
+        consumed = _appointment(
+            workspace_id=workspace_id, patient_id=patient_id, service_id=service_id
+        )
+        package_service.reserve_package_usage(db, appointment=consumed, package=package)
+        package_service.consume_package_usage(db, appointment=consumed)
+
+        result = package_service.cancel_patient_package_with_refund(
+            db,
+            workspace_id=workspace_id,
+            package_id=package.id,
+            reason="Client cancelled",
+            created_by_user_id=uuid4(),
+            payment_method="cash",
+            idempotency_key="collect-settlement",
+        )
+
+        assert result[2] == 250_000
+        assert result[3] == 250_000
+        assert result[5] == 150_000
+        assert result[6] == 0
+        payments = db.scalars(
+            select(PaymentTransaction).where(
+                PaymentTransaction.patient_package_id == package.id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        ).all()
+        assert sum(row.amount_minor for row in payments) == 250_000
+
+
+def test_package_cancellation_accepts_admin_settlement_override(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(
+            db, service_price_minor=250_000
+        )
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Full Body sessions",
+            sessions_purchased=6,
+            sale_price_minor=1_200_000,
+            amount_paid_minor=600_000,
+            payment_method="cash",
+            created_by_user_id=None,
+        )
+        consumed = _appointment(
+            workspace_id=workspace_id, patient_id=patient_id, service_id=service_id
+        )
+        package_service.reserve_package_usage(db, appointment=consumed, package=package)
+        package_service.consume_package_usage(db, appointment=consumed)
+
+        result = package_service.cancel_patient_package_with_refund(
+            db,
+            workspace_id=workspace_id,
+            package_id=package.id,
+            reason="Approved custom settlement",
+            created_by_user_id=uuid4(),
+            settlement_target_minor=300_000,
+        )
+
+        assert result[2] == 250_000
+        assert result[3] == 300_000
+        assert result[5] == 0
+        assert result[6] == 300_000
 
 def test_legacy_consumed_package_requires_admin_price_confirmation_before_refund(monkeypatch) -> None:
     _allow_package_writes(monkeypatch)
@@ -328,7 +420,7 @@ def test_legacy_consumed_package_requires_admin_price_confirmation_before_refund
             standalone_session_price_minor_at_purchase=240_000,
         )
         assert package.standalone_session_price_minor_at_purchase == 240_000
-        assert result[4] == 960_000
+        assert result[6] == 960_000
 
 
 def test_no_show_releases_package_reservation_like_cancellation(monkeypatch) -> None:

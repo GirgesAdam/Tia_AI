@@ -123,6 +123,7 @@ def test_analytics_patient_timeline_and_appointment_ui_use_canonical_ledger() ->
     analytics = (root / "backend/app/services/analytics.py").read_text(encoding="utf-8")
     timeline = (root / "backend/app/services/patient_timeline.py").read_text(encoding="utf-8")
     detail = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/page.tsx").read_text(encoding="utf-8")
+    payment_form = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/appointment-payment-form.tsx").read_text(encoding="utf-8")
     actions = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/actions.ts").read_text(encoding="utf-8")
     patient = (root / "frontend/src/app/(dashboard)/patients/[patientId]/page.tsx").read_text(encoding="utf-8")
     activity = (root / "frontend/src/app/(dashboard)/activity/page.tsx").read_text(encoding="utf-8")
@@ -132,7 +133,8 @@ def test_analytics_patient_timeline_and_appointment_ui_use_canonical_ledger() ->
     assert "_build_payment_events" in timeline
     assert 'kind="payment"' in timeline
     assert "/payments/appointments/${appointmentId}" in detail
-    assert "recordAppointmentPayment" in detail
+    assert "AppointmentPaymentForm" in detail
+    assert "recordAppointmentPayment" in payment_form
     assert "refundAppointmentPayment" in detail
     assert 'Idempotency-Key' in actions
     assert 'event.kind === "payment"' in patient

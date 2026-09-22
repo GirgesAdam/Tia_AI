@@ -26,3 +26,30 @@ def test_working_hours_reject_overlap() -> None:
                 WorkingHourInterval(weekday=0, start_time=time(13, 0), end_time=time(18, 0)),
             ]
         )
+
+
+
+def test_service_keeps_legacy_category_and_derives_operational_category() -> None:
+    service = ServiceCreate(
+        name="Hydrafacial",
+        slug="hydrafacial",
+        category="Facial",
+        duration_minutes=45,
+        price_minor=180_000,
+    )
+    assert service.category == "Facial"
+    assert service.operational_category == "dermatology"
+
+
+def test_laser_device_service_is_always_operationally_laser() -> None:
+    service = ServiceCreate(
+        name="Full Body",
+        slug="full-body",
+        category="Laser Hair Removal",
+        operational_category="dermatology",
+        duration_minutes=60,
+        price_minor=0,
+        requires_laser_device=True,
+    )
+    assert service.category == "Laser Hair Removal"
+    assert service.operational_category == "laser"
