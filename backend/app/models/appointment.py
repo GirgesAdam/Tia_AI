@@ -92,6 +92,10 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="appointment_laser_pulses_non_negative",
         ),
         CheckConstraint(
+            "NOT is_quick_booking OR (source = 'staff' AND created_by_user_id IS NOT NULL)",
+            name="appointment_quick_booking_staff_only",
+        ),
+        CheckConstraint(
             "billing_context IN ('standard', 'package_prepaid')",
             name="appointment_billing_context_valid",
         ),

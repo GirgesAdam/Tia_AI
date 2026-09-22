@@ -88,3 +88,25 @@ def test_laser_pulses_are_tracking_only_on_appointment_detail() -> None:
     assert "لا يغيّر سعر الجلسة أو مدتها" in detail
     assert "/laser-usage" in actions
     assert "appointment.laser_usage_updated" in route
+
+
+
+def test_quick_booking_is_deterministically_human_only() -> None:
+    root = _root()
+    model = (root / "backend/app/models/appointment.py").read_text(encoding="utf-8")
+    migration = (
+        root / "backend/alembic/versions/0081_quick_booking_staff_only.py"
+    ).read_text(encoding="utf-8")
+    capability_policy = (
+        root / "backend/app/agents/capability_policy.py"
+    ).read_text(encoding="utf-8")
+    write_executor = (
+        root / "backend/app/services/agent_v2/write_executor.py"
+    ).read_text(encoding="utf-8")
+
+    assert "appointment_quick_booking_staff_only" in model
+    assert "source = 'staff' AND created_by_user_id IS NOT NULL" in model
+    assert "appointment_quick_booking_staff_only" in migration
+    assert "quick_book_appointment" not in capability_policy
+    assert "/appointments/quick" not in write_executor
+    assert "is_quick_booking" not in write_executor
