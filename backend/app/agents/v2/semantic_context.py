@@ -21,6 +21,7 @@ class SemanticContext:
 
     model_input: dict[str, object]
     reference_map: dict[str, SemanticReferenceTarget]
+    server_metadata: dict[str, object] = field(default_factory=dict)
 
     def resolve(self, ref: str, *, expected_kind: ReferenceKind | None = None) -> str | None:
         target = self.reference_map.get(str(ref))
@@ -282,11 +283,16 @@ def build_semantic_context(
         "doctors": model_doctors,
         "appointments": model_appointments,
         "packages": model_packages,
-        "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
         "active_task": {},
         "pending_choice": {},
     }
-    return SemanticContext(model_input=model_input, reference_map=reference_map)
+    return SemanticContext(
+        model_input=model_input,
+        reference_map=reference_map,
+        server_metadata={
+            "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
+        },
+    )
 
 
 def _ground_entity(
