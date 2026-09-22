@@ -64,6 +64,8 @@ def test_quick_booking_backend_is_an_audited_override() -> None:
     assert model.count("NOT is_quick_booking") >= 2
     assert "NOT is_quick_booking" in migration
     assert "NOT is_quick_booking" in device_override
+    availability = (root / "backend/app/services/booking.py").read_text(encoding="utf-8")
+    assert availability.count("Appointment.is_quick_booking.is_(False)") >= 2
 
 
 def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
@@ -80,6 +82,10 @@ def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
         root / "frontend/src/app/(dashboard)/appointments/page.tsx"
     ).read_text(encoding="utf-8")
     assert 'column.id !== "quick"' in page
+    assert "function appointmentsForColumn(" in page
+    assert 'if (column === "quick")' in page
+    assert "appointment.is_quick_booking === true" in page
+    assert "appointment.is_quick_booking !== true" in page
     assert 'return "other";' in page
     assert '{ id: "other", label: "أخرى" }' in page
     assert "لا توجد حجوزات سريعة" in page
