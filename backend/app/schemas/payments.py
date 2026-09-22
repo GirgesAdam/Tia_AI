@@ -13,7 +13,12 @@ PaymentTransactionType = Literal["payment", "refund"]
 class PaymentCreate(BaseModel):
     amount_minor: int = Field(gt=0)
     payment_method: PaymentMethod
+    discount_minor: int | None = Field(default=None, ge=0)
     external_reference: str | None = Field(default=None, max_length=128)
+
+
+class AppointmentDiscountUpdate(BaseModel):
+    discount_minor: int = Field(ge=0)
 
     @field_validator("external_reference", mode="before")
     @classmethod
@@ -68,6 +73,8 @@ class AppointmentPaymentSummaryRead(BaseModel):
     currency: str
     # price_minor is the complete amount due: session + manually-priced products.
     price_minor: int
+    subtotal_minor: int = 0
+    discount_minor: int = 0
     service_price_minor: int = 0
     products_total_minor: int = 0
     additional_services_total_minor: int = 0

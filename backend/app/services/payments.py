@@ -108,8 +108,8 @@ def _appointment_charge_breakdown(
     *,
     workspace_id: UUID,
     appointment: Appointment,
-) -> tuple[int, int, int, int, int]:
-    """Return primary service, products, extra services, package sales, and due.
+) -> tuple[int, int, int, int, int, int]:
+    """Return primary service, products, extras, package sales, subtotal, and due.
 
     A package-backed service does not charge its standalone session price. A
     package purchased from this visit is charged once at its package sale price.
@@ -161,12 +161,15 @@ def _appointment_charge_breakdown(
         if getattr(appointment, "billing_context", "standard") == "package_prepaid"
         else service_price
     )
+    subtotal = service_due + products_total + additional_services_total + package_sales_total
+    discount = max(int(getattr(appointment, "discount_minor", 0) or 0), 0)
     return (
         service_price,
         products_total,
         additional_services_total,
         package_sales_total,
-        service_due + products_total + additional_services_total + package_sales_total,
+        subtotal,
+        max(subtotal - discount, 0),
     )
 
 
@@ -366,7 +369,7 @@ def refresh_appointment_payment_snapshots(
             appointment_id=appointment_id,
             for_update=True,
         )
-        _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+        _service_price, _products_total, _additional_services_total, _package_sales_total, _subtotal, due = _appointment_charge_breakdown(
             db,
             workspace_id=workspace_id,
             appointment=appointment,
@@ -390,7 +393,7 @@ def get_appointment_payment_summary(
     if appointment is None:
         raise PaymentOperationNotFound("Appointment not found.")
     rows = _ledger_rows(db, workspace_id=workspace_id, appointment_id=appointment.id)
-    service_price, products_total, additional_services_total, package_sales_total, due = _appointment_charge_breakdown(
+    service_price, products_total, additional_services_total, package_sales_total, subtotal, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -401,6 +404,8 @@ def get_appointment_payment_summary(
         patient_id=appointment.patient_id,
         currency=appointment.currency,
         price_minor=due,
+        subtotal_minor=subtotal,
+        discount_minor=int(getattr(appointment, "discount_minor", 0) or 0),
         service_price_minor=service_price,
         products_total_minor=products_total,
         additional_services_total_minor=additional_services_total,
@@ -485,6 +490,99 @@ def _payment_part_key(base_key: str | None, index: int) -> str | None:
     return f"{base_key[: 128 - len(suffix)]}{suffix}"
 
 
+def _set_discount_locked(
+    db: Session,
+    *,
+    appointment: Appointment,
+    rows: list[AppointmentLedgerEntry],
+    discount_minor: int,
+    actor_user_id: UUID | None,
+) -> None:
+    if discount_minor < 0:
+        raise PaymentOperationError("Discount cannot be negative.")
+    (
+        _service_price,
+        _products_total,
+        _additional_services_total,
+        _package_sales_total,
+        subtotal,
+        _due,
+    ) = _appointment_charge_breakdown(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment=appointment,
+    )
+    if discount_minor > subtotal:
+        raise PaymentOperationError("Discount cannot exceed the visit subtotal.")
+    totals_before = _payment_totals(
+        appointment=appointment,
+        rows=list(rows),
+        due_minor=subtotal,
+    )
+    new_due = subtotal - discount_minor
+    if totals_before.net_paid_minor > new_due:
+        raise PaymentOperationError(
+            "The new discount would make recorded payments exceed the visit total. "
+            "Refund the excess payment first."
+        )
+    previous = int(getattr(appointment, "discount_minor", 0) or 0)
+    appointment.discount_minor = discount_minor
+    sync_appointment_payment_snapshot(appointment, list(rows), due_minor=new_due)
+    if previous != discount_minor:
+        record_activity_event(
+            db,
+            workspace_id=appointment.workspace_id,
+            actor_type="staff",
+            actor_user_id=actor_user_id,
+            action="appointment.discount_updated",
+            entity_type="appointment",
+            entity_id=appointment.id,
+            summary="Appointment discount updated",
+            metadata={
+                "previous_discount_minor": previous,
+                "discount_minor": discount_minor,
+                "subtotal_minor": subtotal,
+            },
+        )
+
+
+def set_appointment_discount(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    discount_minor: int,
+    created_by_user_id: UUID | None,
+) -> None:
+    try:
+        require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+    except ClinicIntegrationAuthorityError as exc:
+        raise PaymentOperationError(str(exc)) from exc
+    appointment = _locked_appointment(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment_id,
+    )
+    if appointment.status not in {"pending", "confirmed", "completed"}:
+        raise PaymentOperationError(
+            f"Discounts cannot be changed for an appointment in '{appointment.status}' status."
+        )
+    rows = _ledger_rows(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment.id,
+        for_update=True,
+    )
+    _set_discount_locked(
+        db,
+        appointment=appointment,
+        rows=rows,
+        discount_minor=discount_minor,
+        actor_user_id=created_by_user_id,
+    )
+    db.flush()
+
+
 def record_payment(
     db: Session,
     *,
@@ -493,6 +591,7 @@ def record_payment(
     amount_minor: int,
     payment_method: str,
     created_by_user_id: UUID | None,
+    discount_minor: int | None = None,
     external_reference: str | None = None,
     idempotency_key: str | None = None,
     source: str = "staff",
@@ -552,7 +651,15 @@ def record_payment(
         appointment_id=appointment.id,
         for_update=True,
     )
-    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+    if discount_minor is not None:
+        _set_discount_locked(
+            db,
+            appointment=appointment,
+            rows=rows,
+            discount_minor=discount_minor,
+            actor_user_id=created_by_user_id,
+        )
+    _service_price, _products_total, _additional_services_total, _package_sales_total, _subtotal, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -801,7 +908,7 @@ def record_refund(
             allocated_amount_minor=amount_minor,
         )
     )
-    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+    _service_price, _products_total, _additional_services_total, _package_sales_total, _subtotal, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,

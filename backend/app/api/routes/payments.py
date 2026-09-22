@@ -12,13 +12,19 @@ from app.api.dependencies.security import (
     get_workspace_reader,
 )
 from app.database.session import get_db
-from app.schemas.payments import AppointmentPaymentSummaryRead, PaymentCreate, RefundCreate
+from app.schemas.payments import (
+    AppointmentDiscountUpdate,
+    AppointmentPaymentSummaryRead,
+    PaymentCreate,
+    RefundCreate,
+)
 from app.services.payments import (
     PaymentOperationError,
     PaymentOperationNotFound,
     get_appointment_payment_summary,
     record_payment,
     record_refund,
+    set_appointment_discount,
 )
 
 router = APIRouter()
@@ -71,6 +77,7 @@ def create_payment(
             appointment_id=appointment_id,
             amount_minor=payload.amount_minor,
             payment_method=payload.payment_method,
+            discount_minor=payload.discount_minor,
             external_reference=payload.external_reference,
             created_by_user_id=access.user.id,
             idempotency_key=idempotency_key,
@@ -83,6 +90,39 @@ def create_payment(
         db.rollback()
         raise _conflict(str(exc)) from exc
 
+    return get_appointment_payment_summary(
+        db,
+        workspace_id=access.workspace.id,
+        appointment_id=appointment_id,
+        can_refund=access.membership.role == "admin",
+    )
+
+
+@router.put(
+    "/appointments/{appointment_id}/discount",
+    response_model=AppointmentPaymentSummaryRead,
+)
+def update_appointment_discount(
+    appointment_id: UUID,
+    payload: AppointmentDiscountUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AppointmentPaymentSummaryRead:
+    try:
+        set_appointment_discount(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            discount_minor=payload.discount_minor,
+            created_by_user_id=access.user.id,
+        )
+        db.commit()
+    except PaymentOperationNotFound as exc:
+        db.rollback()
+        raise _not_found(str(exc)) from exc
+    except PaymentOperationError as exc:
+        db.rollback()
+        raise _conflict(str(exc)) from exc
     return get_appointment_payment_summary(
         db,
         workspace_id=access.workspace.id,
