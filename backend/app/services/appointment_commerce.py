@@ -304,9 +304,13 @@ def purchase_package_for_appointment(
     payment_summary = get_appointment_payment_summary(
         db, workspace_id=workspace_id, appointment_id=appointment.id
     )
-    if payment_summary.net_paid_minor > 0:
+    other_visit_due = max(
+        int(payment_summary.price_minor) - int(appointment.price_minor),
+        0,
+    )
+    if int(payment_summary.net_paid_minor) > other_visit_due:
         raise AppointmentCommerceError(
-            "Refund or reconcile the existing appointment payment before "
+            "Refund or reconcile the payment already applied to this service before "
             "converting this session to a package."
         )
 
@@ -402,10 +406,14 @@ def purchase_package_for_additional_service(
     payment_summary = get_appointment_payment_summary(
         db, workspace_id=workspace_id, appointment_id=appointment.id
     )
-    if payment_summary.net_paid_minor > 0:
+    other_visit_due = max(
+        int(payment_summary.price_minor) - int(line.unit_price_minor),
+        0,
+    )
+    if int(payment_summary.net_paid_minor) > other_visit_due:
         raise AppointmentCommerceError(
-            "Refund or reconcile the existing appointment payment before "
-            "converting this additional service to a package."
+            "Refund or reconcile the payment already applied to this additional "
+            "service before converting it to a package."
         )
 
     try:
