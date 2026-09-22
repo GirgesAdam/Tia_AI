@@ -35,3 +35,44 @@ def test_raw_active_task_and_pending_choice_are_never_copied_to_model_input() ->
     assert "private-turn-id" not in encoded
     assert "internal-snapshot-id" not in encoded
     assert "private-appointment-id" not in encoded
+
+
+def test_semantic_catalog_keeps_business_constraints_server_side() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-laser",
+                    "name": "ليزر إبط",
+                    "category": "laser",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                        }
+                    ],
+                }
+            ],
+            "doctors": [
+                {
+                    "id": "doctor-1",
+                    "name": "مريم",
+                    "specialization": "Dermatology",
+                    "service_ids": ["service-laser"],
+                }
+            ],
+            "appointments": [],
+            "packages": [],
+        }
+    )
+
+    service = context.model_input["services"][0]
+    doctor = context.model_input["doctors"][0]
+
+    assert service["ref"] == "S1"
+    assert service["category"] == "laser"
+    assert service["devices"] == [{"ref": "V1", "name": "Candela Gentle"}]
+    assert "requires_laser_device" not in service
+    assert "service_refs" not in doctor
+    assert context.reference_map["S1"].metadata["requires_laser_device"] is True
