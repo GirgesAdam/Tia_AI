@@ -16,10 +16,6 @@ class PaymentCreate(BaseModel):
     discount_minor: int | None = Field(default=None, ge=0)
     external_reference: str | None = Field(default=None, max_length=128)
 
-
-class AppointmentDiscountUpdate(BaseModel):
-    discount_minor: int = Field(ge=0)
-
     @field_validator("external_reference", mode="before")
     @classmethod
     def normalize_external_reference(cls, value: object) -> object:
@@ -27,6 +23,10 @@ class AppointmentDiscountUpdate(BaseModel):
             value = value.strip()
             return value or None
         return value
+
+
+class AppointmentDiscountUpdate(BaseModel):
+    discount_minor: int = Field(ge=0)
 
 
 class RefundCreate(BaseModel):
