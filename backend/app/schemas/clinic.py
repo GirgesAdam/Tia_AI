@@ -7,6 +7,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 ServiceCategory = Literal["laser", "dermatology", "slimming"]
 
 
+def _normalize_service_category(value: object, *, allow_none: bool = False) -> object:
+    if value is None:
+        return None if allow_none else "dermatology"
+    raw = str(value).strip().casefold()
+    if not raw:
+        return None if allow_none else "dermatology"
+    if raw in {"laser", "ليزر"} or "laser" in raw:
+        return "laser"
+    if raw in {"slimming", "تخسيس"} or any(
+        marker in raw for marker in ("slim", "weight", "body contour")
+    ):
+        return "slimming"
+    if raw in {"dermatology", "جلدية"}:
+        return "dermatology"
+    # Historical free-text categories (facial, injectables, consultation, etc.)
+    # remain compatible but are normalized into the new canonical taxonomy.
+    return "dermatology"
+
+
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,6 +143,11 @@ class ServiceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=160, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     category: ServiceCategory = "dermatology"
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: object) -> object:
+        return _normalize_service_category(value)
     description: str | None = None
     duration_minutes: int = Field(gt=0, le=1440)
     buffer_before_minutes: int = Field(default=0, ge=0, le=1440)
@@ -137,6 +161,11 @@ class ServiceCreate(BaseModel):
 class ServiceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     category: ServiceCategory | None = None
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: object) -> object:
+        return _normalize_service_category(value, allow_none=True)
     description: str | None = None
     duration_minutes: int | None = Field(default=None, gt=0, le=1440)
     buffer_before_minutes: int | None = Field(default=None, ge=0, le=1440)

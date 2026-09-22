@@ -425,6 +425,14 @@ def create_service(
             detail="Services that require a laser device must use the laser category.",
         )
     db.add(service)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Service slug already exists in this workspace.",
+        ) from exc
     sync_service_doctor_assignments(db, workspace_id=workspace.id, service=service)
     record_activity_event(
         db, workspace_id=workspace.id, actor_type="staff", actor_user_id=actor_user_id,
@@ -462,6 +470,8 @@ def update_service(
     if service is None:
         raise not_found("Service")
     changes = payload.model_dump(exclude_unset=True)
+    if changes.get("category") is None:
+        changes.pop("category", None)
     final_category = changes.get("category", service.category)
     final_requires_laser = changes.get("requires_laser_device", service.requires_laser_device)
     if final_requires_laser and final_category != "laser":
