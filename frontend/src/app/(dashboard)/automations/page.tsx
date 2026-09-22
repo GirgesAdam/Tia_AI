@@ -160,7 +160,7 @@ export default async function AutomationsPage() {
       />
 
       {ctx.workspace.role === "admin" && (
-        <Card className={`mb-6 ${whatsappSetup?.ready_for_automations ? "border-emerald-200 bg-emerald-50/40" : "border-amber-200 bg-amber-50/40"}`}>
+        <Card id="whatsapp-templates" className={`mb-6 scroll-mt-24 ${whatsappSetup?.ready_for_automations ? "border-emerald-200 bg-emerald-50/40" : "border-amber-200 bg-amber-50/40"}`}>
           <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
               <span className={`grid size-10 shrink-0 place-items-center rounded-xl text-white ${whatsappSetup?.ready_for_automations ? "bg-emerald-600" : "bg-amber-600"}`}>
@@ -179,6 +179,9 @@ export default async function AutomationsPage() {
                     : whatsappSetup?.ready_for_automations
                       ? `${whatsappSetup.verified_name || whatsappSetup.display_phone_number || "رقم العيادة"} متصل وجاهز لإرسال الرسائل المفعّلة.`
                       : "كمّل ربط واتساب مرة واحدة قبل تشغيل الرسائل المفعّلة فعليًا."}
+                </p>
+                <p className="mt-1.5 text-xs leading-5 text-slate-600">
+                  خارج نافذة الـ24 ساعة من آخر رسالة للعميل، WhatsApp يتطلب قالبًا معتمدًا من Meta. Tia تجهّز القوالب المطلوبة وتستخدم المعتمد منها فقط.
                 </p>
               </div>
             </div>
