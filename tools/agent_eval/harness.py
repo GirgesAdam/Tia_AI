@@ -70,6 +70,7 @@ class TurnCapture:
     write_attempted: bool
     write_result: str | None
     handoff_state: dict[str, Any] | None
+    llm_calls: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -165,30 +166,144 @@ def assert_demo_only(workspace: Workspace) -> None:
 
 
 class RuntimeProbe:
-    """Eval-only instrumentation for model usage and V2 read/write traces."""
+    """Eval-only instrumentation for model usage, prompt attribution, and V2 traces."""
 
     def __init__(self) -> None:
         self.usage = TokenUsage()
         self.turns: list[Any] = []
+        self.llm_calls: list[dict[str, Any]] = []
+        self._current_attribution: dict[str, Any] | None = None
+        self._attribution_attempt = 0
         self._original_generate = None
         self._original_orchestrate = None
+        self._original_build_interpreter_messages = None
+        self._original_build_responder_messages = None
 
     def __enter__(self) -> Self:
         from langchain_openai import ChatOpenAI
 
+        from app.agents.v2 import responder as responder_module
+        from app.agents.v2 import turn_interpreter as turn_interpreter_module
+        from app.core.config import settings
+        from tools.agent_eval.token_attribution import (
+            attach_actual_usage,
+            interpreter_attribution,
+            responder_attribution,
+        )
+
         self._original_generate = ChatOpenAI._generate
         self._original_orchestrate = live_chat_module.orchestrate_v2_turn
+        self._original_build_interpreter_messages = (
+            turn_interpreter_module._build_interpreter_messages
+        )
+        self._original_build_responder_messages = (
+            responder_module._build_responder_messages
+        )
         probe = self
 
+        def build_interpreter_messages(*args, **kwargs):
+            messages = probe._original_build_interpreter_messages(*args, **kwargs)
+            semantic_context = kwargs.get("semantic_context")
+            model_input = (
+                dict(getattr(semantic_context, "model_input", {}) or {})
+                if semantic_context is not None
+                else {}
+            )
+            probe._current_attribution = interpreter_attribution(
+                messages=messages,
+                model_input=model_input,
+            )
+            probe._attribution_attempt = 0
+            return messages
+
+        def build_responder_messages(*args, **kwargs):
+            messages = probe._original_build_responder_messages(*args, **kwargs)
+            probe._current_attribution = responder_attribution(messages=messages)
+            probe._attribution_attempt = 0
+            return messages
+
         def generate(model_self, *args, **kwargs):
-            result = probe._original_generate(model_self, *args, **kwargs)
-            for generation in getattr(result, "generations", []) or []:
+            attribution = dict(
+                probe._current_attribution
+                or {
+                    "operation": "unknown",
+                    "system_tokens_estimated": 0,
+                    "semantic_context_tokens_estimated": 0,
+                    "semantic_catalog_tokens_estimated": 0,
+                    "conversation_history_tokens_estimated": 0,
+                    "latest_user_tokens_estimated": 0,
+                    "active_task_tokens_estimated": 0,
+                    "pending_choice_tokens_estimated": 0,
+                    "recent_verified_read_tokens_estimated": 0,
+                    "grounded_outcome_tokens_estimated": 0,
+                    "structured_schema_tokens_estimated": 0,
+                    "message_tokens_estimated": 0,
+                    "message_plus_schema_tokens_estimated": 0,
+                }
+            )
+            probe._attribution_attempt += 1
+            attempt_index = probe._attribution_attempt
+            model_name = str(
+                getattr(model_self, "model_name", None)
+                or getattr(model_self, "model", None)
+                or "unknown"
+            )
+            fallback_used = bool(
+                settings.openai_fallback_model
+                and settings.openai_fallback_model != settings.openai_model
+                and model_name == settings.openai_fallback_model
+            )
+            started = perf_counter()
+            try:
+                result = probe._original_generate(model_self, *args, **kwargs)
+            except BaseException as exc:
+                latency_ms = int((perf_counter() - started) * 1000)
+                probe.llm_calls.append(
+                    attach_actual_usage(
+                        attribution,
+                        input_tokens=0,
+                        output_tokens=0,
+                        cached_tokens=0,
+                        total_tokens=0,
+                        model=model_name,
+                        latency_ms=latency_ms,
+                        attempt_index=attempt_index,
+                        fallback_used=fallback_used,
+                        error=type(exc).__name__,
+                    )
+                )
+                raise
+
+            latency_ms = int((perf_counter() - started) * 1000)
+            call_usage = TokenUsage()
+            generations = getattr(result, "generations", []) or []
+            for generation in generations:
                 message = getattr(generation, "message", None)
                 usage = getattr(message, "usage_metadata", None)
                 if usage is None:
                     metadata = getattr(message, "response_metadata", {}) or {}
                     usage = metadata.get("token_usage") or metadata.get("usage")
-                probe.usage.add(dict(usage) if usage else None)
+                usage_dict = dict(usage) if usage else None
+                probe.usage.add(usage_dict)
+                call_usage.add(usage_dict)
+
+            if not generations:
+                probe.usage.add(None)
+                call_usage.add(None)
+
+            probe.llm_calls.append(
+                attach_actual_usage(
+                    attribution,
+                    input_tokens=call_usage.input_tokens,
+                    output_tokens=call_usage.output_tokens,
+                    cached_tokens=call_usage.cached_tokens,
+                    total_tokens=call_usage.total_tokens,
+                    model=model_name,
+                    latency_ms=latency_ms,
+                    attempt_index=attempt_index,
+                    fallback_used=fallback_used,
+                )
+            )
             return result
 
         def orchestrate(*args, **kwargs):
@@ -198,13 +313,24 @@ class RuntimeProbe:
 
         ChatOpenAI._generate = generate
         live_chat_module.orchestrate_v2_turn = orchestrate
+        turn_interpreter_module._build_interpreter_messages = build_interpreter_messages
+        responder_module._build_responder_messages = build_responder_messages
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         from langchain_openai import ChatOpenAI
 
+        from app.agents.v2 import responder as responder_module
+        from app.agents.v2 import turn_interpreter as turn_interpreter_module
+
         ChatOpenAI._generate = self._original_generate
         live_chat_module.orchestrate_v2_turn = self._original_orchestrate
+        turn_interpreter_module._build_interpreter_messages = (
+            self._original_build_interpreter_messages
+        )
+        responder_module._build_responder_messages = (
+            self._original_build_responder_messages
+        )
 
 
 def active_branch_id(catalog: dict[str, Any]) -> str:
@@ -594,6 +720,7 @@ def send_turn(
             workspace,
             response.conversation_id,
         ),
+        llm_calls=list(probe.llm_calls),
     )
     return response, capture
 
