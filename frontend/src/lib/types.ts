@@ -185,7 +185,7 @@ export interface AvailabilitySlot {
 }
 export interface AvailabilityResponse { date:string; timezone:string; slots:AvailabilitySlot[]; }
 export interface Branch { id:string; name:string; city:string|null; is_active:boolean; }
-export interface Service { id:string; name:string; category:"laser"|"dermatology"|"slimming"; duration_minutes:number; price_minor:number; currency:string; requires_laser_device?:boolean; is_active:boolean; }
+export interface Service { id:string; name:string; category:string|null; operational_category:"laser"|"dermatology"|"slimming"; duration_minutes:number; price_minor:number; currency:string; requires_laser_device?:boolean; is_active:boolean; }
 export interface Doctor { id:string; staff_id:string; specialization:string|null; is_active:boolean; }
 export interface Staff { id:string; first_name:string; last_name:string; is_active:boolean; }
 

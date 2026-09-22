@@ -35,7 +35,7 @@ function appointmentColumn(
   if (appointment.doctor_assignment_known === false) return "quick";
   if (appointment.laser_device_key === "prime_lase") return "prime";
   if (appointment.laser_device_key === "candela_gentle") return "candela";
-  const category = serviceById.get(appointment.service_id)?.category;
+  const category = serviceById.get(appointment.service_id)?.operational_category;
   if (category === "dermatology") return "dermatology";
   if (category === "slimming") return "slimming";
   return "quick";
@@ -303,27 +303,18 @@ export default async function RescheduleAppointmentPage({
                                         ))}
                                       </div>
                                     ) : isTarget && availableSlots.length ? (
-                                      <form action={rescheduleAppointment} className="space-y-2 rounded-xl border border-teal-200 bg-white p-2">
-                                        <input type="hidden" name="appointment_id" value={appointmentId} />
-                                        <label className="block text-xs font-bold text-slate-700">
-                                          وقت البداية
-                                          <select
-                                            name="start_at"
-                                            required
-                                            defaultValue={availableSlots[0].start_at}
-                                            className="form-control mt-1.5 h-10 min-h-10"
-                                          >
-                                            {availableSlots.map((slot) => (
-                                              <option key={slot.start_at} value={slot.start_at}>
-                                                {timeLabel(slot.start_at, availability.timezone)} – {timeLabel(slot.end_at, availability.timezone)}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </label>
-                                        <Button type="submit" size="sm" className="w-full">
-                                          <CalendarClock size={15} /> اختيار الميعاد
-                                        </Button>
-                                      </form>
+                                      <div className="grid gap-2">
+                                        {availableSlots.map((slot) => (
+                                          <form key={slot.start_at} action={rescheduleAppointment}>
+                                            <input type="hidden" name="appointment_id" value={appointmentId} />
+                                            <input type="hidden" name="start_at" value={slot.start_at} />
+                                            <Button type="submit" size="sm" variant="outline" className="w-full justify-between bg-white">
+                                              <span>{timeLabel(slot.start_at, availability.timezone)} – {timeLabel(slot.end_at, availability.timezone)}</span>
+                                              <CalendarClock size={14} />
+                                            </Button>
+                                          </form>
+                                        ))}
+                                      </div>
                                     ) : (
                                       <div className="min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80" />
                                     )}

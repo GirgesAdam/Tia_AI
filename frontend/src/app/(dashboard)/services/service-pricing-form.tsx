@@ -20,7 +20,8 @@ type ServiceConfig = {
   name: string;
   duration_minutes: number;
   price_minor: number;
-  category: "laser" | "dermatology" | "slimming";
+  category: string | null;
+  operational_category: "laser" | "dermatology" | "slimming";
   requires_laser_device: boolean;
 };
 
@@ -36,7 +37,7 @@ export function ServicePricingForm({
   devicePrices: DeviceConfig[];
 }) {
   const [requiresLaserDevice, setRequiresLaserDevice] = useState(service.requires_laser_device);
-  const [category, setCategory] = useState(service.category);
+  const [category, setCategory] = useState(service.operational_category);
   const config = (key: DeviceConfig["device_key"]) =>
     devicePrices.find((item) => item.device_key === key);
 
@@ -50,9 +51,9 @@ export function ServicePricingForm({
         </label>
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">التصنيف</span>
-          {requiresLaserDevice && <input type="hidden" name="category" value="laser" />}
+          {requiresLaserDevice && <input type="hidden" name="operational_category" value="laser" />}
           <select
-            name="category"
+            name="operational_category"
             value={requiresLaserDevice ? "laser" : category}
             disabled={requiresLaserDevice}
             onChange={(event) => setCategory(event.target.value as typeof category)}

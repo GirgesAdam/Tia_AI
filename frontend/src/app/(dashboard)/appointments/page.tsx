@@ -180,7 +180,7 @@ function appointmentColumn(appointment: Appointment, serviceById: Map<string, Se
   if (appointment.doctor_assignment_known === false) return "quick";
   if (appointment.laser_device_key === "prime_lase") return "prime";
   if (appointment.laser_device_key === "candela_gentle") return "candela";
-  const category = serviceById.get(appointment.service_id)?.category;
+  const category = serviceById.get(appointment.service_id)?.operational_category;
   if (category === "dermatology") return "dermatology";
   if (category === "slimming") return "slimming";
   return "quick";

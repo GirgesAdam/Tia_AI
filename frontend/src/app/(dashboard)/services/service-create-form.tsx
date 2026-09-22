@@ -19,9 +19,9 @@ export function ServiceCreateForm() {
       </label>
       <label>
         <span className="mb-1.5 block text-xs font-bold">التصنيف</span>
-        {requiresLaserDevice && <input type="hidden" name="category" value="laser" />}
+        {requiresLaserDevice && <input type="hidden" name="operational_category" value="laser" />}
         <select
-          name="category"
+          name="operational_category"
           value={requiresLaserDevice ? "laser" : category}
           disabled={requiresLaserDevice}
           onChange={(event) => setCategory(event.target.value as "laser" | "dermatology" | "slimming")}

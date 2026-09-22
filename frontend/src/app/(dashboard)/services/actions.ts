@@ -12,7 +12,7 @@ function moneyMinor(value: FormDataEntryValue | null) {
 
 function serviceCategory(formData: FormData, requiresLaserDevice: boolean) {
   if (requiresLaserDevice) return "laser";
-  const value = String(formData.get("category") || "");
+  const value = String(formData.get("operational_category") || "");
   if (!["laser", "dermatology", "slimming"].includes(value)) {
     throw new Error("اختار تصنيف الخدمة.");
   }
@@ -51,7 +51,7 @@ export async function createService(formData: FormData) {
     body: JSON.stringify({
       name,
       slug: `service-${randomUUID()}`,
-      category: serviceCategory(formData, requiresLaserDevice),
+      operational_category: serviceCategory(formData, requiresLaserDevice),
       description: null,
       duration_minutes: requiresLaserDevice
         ? (primeLaseDurationMinutes ?? 60)
@@ -111,7 +111,7 @@ export async function updateServicePricing(formData: FormData) {
       method: "PATCH",
       body: JSON.stringify({
         name,
-        category,
+        operational_category: category,
         price_minor: 0,
         duration_minutes: primeDurationMinutes,
         requires_laser_device: true,
@@ -144,7 +144,7 @@ export async function updateServicePricing(formData: FormData) {
       method: "PATCH",
       body: JSON.stringify({
         name,
-        category,
+        operational_category: category,
         price_minor: moneyMinor(formData.get("price")),
         duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
         requires_laser_device: false,

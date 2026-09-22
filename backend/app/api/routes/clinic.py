@@ -54,7 +54,6 @@ from app.schemas.clinic import (
     ServiceCreate,
     ServiceRead,
     ServiceUpdate,
-    _normalize_service_category,
     StaffCreate,
     StaffRead,
     StaffUpdate,
@@ -473,8 +472,6 @@ def update_service(
     changes = payload.model_dump(exclude_unset=True)
     if changes.get("category") is None:
         changes.pop("category", None)
-    if "operational_category" not in changes and "category" in changes:
-        changes["operational_category"] = _normalize_service_category(changes["category"])
     final_category = changes.get("operational_category", service.operational_category)
     final_requires_laser = changes.get("requires_laser_device", service.requires_laser_device)
     if final_requires_laser and final_category != "laser":
