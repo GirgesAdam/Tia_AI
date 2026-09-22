@@ -317,3 +317,201 @@ def test_successful_write_outcome_hides_action_identifiers_and_formats_money() -
     assert outcome.status == "completed"
     assert visible["action_result"]["price"] == "500.00 EGP"
     assert "appointment-secret" not in str(visible)
+
+
+def _service_price_outcome(
+    *,
+    price_minor: int,
+    service_name: str = "PRP للبشرة",
+) -> TurnOutcome:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text=service_name, ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": service_name,
+                        "price_minor": price_minor,
+                        "currency": "EGP",
+                    }
+                },
+            )
+        ]
+    )
+    return build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+
+
+@pytest.mark.parametrize(
+    ("price_minor", "expected"),
+    [(200_000, "2000.00 EGP"), (210_000, "2100.00 EGP")],
+)
+def test_normal_service_pricing_is_derived_from_verified_read(
+    price_minor: int,
+    expected: str,
+) -> None:
+    outcome = _service_price_outcome(price_minor=price_minor)
+    service = outcome.facts["service_catalog"]["service"]
+
+    assert service["name"] == "PRP للبشرة"
+    assert service["price"] == expected
+
+
+def test_selected_laser_device_price_uses_matching_verified_device() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر إبط", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1", "device_key": "candela_gentle"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": "ليزر إبط",
+                        "price_minor": 55_000,
+                        "currency": "EGP",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "prime_lase",
+                                "device_name": "Prime Lase",
+                                "price_minor": 55_000,
+                                "currency": "EGP",
+                                "configured": True,
+                            },
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "price_minor": 65_000,
+                                "currency": "EGP",
+                                "configured": True,
+                            },
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    service = outcome.facts["service_catalog"]["service"]
+
+    assert service["selected_laser_device"] == {
+        "device_name": "Candela Gentle",
+        "price": "650.00 EGP",
+    }
+    assert "price" not in service
+
+
+def test_multi_device_pricing_without_selection_exposes_all_verified_prices() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر إبط", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": "ليزر إبط",
+                        "price_minor": 55_000,
+                        "currency": "EGP",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "prime_lase",
+                                "device_name": "Prime Lase",
+                                "price_minor": 55_000,
+                                "currency": "EGP",
+                            },
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "price_minor": 65_000,
+                                "currency": "EGP",
+                            },
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    service = outcome.facts["service_catalog"]["service"]
+
+    assert service["requires_laser_device"] is True
+    assert service["laser_devices"] == [
+        {"device_name": "Prime Lase", "price": "550.00 EGP"},
+        {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+    ]
+    assert "selected_laser_device" not in service
+    assert "price" not in service
