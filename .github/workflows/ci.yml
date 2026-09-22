@@ -57,7 +57,7 @@ jobs:
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0077_schedule_billing_categories (head)"
+        run: test "$(python -m alembic heads)" = "0078_repair_schedule_billing_categories (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
