@@ -75,7 +75,6 @@ from app.schemas.clinic_integration import (
     ClinicSyncScheduleUpsert,
 )
 from app.services.activity import record_activity_event
-from app.services.doctor_categories import sync_service_doctor_assignments
 from app.services.agent_knowledge import build_agent_knowledge_snapshot
 from app.services.agent_knowledge_edit import (
     KnowledgeEditConflictError,
@@ -98,6 +97,7 @@ from app.services.clinic_integration_sync_runtime import (
     run_manual_sync,
     update_sync_schedule,
 )
+from app.services.doctor_categories import sync_service_doctor_assignments
 
 router = APIRouter()
 
