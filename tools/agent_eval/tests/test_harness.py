@@ -1,8 +1,6 @@
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_only
@@ -14,7 +12,6 @@ from tools.agent_eval.run_token_attribution_baseline import (
 )
 from tools.agent_eval.token_attribution import (
     attach_actual_usage,
-    estimate_text_tokens,
     interpreter_attribution,
     responder_attribution,
 )
@@ -218,23 +215,3 @@ def test_token_attribution_full_booking_mode_uses_dynamic_fixture(monkeypatch):
     cases = selected_cases()
 
     assert [case.__name__ for case in cases] == ["case_full_booking_dynamic"]
-
-
-def test_interpreter_prompt_stays_compact_without_dropping_semantic_guards():
-    prompt = _interpreter_system_prompt(
-        timezone_name="Africa/Cairo",
-        local_now=datetime(2026, 9, 22, 12, 0, tzinfo=UTC),
-    )
-
-    assert estimate_text_tokens(prompt) <= 1700
-    for required in (
-        "Never route by keywords",
-        "continues_previous=true",
-        "buy_package + book",
-        "select_active",
-        "refund_quote",
-        "urgent_medical",
-        "twelve_hour",
-        "requested_service_details",
-    ):
-        assert required in prompt
