@@ -4,10 +4,10 @@ import json
 from typing import Any
 
 import tiktoken
-from langchain_core.messages import BaseMessage
 
 from app.agents.v2.responder import ResponderDraft
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
+from langchain_core.messages import BaseMessage
 
 _ENCODING = tiktoken.get_encoding("o200k_base")
 _STATE_KEYS = ("active_task", "pending_choice", "recent_verified_read")
