@@ -2,97 +2,89 @@ from __future__ import annotations
 
 import json
 
-from app.agents.clinic_grounding import build_clinic_catalog
-from app.agents.v2.semantic_context import build_semantic_context
-from app.core.config import settings
-from app.models.workspace import Workspace
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
-
 from tools.agent_eval.token_attribution import estimate_json_tokens
 
+from app.agents.clinic_grounding import build_clinic_catalog
+from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.semantic_state_view import with_safe_read_context, with_safe_task_context
+from app.core.config import settings
+from app.models.workspace import Workspace
 
-def compact_device_projection(
-    services: list[dict[str, object]],
-) -> dict[str, object]:
-    devices: dict[str, str] = {}
-    compact_services: list[dict[str, object]] = []
 
-    for service in services:
-        compact_service = {
-            key: value
-            for key, value in service.items()
-            if key != "devices"
-        }
-        raw_devices = service.get("devices")
-        if isinstance(raw_devices, list) and raw_devices:
-            refs: list[str] = []
-            for device in raw_devices:
-                if not isinstance(device, dict):
-                    continue
-                ref = device.get("ref")
-                name = device.get("name")
-                if not isinstance(ref, str) or not ref:
-                    continue
-                refs.append(ref)
-                if isinstance(name, str) and name:
-                    devices.setdefault(ref, name)
-            if refs:
-                compact_service["device_refs"] = refs
-        compact_services.append(compact_service)
-
+def _section_tokens(model_input: dict[str, object]) -> dict[str, int]:
     return {
-        "services": compact_services,
-        "devices": [
-            {"ref": ref, "name": name}
-            for ref, name in devices.items()
-        ],
+        key: estimate_json_tokens(value)
+        for key, value in model_input.items()
     }
+
+
+def _first_laser_service(catalog: dict[str, object]) -> dict[str, object] | None:
+    services = catalog.get("services")
+    if not isinstance(services, list):
+        return None
+    for row in services:
+        if isinstance(row, dict) and row.get("laser_devices"):
+            return row
+    return None
 
 
 def main() -> int:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
-    db = Session(engine)
     try:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
-        if workspace is None:
-            raise RuntimeError("Demo workspace not found.")
-        model_input = build_semantic_context(
-            build_clinic_catalog(db, workspace)
-        ).model_input
-        services = model_input.get("services")
-        if not isinstance(services, list):
-            raise TypeError("Semantic services missing.")
-        typed_services = [
-            row for row in services if isinstance(row, dict)
-        ]
-        projection = compact_device_projection(typed_services)
+        with Session(engine) as db:
+            workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
+            if workspace is None:
+                raise RuntimeError("Demo workspace not found.")
+            catalog = build_clinic_catalog(db, workspace)
+            base = build_semantic_context(catalog)
+
+            pricing = base
+            booking = base
+            laser = _first_laser_service(catalog)
+            if laser is not None:
+                devices = laser.get("laser_devices")
+                device_key = None
+                if isinstance(devices, list) and devices and isinstance(devices[-1], dict):
+                    device_key = devices[-1].get("device_key")
+                read_context: dict[str, object] = {
+                    "operation_type": "pricing",
+                    "service_id": laser.get("id"),
+                }
+                if device_key not in (None, ""):
+                    read_context["device_key"] = device_key
+                pricing = with_safe_read_context(base, read_context=read_context)
+
+                constraints: dict[str, object] = {"service_id": laser.get("id")}
+                doctor_ids = laser.get("doctor_ids")
+                if isinstance(doctor_ids, list) and doctor_ids:
+                    constraints["doctor_id"] = doctor_ids[0]
+                booking = with_safe_task_context(
+                    base,
+                    active_task={
+                        "task_type": "booking",
+                        "status": "collecting",
+                        "constraints": constraints,
+                    },
+                )
+
+        payload = {
+            "broad_total": estimate_json_tokens(base.model_input),
+            "broad_sections": _section_tokens(base.model_input),
+            "focused_pricing_total": estimate_json_tokens(pricing.model_input),
+            "focused_pricing_sections": _section_tokens(pricing.model_input),
+            "focused_booking_total": estimate_json_tokens(booking.model_input),
+            "focused_booking_sections": _section_tokens(booking.model_input),
+        }
         print(
-            "DEVICE_DEDUP_TOKENS="
-            + json.dumps(
-                {
-                    "services_current": estimate_json_tokens(typed_services),
-                    "projection_total": estimate_json_tokens(projection),
-                    "services_compact": estimate_json_tokens(
-                        projection["services"]
-                    ),
-                    "unique_devices": estimate_json_tokens(
-                        projection["devices"]
-                    ),
-                    "device_count": len(projection["devices"]),
-                    "laser_service_count": sum(
-                        bool(row.get("devices"))
-                        for row in typed_services
-                    ),
-                },
-                sort_keys=True,
-            ),
+            "SEMANTIC_PROJECTION_TOKENS="
+            + json.dumps(payload, sort_keys=True),
             flush=True,
         )
+        return 0
     finally:
-        db.close()
         engine.dispose()
-    return 0
 
 
 if __name__ == "__main__":

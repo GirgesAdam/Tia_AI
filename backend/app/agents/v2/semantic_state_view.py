@@ -44,6 +44,7 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
         ("service_id", "service", "service_ref"),
         ("doctor_id", "doctor", "doctor_ref"),
         ("device_key", "device", "device_ref"),
+        ("package_id", "package", "package_ref"),
     )
     for input_key, kind, output_key in mappings:
         ref = _entity_ref(value.get(input_key), kind=kind, context=context)
@@ -187,6 +188,125 @@ def pending_choice_semantic_view(
     return _safe_option_snapshot(value, context=context)
 
 
+
+_STATE_ID_KINDS: dict[str, ReferenceKind] = {
+    "service_id": "service",
+    "doctor_id": "doctor",
+    "device_key": "device",
+    "appointment_id": "appointment",
+    "package_id": "package",
+}
+
+
+def _state_has_stale_refs(value: object, *, context: SemanticContext) -> bool:
+    """Return True when persisted canonical state points outside the current catalog."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            kind = _STATE_ID_KINDS.get(key)
+            if kind is not None and item not in (None, ""):
+                if _entity_ref(item, kind=kind, context=context) is None:
+                    return True
+            if key == "doctor_ids" and isinstance(item, list):
+                reverse = _reverse_refs(context, "doctor")
+                if any(str(doctor_id) not in reverse for doctor_id in item):
+                    return True
+            if _state_has_stale_refs(item, context=context):
+                return True
+    elif isinstance(value, list):
+        return any(_state_has_stale_refs(item, context=context) for item in value)
+    return False
+
+
+def _collect_verified_refs(value: object, *, context: SemanticContext) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key.endswith("_ref") and isinstance(item, str) and item in context.reference_map:
+                refs.add(item)
+                continue
+            if key.endswith("_refs") and isinstance(item, list):
+                refs.update(
+                    str(ref)
+                    for ref in item
+                    if isinstance(ref, str) and ref in context.reference_map
+                )
+                continue
+            refs.update(_collect_verified_refs(item, context=context))
+    elif isinstance(value, list):
+        for item in value:
+            refs.update(_collect_verified_refs(item, context=context))
+    return refs
+
+
+def _apply_verified_focus(
+    context: SemanticContext,
+    model_input: dict[str, object],
+    *,
+    block_focus: bool = False,
+) -> SemanticContext:
+    """Keep broad identity discovery while focusing verified operational detail."""
+    metadata = dict(context.server_metadata)
+    blocked = bool(metadata.get("semantic_focus_blocked")) or block_focus
+    metadata["semantic_focus_blocked"] = blocked
+
+    broad_appointments = list(metadata.get("broad_appointments") or ())
+    broad_packages = list(metadata.get("broad_packages") or ())
+    if blocked:
+        model_input["appointments"] = broad_appointments
+        model_input["packages"] = broad_packages
+        model_input["focused_context"] = {}
+        return SemanticContext(
+            model_input=model_input,
+            reference_map=context.reference_map,
+            server_metadata=metadata,
+        )
+
+    refs: set[str] = set()
+    for key in ("active_task", "pending_choice", "recent_verified_read"):
+        refs.update(_collect_verified_refs(model_input.get(key), context=context))
+
+    if not refs:
+        model_input["appointments"] = broad_appointments
+        model_input["packages"] = broad_packages
+        model_input["focused_context"] = {}
+        return SemanticContext(
+            model_input=model_input,
+            reference_map=context.reference_map,
+            server_metadata=metadata,
+        )
+
+    raw_details = metadata.get("focus_details")
+    details = raw_details if isinstance(raw_details, dict) else {}
+    grouped: dict[str, list[dict[str, object]]] = {}
+    appointment_refs: set[str] = set()
+    package_refs: set[str] = set()
+    for ref in sorted(refs):
+        target = context.reference_map.get(ref)
+        detail = details.get(ref)
+        if target is None or not isinstance(detail, dict):
+            continue
+        grouped.setdefault(f"{target.kind}s", []).append(dict(detail))
+        if target.kind == "appointment":
+            appointment_refs.add(ref)
+        elif target.kind == "package":
+            package_refs.add(ref)
+
+    model_input["appointments"] = [
+        row for row in broad_appointments
+        if isinstance(row, dict) and row.get("ref") in appointment_refs
+    ]
+    model_input["packages"] = [
+        row for row in broad_packages
+        if isinstance(row, dict) and row.get("ref") in package_refs
+    ]
+    model_input["focused_context"] = grouped
+    return SemanticContext(
+        model_input=model_input,
+        reference_map=context.reference_map,
+        server_metadata=metadata,
+    )
+
+
 def with_safe_task_context(
     context: SemanticContext,
     *,
@@ -199,12 +319,11 @@ def with_safe_task_context(
         pending_choice,
         context=context,
     )
-    return SemanticContext(
-        model_input=model_input,
-        reference_map=context.reference_map,
-        server_metadata=context.server_metadata,
+    stale = _state_has_stale_refs(active_task, context=context) or _state_has_stale_refs(
+        pending_choice,
+        context=context,
     )
-
+    return _apply_verified_focus(context, model_input, block_focus=stale)
 
 def with_safe_read_context(
     context: SemanticContext,
@@ -218,8 +337,5 @@ def with_safe_read_context(
         read_context,
         context=context,
     )
-    return SemanticContext(
-        model_input=model_input,
-        reference_map=context.reference_map,
-        server_metadata=context.server_metadata,
-    )
+    stale = _state_has_stale_refs(read_context, context=context)
+    return _apply_verified_focus(context, model_input, block_focus=stale)

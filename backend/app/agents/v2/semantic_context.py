@@ -105,26 +105,23 @@ def build_semantic_context(
     active_task: dict[str, object] | None = None,
     pending_choice: dict[str, object] | None = None,
 ) -> SemanticContext:
-    """Convert canonical clinic rows into compact ephemeral references for the LLM.
+    """Build compact global discovery indexes plus server-owned focus details.
 
-    The model never receives database UUIDs/IDs from this builder. Entity identity is
-    expressed as turn-local references (S1, D1, V1, A1, P1), then resolved by Python.
-    Free-form clinic/service explanation is deliberately excluded here; the semantic
-    interpreter only needs names/relationships. Customer-facing explanation comes
-    from the single saved "معلومات Tia" knowledge source after planning.
-
-    Raw task/choice dictionaries are intentionally never copied into model_input.
-    The keyword arguments remain accepted for compatibility but are model-invisible;
-    callers that need conversational task state must inject the sanitized ref-based
-    view with ``with_safe_task_context`` after this context has built its reference map.
+    Database identities never enter model_input. Broad discovery keeps all service,
+    doctor, and device identities available so a customer can change intent on any
+    turn. Relationship/detail rows are normalized once and retained server-side for
+    verified continuation focus.
     """
 
     _ = active_task, pending_choice
     reference_map: dict[str, SemanticReferenceTarget] = {}
     model_services: list[dict[str, object]] = []
     model_doctors: list[dict[str, object]] = []
+    model_devices_by_ref: dict[str, dict[str, object]] = {}
+    service_device_refs: dict[str, list[str]] = {}
     model_appointments: list[dict[str, object]] = []
     model_packages: list[dict[str, object]] = []
+    focus_details: dict[str, dict[str, object]] = {}
 
     service_ref_by_id: dict[str, str] = {}
     doctor_ref_by_id: dict[str, str] = {}
@@ -149,16 +146,17 @@ def build_semantic_context(
             if ref is None:
                 continue
             service_ref_by_id[str(canonical_id)] = ref
-            item: dict[str, object] = {
-                "ref": ref,
-                "name": row.get("name") or row.get("service_name"),
-            }
-            if row.get("category") not in (None, ""):
-                item["category"] = row.get("category")
+            model_services.append(
+                {"ref": ref, "name": row.get("name") or row.get("service_name")}
+            )
+            detail: dict[str, object] = {"ref": ref}
+            category = row.get("category")
+            if category not in (None, ""):
+                detail["category"] = category
 
             raw_devices = row.get("laser_devices")
+            device_refs: list[str] = []
             if isinstance(raw_devices, list):
-                devices: list[dict[str, object]] = []
                 for device in raw_devices:
                     if not isinstance(device, dict):
                         continue
@@ -179,15 +177,24 @@ def build_semantic_context(
                         if device_ref is None:
                             continue
                         device_ref_by_key[key] = device_ref
-                    devices.append(
-                        {
+                        model_devices_by_ref[device_ref] = {
                             "ref": device_ref,
                             "name": device.get("device_name") or key,
                         }
-                    )
-                if devices:
-                    item["devices"] = devices
-            model_services.append(item)
+                        focus_details[device_ref] = {
+                            "ref": device_ref,
+                            "service_refs": [],
+                        }
+                    device_refs.append(device_ref)
+                    device_detail = focus_details.get(device_ref)
+                    if isinstance(device_detail, dict):
+                        service_refs = device_detail.setdefault("service_refs", [])
+                        if isinstance(service_refs, list) and ref not in service_refs:
+                            service_refs.append(ref)
+            if device_refs:
+                detail["device_refs"] = device_refs
+                service_device_refs[ref] = list(device_refs)
+            focus_details[ref] = detail
 
     doctors = clinic_catalog.get("doctors")
     if isinstance(doctors, list):
@@ -209,9 +216,30 @@ def build_semantic_context(
                 "ref": ref,
                 "name": row.get("name") or row.get("doctor_name"),
             }
-            if row.get("specialization") not in (None, ""):
-                item["specialization"] = row.get("specialization")
             model_doctors.append(item)
+
+            detail: dict[str, object] = {"ref": ref}
+            raw_service_ids = row.get("service_ids")
+            service_refs = (
+                [
+                    service_ref_by_id[str(value)]
+                    for value in raw_service_ids
+                    if str(value) in service_ref_by_id
+                ]
+                if isinstance(raw_service_ids, list)
+                else []
+            )
+            if service_refs:
+                detail["service_refs"] = service_refs
+                for service_ref in service_refs:
+                    service_detail = focus_details.get(service_ref)
+                    if isinstance(service_detail, dict):
+                        doctor_refs = service_detail.setdefault("doctor_refs", [])
+                        if isinstance(doctor_refs, list) and ref not in doctor_refs:
+                            doctor_refs.append(ref)
+            if row.get("specialization") not in (None, ""):
+                detail["specialization"] = row.get("specialization")
+            focus_details[ref] = detail
 
     appointments = clinic_catalog.get("appointments")
     if isinstance(appointments, list):
@@ -248,6 +276,7 @@ def build_semantic_context(
             if device_key is not None and str(device_key) in device_ref_by_key:
                 item["device_ref"] = device_ref_by_key[str(device_key)]
             model_appointments.append(item)
+            focus_details[ref] = dict(item)
 
     packages = clinic_catalog.get("packages")
     if isinstance(packages, list):
@@ -277,12 +306,16 @@ def build_semantic_context(
             if device_key is not None and str(device_key) in device_ref_by_key:
                 item["device_ref"] = device_ref_by_key[str(device_key)]
             model_packages.append(item)
+            focus_details[ref] = dict(item)
 
     model_input: dict[str, object] = {
         "services": model_services,
+        "service_device_refs": service_device_refs,
+        "devices": list(model_devices_by_ref.values()),
         "doctors": model_doctors,
         "appointments": model_appointments,
         "packages": model_packages,
+        "focused_context": {},
         "active_task": {},
         "pending_choice": {},
     }
@@ -291,9 +324,11 @@ def build_semantic_context(
         reference_map=reference_map,
         server_metadata={
             "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
+            "focus_details": focus_details,
+            "broad_appointments": tuple(model_appointments),
+            "broad_packages": tuple(model_packages),
         },
     )
-
 
 def _ground_entity(
     entity: EntityReference | None,
