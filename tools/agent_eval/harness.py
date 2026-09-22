@@ -180,11 +180,11 @@ class RuntimeProbe:
         self._original_build_responder_messages = None
 
     def __enter__(self) -> Self:
-        from langchain_openai import ChatOpenAI
-
         from app.agents.v2 import responder as responder_module
         from app.agents.v2 import turn_interpreter as turn_interpreter_module
         from app.core.config import settings
+        from langchain_openai import ChatOpenAI
+
         from tools.agent_eval.token_attribution import (
             attach_actual_usage,
             interpreter_attribution,
@@ -318,10 +318,9 @@ class RuntimeProbe:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        from langchain_openai import ChatOpenAI
-
         from app.agents.v2 import responder as responder_module
         from app.agents.v2 import turn_interpreter as turn_interpreter_module
+        from langchain_openai import ChatOpenAI
 
         ChatOpenAI._generate = self._original_generate
         live_chat_module.orchestrate_v2_turn = self._original_orchestrate
