@@ -520,7 +520,9 @@ def cancel_package_and_refund(
             package,
             collected_minor,
             consumed_value_minor,
+            settlement_target_minor,
             previously_refunded_minor,
+            collected_now_minor,
             refunded_now_minor,
             refund_transactions,
         ) = cancel_patient_package_with_refund(
@@ -532,6 +534,8 @@ def cancel_package_and_refund(
             standalone_session_price_minor_at_purchase=(
                 payload.standalone_session_price_minor_at_purchase
             ),
+            settlement_target_minor=payload.settlement_target_minor,
+            payment_method=payload.payment_method,
             idempotency_key=idempotency_key,
         )
         db.commit()
@@ -542,7 +546,9 @@ def cancel_package_and_refund(
             collected_minor=collected_minor,
             consumed_sessions=read.sessions_consumed,
             consumed_value_minor=consumed_value_minor,
+            settlement_target_minor=settlement_target_minor,
             previously_refunded_minor=previously_refunded_minor,
+            collected_now_minor=collected_now_minor,
             refunded_now_minor=refunded_now_minor,
             refund_transaction_ids=[row.id for row in refund_transactions],
         )

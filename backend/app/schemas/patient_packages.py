@@ -54,6 +54,8 @@ class PatientPackageRead(BaseModel):
     amount_paid_minor: int = 0
     amount_refunded_minor: int = 0
     balance_due_minor: int = 0
+    cancellation_consumed_sessions: int = 0
+    cancellation_default_charge_minor: int | None = None
     standalone_session_price_minor_at_purchase: int | None = None
     laser_device_key: str | None = None
     laser_device_name: str | None = None
@@ -77,6 +79,8 @@ class PatientPackagePaymentCreate(BaseModel):
 
 class PatientPackageCancelRefundCreate(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
+    settlement_target_minor: int | None = Field(default=None, ge=0)
+    payment_method: str = Field(default="cash", min_length=1, max_length=20)
     standalone_session_price_minor_at_purchase: int | None = Field(default=None, ge=0)
 
     @field_validator("reason")
@@ -93,6 +97,8 @@ class PatientPackageCancelRefundRead(BaseModel):
     collected_minor: int
     consumed_sessions: int
     consumed_value_minor: int
+    settlement_target_minor: int
     previously_refunded_minor: int
+    collected_now_minor: int
     refunded_now_minor: int
     refund_transaction_ids: list[UUID]

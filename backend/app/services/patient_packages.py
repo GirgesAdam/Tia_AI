@@ -68,6 +68,25 @@ def package_read(
         else int(package.sessions_purchased)
     )
     remaining = max(0, opening_balance - reserved - consumed)
+    cancellation_consumed = consumed
+    cancellation_default_charge: int | None
+    if package.opening_sessions_remaining is not None:
+        if package.sessions_total_known:
+            cancellation_consumed += max(
+                0,
+                int(package.sessions_purchased) - int(package.opening_sessions_remaining),
+            )
+        else:
+            cancellation_default_charge = None
+    unit_price = package.standalone_session_price_minor_at_purchase
+    if package.opening_sessions_remaining is not None and not package.sessions_total_known:
+        cancellation_default_charge = None
+    elif cancellation_consumed == 0:
+        cancellation_default_charge = 0
+    elif unit_price is None:
+        cancellation_default_charge = None
+    else:
+        cancellation_default_charge = cancellation_consumed * int(unit_price)
     effective = _effective_status(package, on_date=on_date)
     if effective == "active" and remaining == 0:
         effective = "exhausted"
@@ -102,6 +121,8 @@ def package_read(
         amount_paid_minor=amount_paid_minor,
         amount_refunded_minor=amount_refunded_minor,
         balance_due_minor=balance_due_minor,
+        cancellation_consumed_sessions=cancellation_consumed,
+        cancellation_default_charge_minor=cancellation_default_charge,
         standalone_session_price_minor_at_purchase=(
             package.standalone_session_price_minor_at_purchase
         ),
@@ -454,8 +475,10 @@ def cancel_patient_package_with_refund(
     reason: str,
     created_by_user_id: UUID,
     standalone_session_price_minor_at_purchase: int | None = None,
+    settlement_target_minor: int | None = None,
+    payment_method: str = "cash",
     idempotency_key: str | None = None,
-) -> tuple[PatientPackage, int, int, int, int, list[PaymentTransaction]]:
+) -> tuple[PatientPackage, int, int, int, int, int, int, list[PaymentTransaction]]:
     """Cancel a package and refund unused value at the non-package session price.
 
     Reserved sessions are released (no-show is already handled as a release), while
@@ -508,10 +531,78 @@ def cancel_patient_package_with_refund(
     previously_refunded_minor = sum(int(row.amount_minor) for row in refunds)
     unit_price = int(package.standalone_session_price_minor_at_purchase or 0)
     consumed_value_minor = consumed * unit_price
-    refundable_minor = max(
-        collected_minor - consumed_value_minor - previously_refunded_minor,
-        0,
+    settlement_target = (
+        consumed_value_minor
+        if settlement_target_minor is None
+        else int(settlement_target_minor)
     )
+    net_collected_before = max(collected_minor - previously_refunded_minor, 0)
+    collected_now_minor = 0
+    if settlement_target > net_collected_before:
+        if payment_method not in PAYMENT_METHODS or payment_method == "unknown":
+            raise PackageOperationError(
+                "A supported payment method is required to collect the package settlement."
+            )
+        collected_now_minor = settlement_target - net_collected_before
+        settlement_key = (
+            f"package-settlement:{idempotency_key}"[:128]
+            if idempotency_key
+            else None
+        )
+        settlement_payment = None
+        if settlement_key:
+            settlement_payment = db.scalar(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == workspace_id,
+                    PaymentTransaction.idempotency_key == settlement_key,
+                )
+            )
+            if settlement_payment is not None and (
+                settlement_payment.transaction_type != "payment"
+                or settlement_payment.patient_package_id != package.id
+            ):
+                raise PackageOperationError(
+                    "Idempotency key was already used for another package settlement."
+                )
+        if settlement_payment is None:
+            settlement_payment = PaymentTransaction(
+                workspace_id=workspace_id,
+                appointment_id=None,
+                origin_appointment_id=package.origin_appointment_id,
+                patient_id=package.patient_id,
+                created_by_user_id=created_by_user_id,
+                reference_transaction_id=None,
+                patient_package_id=package.id,
+                transaction_type="payment",
+                amount_minor=collected_now_minor,
+                currency=package.currency,
+                payment_method=payment_method,
+                source="staff",
+                external_reference=None,
+                reason=f"Package cancellation settlement: {reason}"[:500],
+                idempotency_key=settlement_key,
+                created_at=datetime.now(UTC),
+            )
+            db.add(settlement_payment)
+            db.flush()
+            if package.origin_appointment_id is not None:
+                db.add(
+                    PaymentAllocation(
+                        workspace_id=workspace_id,
+                        transaction_id=settlement_payment.id,
+                        appointment_id=package.origin_appointment_id,
+                        amount_minor=collected_now_minor,
+                        created_at=settlement_payment.created_at,
+                    )
+                )
+                db.flush()
+        else:
+            collected_now_minor = int(settlement_payment.amount_minor)
+        collected_minor += collected_now_minor
+        payments.append(settlement_payment)
+
+    net_collected = max(collected_minor - previously_refunded_minor, 0)
+    refundable_minor = max(net_collected - settlement_target, 0)
 
     refunds_by_payment: dict[UUID, int] = {}
     for row in refunds:
@@ -659,6 +750,8 @@ def cancel_patient_package_with_refund(
             "consumed_sessions": consumed,
             "released_reservations": reserved,
             "consumed_value_minor": consumed_value_minor,
+            "settlement_target_minor": settlement_target,
+            "collected_now_minor": collected_now_minor,
             "refunded_now_minor": refundable_minor,
             "previously_refunded_minor": previously_refunded_minor,
         },
@@ -667,7 +760,9 @@ def cancel_patient_package_with_refund(
         package,
         collected_minor,
         consumed_value_minor,
+        settlement_target,
         previously_refunded_minor,
+        collected_now_minor,
         refundable_minor,
         created_refunds,
     )
