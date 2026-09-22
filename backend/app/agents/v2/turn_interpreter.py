@@ -86,8 +86,8 @@ CORE SEMANTICS
   emits buy_package + book; package_usage=use_existing when that session should consume it. Other
   requested appointments remain separate book operations.
 - Comparing an owned package with standalone payment emits informational package_info + pricing.
-  Asking about a past visit and its effect on current package state emits customer_history +
-  package_info. Do not infer current package balance from history alone.
+  Asking about a past appointment outcome and its effect on current package state emits
+  customer_history + package_info. Do not infer current package balance from history alone.
 - Harmless/social side turns do not cancel active tasks. On task corrections emit the new semantic
   value only; Python owns state invalidation and persistence. Prefer recent_verified_read over
   assistant prose for verified scope.
