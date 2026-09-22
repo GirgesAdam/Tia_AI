@@ -131,8 +131,8 @@ export async function cancelPatientPackage(formData: FormData) {
   const packageId = String(formData.get("package_id") || "").trim();
   const settlementTarget = String(formData.get("settlement_target") || "0").trim() || "0";
   const paymentMethod = String(formData.get("payment_method") || "cash").trim() || "cash";
-  const reason = String(formData.get("reason") || "").trim();
-  if (!patientId || !packageId || !reason) return;
+  const reason = "تم إلغاء الباكيدج من ملف العميل";
+  if (!patientId || !packageId) return;
 
   await tiaRequest(`/booking/patient-packages/${packageId}/cancel-refund`, {
     method: "POST",

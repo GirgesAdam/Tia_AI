@@ -92,11 +92,6 @@ export function PackageCancellationForm({
         )}
         {difference <= 0 && <input type="hidden" name="payment_method" value="cash" />}
 
-        <label className="block text-xs font-bold text-slate-700">
-          سبب الإلغاء
-          <Input name="reason" required maxLength={500} placeholder="مثال: طلب العميل إلغاء الباكيدج" className="mt-1" />
-        </label>
-
         <Button type="submit" size="sm" variant="danger">تأكيد إلغاء الباكيدج</Button>
       </form>
     </details>

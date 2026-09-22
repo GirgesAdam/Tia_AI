@@ -6,6 +6,86 @@ import type { Appointment, Patient } from "@/lib/types";
 
 export type ManualAppointmentState = { ok: boolean; message: string };
 
+export type ManualAvailabilitySlot = {
+  doctor_id: string;
+  start_at: string;
+  end_at: string;
+  laser_device_key?: string | null;
+  laser_device_name?: string | null;
+};
+
+export type ManualAvailabilityResult = {
+  ok: boolean;
+  message: string;
+  timezone: string;
+  slots: ManualAvailabilitySlot[];
+};
+
+type AvailabilityResponse = {
+  timezone: string;
+  slots: ManualAvailabilitySlot[];
+};
+
+function minuteInTimezone(value: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(values.hour) * 60 + Number(values.minute);
+}
+
+export async function getManualAppointmentAvailability(input: {
+  branchId: string;
+  serviceId: string;
+  date: string;
+  laserDeviceKey?: string;
+  windowStartMinutes?: number;
+  windowEndMinutes?: number;
+}): Promise<ManualAvailabilityResult> {
+  const branchId = input.branchId.trim();
+  const serviceId = input.serviceId.trim();
+  const date = input.date.trim();
+  if (!branchId || !serviceId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, message: "بيانات اليوم أو الخدمة غير مكتملة.", timezone: "Africa/Cairo", slots: [] };
+  }
+
+  try {
+    const query = new URLSearchParams({
+      branch_id: branchId,
+      service_id: serviceId,
+      date,
+    });
+    if (input.laserDeviceKey) query.set("laser_device_key", input.laserDeviceKey);
+    const response = await tiaRequest<AvailabilityResponse>(`/booking/availability?${query.toString()}`);
+    const hasWindow =
+      Number.isFinite(input.windowStartMinutes) &&
+      Number.isFinite(input.windowEndMinutes) &&
+      Number(input.windowEndMinutes) > Number(input.windowStartMinutes);
+    const slots = hasWindow
+      ? response.slots.filter((slot) => {
+          const minute = minuteInTimezone(slot.start_at, response.timezone);
+          return minute >= Number(input.windowStartMinutes) && minute < Number(input.windowEndMinutes);
+        })
+      : response.slots;
+    return {
+      ok: true,
+      message: slots.length ? "" : "مفيش مواعيد متاحة للخدمة دي في الفترة المختارة.",
+      timezone: response.timezone,
+      slots,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "تعذر تحميل المواعيد المتاحة.",
+      timezone: "Africa/Cairo",
+      slots: [],
+    };
+  }
+}
+
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
   revalidatePath(`/appointments/${appointmentId}`);
@@ -13,6 +93,15 @@ function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/patients");
   revalidatePath("/dashboard");
   revalidatePath("/analytics");
+}
+
+function manualStartToIso(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) {
+    return cairoLocalToIso(value);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error("اختار وقت صحيح من المواعيد المتاحة.");
+  return parsed.toISOString();
 }
 
 function cairoLocalToIso(value: string) {
@@ -63,7 +152,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
         service_id: serviceId,
         patient_package_id: packageId || null,
         laser_device_key: laserDeviceKey || null,
-        start_at: cairoLocalToIso(startsAt),
+        start_at: manualStartToIso(startsAt),
         source: "staff",
       }),
     });

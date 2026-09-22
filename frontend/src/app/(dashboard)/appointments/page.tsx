@@ -17,12 +17,17 @@ import type {
   Staff,
 } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
+import { QuickAppointmentDialog } from "./quick-appointment-dialog";
 
 type SearchParams = {
   patient_id?: string;
   date?: string;
   branch_id?: string;
   manual_phone?: string;
+  quick_phone?: string;
+  quick_column?: string;
+  quick_start?: string;
+  quick_end?: string;
   column?: string | string[];
 };
 
@@ -77,6 +82,18 @@ function phoneSearchVariants(value: string) {
   return [...variants].filter(Boolean);
 }
 
+async function findPatientByPhone(value: string) {
+  if (!value.trim()) return null;
+  const resultSets = await Promise.all(
+    phoneSearchVariants(value).map((variant) =>
+      tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(variant)}&limit=20`).catch(() => []),
+    ),
+  );
+  const identity = normalizePhoneIdentity(value);
+  const candidates = [...new Map(resultSets.flat().map((patient) => [patient.id, patient])).values()];
+  return candidates.find((patient) => normalizePhoneIdentity(patient.phone) === identity) || null;
+}
+
 function dateInTimezone(timezone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -86,20 +103,6 @@ function dateInTimezone(timezone: string) {
   }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
-}
-
-function timeInputInTimezone(timezone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
 }
 
 function addDays(value: string, days: number) {
@@ -194,6 +197,23 @@ function scheduleHref(current: SearchParams, date: string, branchId: string) {
   return `/appointments?${query.toString()}`;
 }
 
+function quickBookingHref(
+  current: SearchParams,
+  date: string,
+  branchId: string,
+  column: ScheduleColumnId,
+  start: number,
+  end: number,
+) {
+  const query = new URLSearchParams({ date, branch_id: branchId });
+  const columns = Array.isArray(current.column) ? current.column : current.column ? [current.column] : [];
+  columns.forEach((value) => query.append("column", value));
+  query.set("quick_column", column);
+  query.set("quick_start", String(start));
+  query.set("quick_end", String(end));
+  return `/appointments?${query.toString()}`;
+}
+
 type SchedulePeriod = {
   start: number;
   end: number;
@@ -264,6 +284,10 @@ function DailySchedule({
   patientNames,
   serviceById,
   visibleColumns,
+  selectedDate,
+  branchId,
+  currentParams,
+  allowQuickBooking,
 }: {
   appointments: Appointment[];
   hours: KnowledgeHour[];
@@ -271,6 +295,10 @@ function DailySchedule({
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
   visibleColumns: ScheduleColumnId[];
+  selectedDate: string;
+  branchId: string;
+  currentParams: SearchParams;
+  allowQuickBooking: boolean;
 }) {
   if (!hours.length) {
     return (
@@ -325,7 +353,19 @@ function DailySchedule({
                                   {isAvailable && <span className="text-slate-400">متاح</span>}
                                 </div>
                                 {isAvailable ? (
-                                  <div className="min-h-11 rounded-xl border border-dashed border-slate-200 bg-white/80" />
+                                  <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
+                                    {allowQuickBooking && (
+                                      <Link
+                                        href={quickBookingHref(currentParams, selectedDate, branchId, column.id, period.start, period.end)}
+                                        aria-label={`إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`}
+                                        className="absolute inset-0 grid place-items-center rounded-xl text-teal-700 outline-none transition hover:bg-teal-50/80 focus:bg-teal-50 focus:ring-2 focus:ring-teal-300"
+                                      >
+                                        <span className="grid size-8 place-items-center rounded-full border border-teal-200 bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+                                          <Plus size={17} />
+                                        </span>
+                                      </Link>
+                                    )}
+                                  </div>
                                 ) : (
                                   <div className="space-y-2">
                                     {period.appointments.map((appointment) => {
@@ -394,7 +434,22 @@ export default async function AppointmentsPage({
   const raw = await searchParams;
   const patientId = raw.patient_id;
   const manualPhone = (raw.manual_phone || "").trim();
+  const quickPhone = (raw.quick_phone || "").trim();
   const visibleColumns = requestedColumns(raw.column);
+  const quickColumn = scheduleColumns.some((item) => item.id === raw.quick_column)
+    ? (raw.quick_column as ScheduleColumnId)
+    : null;
+  const quickStart = Number(raw.quick_start);
+  const quickEnd = Number(raw.quick_end);
+  const quickWindow =
+    quickColumn &&
+    Number.isInteger(quickStart) &&
+    Number.isInteger(quickEnd) &&
+    quickStart >= 0 &&
+    quickEnd > quickStart &&
+    quickEnd <= 24 * 60
+      ? { column: quickColumn, start: quickStart, end: quickEnd }
+      : null;
 
   const [knowledge, services, doctors, staff] = await Promise.all([
     tiaRequest<BookingKnowledge>("/clinic/knowledge"),
@@ -428,18 +483,10 @@ export default async function AppointmentsPage({
   ]);
   const appointments = allAppointments.filter((appointment) => scheduleStatuses.has(appointment.status));
 
-  let manualPatient: Patient | null = null;
-  if (manualPhone) {
-    const resultSets = await Promise.all(
-      phoneSearchVariants(manualPhone).map((variant) =>
-        tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(variant)}&limit=20`).catch(() => []),
-      ),
-    );
-    const identity = normalizePhoneIdentity(manualPhone);
-    const candidates = [...new Map(resultSets.flat().map((patient) => [patient.id, patient])).values()];
-    manualPatient =
-      candidates.find((patient) => normalizePhoneIdentity(patient.phone) === identity) || null;
-  }
+  const [manualPatient, quickPatient] = await Promise.all([
+    findPatientByPhone(manualPhone),
+    quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
+  ]);
 
   const [manualPackages, manualHistory] = manualPatient
     ? await Promise.all([
@@ -448,16 +495,14 @@ export default async function AppointmentsPage({
       ])
     : [[], []];
 
+  const [quickPackages, quickHistory] = quickPatient
+    ? await Promise.all([
+        tiaRequest<PatientPackage[]>(`/booking/patients/${quickPatient.id}/packages?usable_only=true`).catch(() => []),
+        tiaRequest<Appointment[]>(`/booking/appointments?patient_id=${quickPatient.id}&scope=all&limit=20`).catch(() => []),
+      ])
+    : [[], []];
+
   const defaultBranchId = selectedBranch?.id;
-  const doctorBranchMap = Object.fromEntries(
-    knowledge.doctors.map((doctor) => {
-      const primary = doctor.branches.find((branch) => branch.is_primary);
-      const resolved =
-        primary?.id ||
-        (doctor.branches.length === 1 ? doctor.branches[0].id : defaultBranchId || "");
-      return [doctor.id, resolved];
-    }),
-  );
 
   const patientNames = new Map(knowledge.patients.map((patient) => [patient.id, patient.name]));
   if (selectedPatient) {
@@ -468,11 +513,6 @@ export default async function AppointmentsPage({
   }
   const serviceNames = new Map(services.map((service) => [service.id, service.name]));
   const serviceById = new Map(services.map((service) => [service.id, service]));
-  const firstHour = workingHours.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
-  const defaultStart =
-    selectedDate === today
-      ? timeInputInTimezone(timezone)
-      : `${selectedDate}T${firstHour?.start_time.slice(0, 5) || "09:00"}`;
   const currentParams: SearchParams = {
     patient_id: patientId,
     date: selectedDate,
@@ -499,9 +539,9 @@ export default async function AppointmentsPage({
       />
 
       {!selectedPatient && (
-        <details className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <details open={Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-black text-slate-900">
-            <Plus size={17} /> إضافة موعد يدوي
+            <Plus size={17} /> إضافة موعد
           </summary>
           <div className="border-t border-slate-100 p-4">
             <form method="get" className="flex max-w-xl gap-2">
@@ -542,14 +582,13 @@ export default async function AppointmentsPage({
                 <ManualAppointmentForm
                   mode={manualPatient ? "existing" : "new"}
                   phone={manualPhone}
-                  defaultStart={defaultStart}
+                  bookingDate={selectedDate}
+                  branchId={defaultBranchId || ""}
                   patientId={manualPatient?.id}
                   patientName={manualPatient ? `${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim() : undefined}
                   services={services}
                   doctors={doctors}
                   staff={staff}
-                  doctorBranchMap={doctorBranchMap}
-                  defaultBranchId={defaultBranchId}
                   packages={manualPackages}
                 />
               </div>
@@ -627,12 +666,35 @@ export default async function AppointmentsPage({
               patientNames={patientNames}
               serviceById={serviceById}
               visibleColumns={visibleColumns}
+              selectedDate={selectedDate}
+              branchId={selectedBranch.id}
+              currentParams={currentParams}
+              allowQuickBooking={!patientId}
             />
           ) : (
             <div className="py-12 text-center text-sm font-semibold text-[var(--muted)]">لا يوجد فرع نشط لعرض جدول المواعيد.</div>
           )}
         </CardContent>
       </Card>
+
+      {quickWindow && selectedBranch && !patientId && (
+        <QuickAppointmentDialog
+          branchId={selectedBranch.id}
+          bookingDate={selectedDate}
+          column={quickWindow.column}
+          windowStartMinutes={quickWindow.start}
+          windowEndMinutes={quickWindow.end}
+          phone={quickPhone}
+          patient={quickPatient}
+          history={quickHistory}
+          packages={quickPackages}
+          services={services}
+          doctors={doctors}
+          staff={staff}
+          visibleColumns={visibleColumns}
+          closeHref={scheduleHref(currentParams, selectedDate, selectedBranch.id)}
+        />
+      )}
     </>
   );
 }
