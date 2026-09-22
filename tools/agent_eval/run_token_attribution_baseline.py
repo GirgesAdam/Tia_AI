@@ -25,7 +25,7 @@ from tools.agent_eval.run_batch_01 import (
 )
 
 ATTRIBUTION_VERSION = 1
-SCHEMA_HEAD = "0077_schedule_billing_categories"
+SCHEMA_HEAD = "0078_repair_schedule_billing_categories"
 CASES = [case_price, case_device_price, case_full_booking]
 
 
