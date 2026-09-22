@@ -80,6 +80,8 @@ def test_booking_task_view_replaces_canonical_ids_with_ephemeral_refs() -> None:
                     "payload": {
                         "doctor_id": DOCTOR_ID,
                         "service_id": SERVICE_ID,
+                        "device_key": "candela_gentle",
+                        "laser_device_name": "Candela",
                         "start_time_24h": "19:00",
                         "doctor_name": "د. مريم",
                     },
@@ -101,6 +103,8 @@ def test_booking_task_view_replaces_canonical_ids_with_ephemeral_refs() -> None:
     assert '"doctor_ref": "D1"' in payload
     assert '"device_ref": "V1"' in payload
     assert '"start_time_24h": "19:00"' in payload
+    assert '"device_ref": "V1"' in payload
+    assert '"laser_device_name": "Candela"' in payload
 
 
 def test_reschedule_task_view_uses_appointment_ref_without_payment_or_write_metadata() -> None:
