@@ -199,7 +199,11 @@ def with_safe_task_context(
         pending_choice,
         context=context,
     )
-    return SemanticContext(model_input=model_input, reference_map=context.reference_map)
+    return SemanticContext(
+        model_input=model_input,
+        reference_map=context.reference_map,
+        server_metadata=context.server_metadata,
+    )
 
 
 def with_safe_read_context(
@@ -214,4 +218,8 @@ def with_safe_read_context(
         read_context,
         context=context,
     )
-    return SemanticContext(model_input=model_input, reference_map=context.reference_map)
+    return SemanticContext(
+        model_input=model_input,
+        reference_map=context.reference_map,
+        server_metadata=context.server_metadata,
+    )
