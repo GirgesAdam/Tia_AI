@@ -80,6 +80,8 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert revisions["0061_clinic_ops_inventory_products"] == "0060_whatsapp_direct_credentials"
     assert revisions["0073_appointment_additional_services"] == "0072_workspace_demo_policy"
     assert revisions["0074_appt_extra_services_head"] == "0073_appointment_additional_services"
+    repair = (backend / "alembic/versions/0078_repair_schedule_billing_categories.py").read_text(encoding="utf-8")
+    assert 'op.drop_constraint(op.f(legacy_category_check), "services", type_="check")' in repair
 
 
 def test_drop_patient_email_migration_is_explicit() -> None:

@@ -111,7 +111,7 @@ def upgrade() -> None:
     # metadata and stores scheduling taxonomy separately.
     legacy_category_check = _check_name("services", "service_category_valid")
     if legacy_category_check is not None:
-        op.drop_constraint(legacy_category_check, "services", type_="check")
+        op.drop_constraint(op.f(legacy_category_check), "services", type_="check")
     op.alter_column(
         "services",
         "category",
