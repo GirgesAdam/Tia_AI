@@ -95,7 +95,6 @@ class AppointmentCreate(BaseModel):
     branch_id: UUID
     doctor_id: UUID
     doctor_assignment_known: bool = True
-    is_quick_booking: bool = False
     service_id: UUID
     patient_package_id: UUID | None = None
     lead_id: UUID | None = None
@@ -163,6 +162,7 @@ class AppointmentRead(BaseModel):
     branch_id: UUID
     doctor_id: UUID
     doctor_assignment_known: bool = True
+    is_quick_booking: bool = False
     service_id: UUID
     patient_package_id: UUID | None = None
     lead_id: UUID | None
