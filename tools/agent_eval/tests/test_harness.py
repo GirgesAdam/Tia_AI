@@ -3,9 +3,12 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from tools.agent_eval.harness import TokenUsage, assert_demo_only
+from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_only
 from tools.agent_eval.run_batch_01 import _reschedule_relationships_moved
-from tools.agent_eval.run_token_attribution_baseline import CASES as ATTRIBUTION_CASES
+from tools.agent_eval.run_token_attribution_baseline import (
+    CASES as ATTRIBUTION_CASES,
+    summarize_attribution,
+)
 from tools.agent_eval.token_attribution import (
     attach_actual_usage,
     interpreter_attribution,
@@ -173,3 +176,33 @@ def test_token_attribution_baseline_is_exactly_three_requested_scenarios():
         "case_device_price",
         "case_full_booking",
     ]
+
+
+def test_token_attribution_summary_does_not_require_batch_one_evaluation_keys():
+    row = ScenarioResult(
+        id="price_lookup",
+        category="pricing",
+        purpose="measure",
+        turns=[],
+        state_before={},
+        state_after={},
+        db_verification={},
+        evaluation={"grounding": "CORRECT"},
+        issues=[],
+        token_usage={
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cached_tokens": 10,
+            "total_tokens": 120,
+            "calls": 1,
+            "metadata_missing_calls": 0,
+        },
+    )
+
+    summary = summarize_attribution([row])
+
+    assert summary["scenarios_run"] == 1
+    assert summary["P0"] == 0
+    assert summary["P1"] == 0
+    assert summary["eval_infra_errors"] == 0
+    assert summary["tokens"]["total_tokens"] == 120
