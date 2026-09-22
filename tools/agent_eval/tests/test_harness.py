@@ -7,6 +7,7 @@ from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_onl
 from tools.agent_eval.run_batch_01 import _reschedule_relationships_moved
 from tools.agent_eval.run_token_attribution_baseline import (
     CASES as ATTRIBUTION_CASES,
+    selected_cases,
     summarize_attribution,
 )
 from tools.agent_eval.token_attribution import (
@@ -206,3 +207,11 @@ def test_token_attribution_summary_does_not_require_batch_one_evaluation_keys():
     assert summary["P1"] == 0
     assert summary["eval_infra_errors"] == 0
     assert summary["tokens"]["total_tokens"] == 120
+
+
+def test_token_attribution_full_booking_mode_uses_dynamic_fixture(monkeypatch):
+    monkeypatch.setenv("TIA_TOKEN_BASELINE_SCENARIOS", "full_booking")
+
+    cases = selected_cases()
+
+    assert [case.__name__ for case in cases] == ["case_full_booking_dynamic"]
