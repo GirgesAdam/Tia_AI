@@ -20,6 +20,7 @@ def _appointment(*, status: str = "confirmed"):
         service_id=uuid4(),
         patient_package_id=None,
         laser_device_key="candela_gentle",
+        price_minor=100000,
         status=status,
     )
 
@@ -132,6 +133,7 @@ def test_additional_service_package_is_added_unpaid_and_consumed_when_visit_comp
         service_id=uuid4(),
         laser_device_key="candela_gentle",
         patient_package_id=None,
+        unit_price_minor=100000,
     )
     offer = SimpleNamespace(
         id=uuid4(),
