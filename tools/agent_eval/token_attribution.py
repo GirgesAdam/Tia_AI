@@ -4,7 +4,6 @@ import json
 from typing import Any
 
 import tiktoken
-
 from app.agents.v2.responder import ResponderDraft
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from langchain_core.messages import BaseMessage
