@@ -176,6 +176,7 @@ function localToIso(value: string, timezone: string) {
 
 export async function createManualAppointment(previous: ManualAppointmentState, formData: FormData): Promise<ManualAppointmentState> {
   void previous;
+  const bookingMode = String(formData.get("booking_mode") || "standard") === "quick" ? "quick" : "standard";
   try {
     const mode = String(formData.get("customer_mode") || "existing");
     let patientId = String(formData.get("patient_id") || "").trim();
@@ -192,7 +193,6 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     }
 
     const branchId = String(formData.get("branch_id") || "").trim();
-    const bookingMode = String(formData.get("booking_mode") || "standard") === "quick" ? "quick" : "standard";
     const clinicTimezone = String(formData.get("clinic_timezone") || "Africa/Cairo").trim() || "Africa/Cairo";
     const doctorId = String(formData.get("doctor_id") || "").trim();
     const serviceId = String(formData.get("service_id") || "").trim();
