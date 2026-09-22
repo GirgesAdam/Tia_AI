@@ -164,17 +164,78 @@ function scheduleHref(current: SearchParams, date: string, branchId: string) {
   return `/appointments?${query.toString()}`;
 }
 
+type SchedulePeriod = {
+  start: number;
+  end: number;
+  appointments: Appointment[];
+};
+
+function buildSchedulePeriods(
+  appointments: Appointment[],
+  interval: KnowledgeHour,
+  timezone: string,
+) {
+  const workStart = toMinutes(interval.start_time);
+  const workEnd = toMinutes(interval.end_time);
+  const bookings = appointments
+    .map((appointment) => {
+      const start = minuteInTimezone(appointment.start_at, timezone);
+      let end = minuteInTimezone(appointment.end_at, timezone);
+      if (end <= start) end += 24 * 60;
+      return {
+        appointment,
+        start: Math.max(start, workStart),
+        end: Math.min(end, workEnd),
+      };
+    })
+    .filter((booking) => booking.end > booking.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const periods: SchedulePeriod[] = [];
+  let cursor = workStart;
+  let index = 0;
+
+  while (index < bookings.length) {
+    const first = bookings[index];
+    const busyStart = first.start;
+    let busyEnd = first.end;
+    const busyAppointments = [first.appointment];
+    index += 1;
+
+    while (index < bookings.length && bookings[index].start < busyEnd) {
+      busyEnd = Math.max(busyEnd, bookings[index].end);
+      busyAppointments.push(bookings[index].appointment);
+      index += 1;
+    }
+
+    if (busyStart > cursor) {
+      periods.push({ start: cursor, end: busyStart, appointments: [] });
+    }
+
+    periods.push({
+      start: busyStart,
+      end: busyEnd,
+      appointments: busyAppointments,
+    });
+    cursor = Math.max(cursor, busyEnd);
+  }
+
+  if (cursor < workEnd) {
+    periods.push({ start: cursor, end: workEnd, appointments: [] });
+  }
+
+  return periods;
+}
+
 function DailySchedule({
   appointments,
   hours,
-  intervalMinutes,
   timezone,
   patientNames,
   serviceNames,
 }: {
   appointments: Appointment[];
   hours: KnowledgeHour[];
-  intervalMinutes: number;
   timezone: string;
   patientNames: Map<string, string>;
   serviceNames: Map<string, string>;
@@ -198,36 +259,48 @@ function DailySchedule({
         .map((interval, intervalIndex) => {
           const start = toMinutes(interval.start_time);
           const end = toMinutes(interval.end_time);
-          const slots: number[] = [];
-          for (let minute = start; minute < end; minute += intervalMinutes) slots.push(minute);
+          const periods = buildSchedulePeriods(appointments, interval, timezone);
+
+          periods.forEach((period) => {
+            period.appointments.forEach((appointment) => rendered.add(appointment.id));
+          });
+
           return (
-            <div key={`${interval.start_time}-${interval.end_time}-${intervalIndex}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div
+              key={`${interval.start_time}-${interval.end_time}-${intervalIndex}`}
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+            >
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-600">
                 ساعات العمل: {minuteLabel(start)} – {minuteLabel(end)}
               </div>
+
               <div>
-                {slots.map((slot) => {
-                  const slotEnd = Math.min(slot + intervalMinutes, end);
-                  const starting = appointments.filter((appointment) => {
-                    const appointmentStart = minuteInTimezone(appointment.start_at, timezone);
-                    const startsHere = appointmentStart >= slot && appointmentStart < slotEnd;
-                    if (startsHere) rendered.add(appointment.id);
-                    return startsHere;
-                  });
-                  const continuing = appointments.some((appointment) => {
-                    const appointmentStart = minuteInTimezone(appointment.start_at, timezone);
-                    const appointmentEnd = minuteInTimezone(appointment.end_at, timezone);
-                    return appointmentStart < slot && appointmentEnd > slot;
-                  });
+                {periods.map((period, periodIndex) => {
+                  const isAvailable = period.appointments.length === 0;
                   return (
-                    <div key={slot} className="grid min-h-[66px] grid-cols-[72px_minmax(0,1fr)] border-b border-slate-100 last:border-b-0 sm:grid-cols-[90px_minmax(0,1fr)]">
-                      <div className="border-l border-slate-100 px-2 py-3 text-left text-xs font-bold text-slate-500 sm:px-4">
-                        {minuteLabel(slot)}
+                    <div
+                      key={`${period.start}-${period.end}-${periodIndex}`}
+                      className={`grid min-h-[72px] grid-cols-[108px_minmax(0,1fr)] border-b border-slate-100 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)] ${
+                        isAvailable ? "bg-slate-50/45" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-col justify-center border-l border-slate-100 px-3 py-3 text-left sm:px-4">
+                        <span className="text-xs font-black text-slate-700">
+                          {minuteLabel(period.start)}
+                        </span>
+                        <span className="mt-1 text-[11px] font-semibold text-slate-400">
+                          إلى {minuteLabel(period.end)}
+                        </span>
                       </div>
-                      <div className={`min-w-0 p-1.5 ${continuing && !starting.length ? "bg-teal-50/35" : ""}`}>
-                        {starting.length ? (
-                          <div className="grid gap-1.5 lg:grid-cols-2 2xl:grid-cols-3">
-                            {starting.map((appointment) => {
+
+                      <div className="min-w-0 p-2">
+                        {isAvailable ? (
+                          <div className="flex min-h-14 items-center rounded-xl border border-dashed border-slate-200 bg-white/70 px-4 text-xs font-bold text-slate-400">
+                            فترة متاحة
+                          </div>
+                        ) : (
+                          <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
+                            {period.appointments.map((appointment) => {
                               const status = scheduleStatus(appointment.status);
                               return (
                                 <Link
@@ -244,21 +317,20 @@ function DailySchedule({
                                         {serviceNames.get(appointment.service_id) || "خدمة"}
                                       </div>
                                     </div>
-                                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-black ring-1 ${status.className}`}>
+                                    <span
+                                      className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-black ring-1 ${status.className}`}
+                                    >
                                       {status.label}
                                     </span>
                                   </div>
                                   <div className="mt-2 text-xs font-bold text-teal-700">
-                                    {appointmentTime(appointment.start_at, timezone)}
+                                    {appointmentTime(appointment.start_at, timezone)} –{" "}
+                                    {appointmentTime(appointment.end_at, timezone)}
                                   </div>
                                 </Link>
                               );
                             })}
                           </div>
-                        ) : continuing ? (
-                          <div className="h-full min-h-12 rounded-lg border-r-2 border-teal-200 bg-teal-50/40" aria-label="موعد مستمر" />
-                        ) : (
-                          <div className="min-h-12" aria-label="وقت متاح" />
                         )}
                       </div>
                     </div>
@@ -276,7 +348,10 @@ function DailySchedule({
             {appointments.filter((appointment) => !rendered.has(appointment.id)).map((appointment) => (
               <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="rounded-xl bg-white p-3 text-sm shadow-sm">
                 <div className="font-black">{patientNames.get(appointment.patient_id) || "عميل"}</div>
-                <div className="mt-1 text-xs text-slate-600">{serviceNames.get(appointment.service_id) || "خدمة"} · {appointmentTime(appointment.start_at, timezone)}</div>
+                <div className="mt-1 text-xs text-slate-600">
+                  {serviceNames.get(appointment.service_id) || "خدمة"} · {appointmentTime(appointment.start_at, timezone)} –{" "}
+                  {appointmentTime(appointment.end_at, timezone)}
+                </div>
               </Link>
             ))}
           </div>
@@ -312,7 +387,6 @@ export default async function AppointmentsPage({
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(raw.date || "") ? raw.date! : today;
   const weekday = weekdayFor(selectedDate);
   const workingHours = (selectedBranch?.working_hours || []).filter((hour) => hour.weekday === weekday);
-  const intervalMinutes = Math.max(10, knowledge.booking_settings?.slot_interval_minutes || 30);
 
   const query = new URLSearchParams({
     limit: "200",
@@ -506,7 +580,6 @@ export default async function AppointmentsPage({
             <DailySchedule
               appointments={appointments}
               hours={workingHours}
-              intervalMinutes={intervalMinutes}
               timezone={timezone}
               patientNames={patientNames}
               serviceNames={serviceNames}
