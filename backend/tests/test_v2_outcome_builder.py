@@ -516,3 +516,64 @@ def test_multi_device_pricing_without_selection_exposes_all_verified_prices() ->
     ]
     assert "selected_laser_device" not in service
     assert "price" not in service
+
+
+def test_single_configured_laser_device_can_supply_verified_price_without_extra_choice() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر خدمة واحدة", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": "ليزر خدمة واحدة",
+                        "price_minor": 50_000,
+                        "currency": "EGP",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "prime_lase",
+                                "device_name": "Prime Lase",
+                                "price_minor": 55_000,
+                                "currency": "EGP",
+                                "configured": True,
+                            }
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    service = outcome.facts["service_catalog"]["service"]
+
+    assert service["selected_laser_device"] == {
+        "device_name": "Prime Lase",
+        "price": "550.00 EGP",
+    }
+    assert "price" not in service
