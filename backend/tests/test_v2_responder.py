@@ -123,17 +123,14 @@ def test_compound_outcomes_are_given_to_one_responder_call() -> None:
     assert len([message for message in messages if isinstance(message, HumanMessage)]) == 1
 
 
-def test_compose_v2_customer_reply_returns_one_model_reply(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+def test_pure_price_reply_is_deterministic_and_skips_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="ليزر الإبط سعره 500 جنيه، والمتاح بكرة من 6 لـ8 مساءً مع د. مريم.",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("pure verified pricing must not invoke the responder model")
         ),
     )
 
@@ -145,8 +142,8 @@ def test_compose_v2_customer_reply_returns_one_model_reply(monkeypatch: pytest.M
         outcomes=[_price_outcome()],
     )
 
-    assert text == "ليزر الإبط سعره 500 جنيه، والمتاح بكرة من 6 لـ8 مساءً مع د. مريم."
-    assert model == "openai:test-model"
+    assert text == "جلسة ليزر إبط سعرها 500 جنيه."
+    assert model == "deterministic:verified-price"
 
 
 def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -222,3 +219,149 @@ def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
             history=[HumanMessage(content="السعر كام؟")],
             outcomes=[_price_outcome()],
         )
+
+
+def test_prp_verified_price_cannot_be_reinvented_by_responder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("pure pricing should be deterministic")),
+    )
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "PRP للبشرة",
+                    "price": "2000.00 EGP",
+                }
+            }
+        },
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="PRP للبشرة بكام؟")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-price"
+    assert "2000" in text
+    assert "2500" not in text
+
+
+def test_verified_normal_price_changes_without_code_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("pure pricing should be deterministic")),
+    )
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "خدمة أخرى",
+                    "price": "2100.00 EGP",
+                }
+            }
+        },
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="السعر كام؟")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-price"
+    assert "2100" in text
+    assert "2000" not in text
+
+
+def test_selected_candela_price_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("pure device pricing should be deterministic")),
+    )
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر إبط",
+                    "requires_laser_device": True,
+                    "selected_laser_device": {
+                        "device_name": "Candela Gentle",
+                        "price": "650.00 EGP",
+                    },
+                }
+            }
+        },
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="طب Candela؟")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-device-price"
+    assert "Candela Gentle" in text
+    assert "650" in text
+    assert "550" not in text
+
+
+def test_multiple_device_prices_are_presented_without_silent_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("pure device pricing should be deterministic")),
+    )
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر إبط",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {"device_name": "Prime Lase", "price": "550.00 EGP"},
+                        {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+                    ],
+                }
+            }
+        },
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="ليزر الإبط بكام؟")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-device-prices"
+    assert "Prime Lase" in text and "550" in text
+    assert "Candela Gentle" in text and "650" in text
+    assert "أي جهاز" in text
