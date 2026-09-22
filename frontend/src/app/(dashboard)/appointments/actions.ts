@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { tiaRequest } from "@/lib/tia/api";
+import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment, Patient } from "@/lib/types";
 
 export type ManualAppointmentState = { ok: boolean; message: string };
@@ -87,6 +87,49 @@ export async function getManualAppointmentAvailability(input: {
   }
 }
 
+function appointmentErrorMessage(error: unknown, bookingMode: "quick" | "standard") {
+  if (!(error instanceof TiaApiError)) {
+    return error instanceof Error ? error.message : "تعذر تسجيل الموعد.";
+  }
+
+  const detail = (error.technicalMessage || "").toLowerCase();
+  if (detail.includes("blocked patients")) {
+    return "لا يمكن إضافة موعد لهذا العميل لأن ملفه محظور.";
+  }
+  if (detail.includes("belongs to another patient")) {
+    return "الباكدج المختارة تخص عميلًا آخر.";
+  }
+  if (detail.includes("different service")) {
+    return "الباكدج المختارة لا تخص الخدمة المحددة.";
+  }
+  if (detail.includes("different laser device") || detail.includes("does not match the appointment device")) {
+    return "الباكدج المختارة مرتبطة بجهاز ليزر مختلف.";
+  }
+  if (detail.includes("package is not active")) {
+    return "الباكدج المختارة غير نشطة في تاريخ الموعد.";
+  }
+  if (detail.includes("before its purchase")) {
+    return "لا يمكن استخدام الباكدج في موعد يسبق تاريخ شرائها.";
+  }
+  if (detail.includes("session(s) remaining")) {
+    return "لا توجد جلسات متبقية كافية في الباكدج المختارة.";
+  }
+  if (detail.includes("laser device choice is required")) {
+    return "اختار جهاز الليزر المطلوب للخدمة.";
+  }
+  if (detail.includes("laser device cannot be selected")) {
+    return "الخدمة المختارة لا تستخدم جهاز ليزر.";
+  }
+
+  if (bookingMode === "quick" && error.status === 409) {
+    return "تعذر إنشاء الحجز السريع بسبب قيد في بيانات الموعد. التداخل الزمني مسموح في الحجز السريع؛ راجع العميل والخدمة والجهاز أو الباكدج.";
+  }
+  if (error.status === 409) {
+    return "الوقت أو المورد المطلوب غير متاح، أو توجد مشكلة في بيانات الحجز. راجع الاختيارات وحاول مرة أخرى.";
+  }
+  return error.message;
+}
+
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
   revalidatePath(`/appointments/${appointmentId}`);
@@ -164,8 +207,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     refreshAppointmentViews(appointment.id, patientId);
     return { ok: true, message: "تم تسجيل الموعد بنجاح." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "تعذر تسجيل الموعد.";
-    return { ok: false, message: message.includes("conflict") ? "الوقت أو الجهاز غير متاح. اختار موعدًا آخر." : message };
+    return { ok: false, message: appointmentErrorMessage(error, bookingMode) };
   }
 }
 
