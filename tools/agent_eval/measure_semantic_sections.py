@@ -37,6 +37,20 @@ def main() -> int:
             for row in services
             if isinstance(row, dict)
         ]
+        services_without_category = [
+            {
+                key: row[key]
+                for key in ("ref", "name", "requires_laser_device", "devices")
+                if key in row
+            }
+            for row in services
+            if isinstance(row, dict)
+        ]
+        services_without_laser_flag = [
+            {key: row[key] for key in ("ref", "name", "category", "devices") if key in row}
+            for row in services
+            if isinstance(row, dict)
+        ]
         doctor_names_only = [
             {key: row[key] for key in ("ref", "name", "specialization") if key in row}
             for row in doctors
@@ -50,6 +64,12 @@ def main() -> int:
                     "projections": {
                         "services_full": estimate_json_tokens(services),
                         "services_identity_only": estimate_json_tokens(service_names_only),
+                        "services_without_category": estimate_json_tokens(
+                            services_without_category
+                        ),
+                        "services_without_laser_flag": estimate_json_tokens(
+                            services_without_laser_flag
+                        ),
                         "doctors_full": estimate_json_tokens(doctors),
                         "doctors_identity_only": estimate_json_tokens(doctor_names_only),
                     },
