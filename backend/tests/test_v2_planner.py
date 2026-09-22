@@ -352,3 +352,52 @@ def test_compound_turn_produces_ordered_independent_steps() -> None:
     assert [step.operation_type for step in plan.steps] == ["pricing", "availability"]
     assert plan.steps[0].write_intent is None
     assert plan.steps[1].write_intent is None
+
+
+def test_laser_device_requirement_stays_deterministic_outside_model_input() -> None:
+    semantic = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-laser",
+                    "name": "ليزر إبط",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                        }
+                    ],
+                }
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    assert "requires_laser_device" not in semantic.model_input["services"][0]
+
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation(
+                "book",
+                service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+                date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+                time=TimeConstraint(mode="exact", start_time="19:00", end_time=None),
+            )
+        ],
+        safety_signals=[],
+    )
+    context = PlannerContext(semantic_context=semantic, active_task=None, now=NOW)
+
+    step = plan_turn(turn, context).steps[0]
+
+    assert step.facts["service_requires_laser_device"] is True
+    clarified = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={"start_at": "2026-09-17T19:00:00+03:00"},
+        ),
+    )
+    assert clarified.disposition == "clarify"
+    assert clarified.clarification_field == "device"
