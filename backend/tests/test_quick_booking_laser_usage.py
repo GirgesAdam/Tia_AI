@@ -54,7 +54,14 @@ def test_quick_booking_backend_is_an_audited_override() -> None:
     ).read_text(encoding="utf-8")
     assert '@router.post(\n    "/appointments/quick"' in route
     assert "is_quick_booking=True" in route
-    assert "is_quick_booking: bool = False" in schema
+    appointment_read = schema.split("class AppointmentRead(BaseModel):", 1)[1].split(
+        "class AppointmentStatusHistoryRead", 1
+    )[0]
+    appointment_create = schema.split("class AppointmentCreate(BaseModel):", 1)[1].split(
+        "class AppointmentCancel", 1
+    )[0]
+    assert "is_quick_booking: bool = False" in appointment_read
+    assert "is_quick_booking" not in appointment_create
     assert "doctor_assignment_known=True" in route
     assert 'action="appointment.quick_created"' in route
     assert "quick_booking_integrity_detail" in route
