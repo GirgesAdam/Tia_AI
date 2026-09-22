@@ -108,3 +108,11 @@ def test_runtime_catches_openai_api_errors() -> None:
     assert "openai.APIError" in source
     assert "_status_from_exception" in source
     assert "except openai.APIError as exc" in source
+
+
+def test_provider_schema_keeps_only_root_title_for_function_name() -> None:
+    clean = canonicalize_provider_json_schema(OnboardingTurnDecision.model_json_schema())
+
+    assert clean["title"] == "OnboardingTurnDecision"
+    nested = {key: value for key, value in clean.items() if key != "title"}
+    assert "title" not in set(_keys(nested))
