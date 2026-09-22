@@ -12,6 +12,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import (
     OutcomeBuildError,
     build_step_outcome,
