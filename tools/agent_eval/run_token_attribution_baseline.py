@@ -24,6 +24,7 @@ from tools.agent_eval.run_batch_01 import (
     summarize,
 )
 
+ATTRIBUTION_VERSION = 1
 CASES = [case_price, case_device_price, case_full_booking]
 
 
@@ -129,6 +130,7 @@ def main() -> int:
     payload = {
         "run_metadata": {
             "kind": "token_attribution_baseline",
+            "attribution_version": ATTRIBUTION_VERSION,
             "git_sha": os.getenv("TIA_AGENT_EVAL_GIT_SHA", "unknown"),
             "generated_at": datetime.now(UTC).isoformat(),
             "model_config": settings.openai_model,
