@@ -141,6 +141,27 @@ def _create_sqlite_schema(engine) -> None:
         )
         """,
         """
+        CREATE TABLE patient_packages (
+            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32) NOT NULL,
+            patient_id CHAR(32) NOT NULL, service_id CHAR(32) NOT NULL,
+            purchase_transaction_id CHAR(32), package_offer_id CHAR(32),
+            origin_appointment_id CHAR(32), created_by_user_id CHAR(32),
+            external_id VARCHAR(128), name VARCHAR(200) NOT NULL,
+            sessions_purchased INTEGER NOT NULL, opening_sessions_remaining INTEGER,
+            sessions_total_known BOOLEAN NOT NULL DEFAULT 1,
+            sale_price_minor INTEGER NOT NULL DEFAULT 0,
+            standalone_session_price_minor_at_purchase INTEGER,
+            laser_device_key VARCHAR(40), laser_device_name VARCHAR(120),
+            currency VARCHAR(3) NOT NULL DEFAULT 'EGP',
+            purchased_at DATETIME NOT NULL, expires_at DATE,
+            status VARCHAR(16) NOT NULL DEFAULT 'active',
+            source VARCHAR(16) NOT NULL DEFAULT 'staff',
+            idempotency_key VARCHAR(128),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
             origin_appointment_id CHAR(32), patient_id CHAR(32), created_by_user_id CHAR(32),
