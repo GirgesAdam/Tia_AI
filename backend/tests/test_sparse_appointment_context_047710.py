@@ -20,7 +20,7 @@ def test_sparse_appointment_migration_is_current_head_and_excludes_unknown_docto
     assert '"doctor_assignment_known"' in migration
     assert "doctor_assignment_known AND status IN" in migration
     assert "doctor_assignment_known: Mapped[bool]" in model
-    assert "doctor_assignment_known AND status IN" in model
+    assert "doctor_assignment_known AND NOT is_quick_booking AND status IN" in model
 
 
 def test_history_contract_does_not_require_branch_or_doctor_for_appointments() -> None:

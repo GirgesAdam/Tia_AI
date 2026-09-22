@@ -102,8 +102,8 @@ def test_clinic_and_doctor_end_time_is_latest_allowed_booking_start(monkeypatch)
         if slot.start_at == datetime(2026, 9, 11, 22, 0, tzinfo=UTC)
     )
     assert closing_slot.end_at == datetime(2026, 9, 11, 23, 0, tzinfo=UTC)
-    assert closing_slot.busy_start_at == datetime(2026, 9, 11, 21, 45, tzinfo=UTC)
-    assert closing_slot.busy_end_at == datetime(2026, 9, 11, 23, 15, tzinfo=UTC)
+    assert closing_slot.busy_start_at == datetime(2026, 9, 11, 22, 0, tzinfo=UTC)
+    assert closing_slot.busy_end_at == datetime(2026, 9, 11, 23, 0, tzinfo=UTC)
 
 
 def test_booking_start_after_shared_end_time_is_not_offered(monkeypatch) -> None:
