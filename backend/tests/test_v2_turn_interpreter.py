@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -17,10 +18,13 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.agents.v2 import turn_interpreter as interpreter
 from app.agents.v2.turn_interpreter import (
     _build_interpreter_messages,
+    interpret_customer_turn_v2,
     merge_verified_read_context,
 )
+from app.services.agent_v2.planner import PlannerContext, plan_turn
 
 
 def _catalog() -> dict[str, object]:
@@ -189,3 +193,88 @@ def test_unconditional_nearest_request_is_not_suppressed_by_previous_success() -
     date = merged.operations[0].entities.date
     assert date is not None
     assert date.mode == "next_available"
+
+
+def test_device_followup_uses_canonical_ref_and_inherits_verified_service(monkeypatch) -> None:
+    catalog = {
+        "services": [
+            {
+                "id": "11111111-1111-4111-8111-111111111111",
+                "name": "ليزر إبط",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {"device_key": "prime_lase", "device_name": "Prime Lase"},
+                    {"device_key": "candela_gentle", "device_name": "Candela Gentle"},
+                ],
+            }
+        ],
+        "doctors": [],
+        "appointments": [],
+    }
+    base = build_semantic_context(catalog)
+    context = SemanticContext(
+        model_input={
+            **base.model_input,
+            "recent_verified_read": {
+                "operation_type": "pricing",
+                "service_ref": "S1",
+            },
+        },
+        reference_map=base.reference_map,
+    )
+    semantic_result = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                entities=TurnEntities(
+                    device=EntityReference(
+                        text="Candela",
+                        ref="V2",
+                        candidate_refs=[],
+                    )
+                ),
+                selection=None,
+                package_usage="unspecified",
+                requested_service_details=["price"],
+                execution_intent="informational",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(
+        interpreter,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=semantic_result,
+            model_name="test-model",
+        ),
+    )
+
+    turn = interpret_customer_turn_v2(
+        history=[
+            HumanMessage(content="ليزر الإبط بكام؟"),
+            AIMessage(content="Prime Lase — 550 جنيه، Candela Gentle — 650 جنيه. تحب أي جهاز؟"),
+            HumanMessage(content="طب Candela؟"),
+        ],
+        semantic_context=context,
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+    )
+    operation = turn.operations[0]
+    assert operation.entities.service is not None
+    assert operation.entities.service.ref == "S1"
+    assert operation.entities.device is not None
+    assert operation.entities.device.ref == "V2"
+
+    step = plan_turn(
+        turn,
+        PlannerContext(
+            semantic_context=context,
+            active_task=None,
+            now=datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+        ),
+    ).steps[0]
+    assert step.facts["service_id"] == "11111111-1111-4111-8111-111111111111"
+    assert step.facts["device_key"] == "candela_gentle"
