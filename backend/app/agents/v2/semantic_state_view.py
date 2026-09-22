@@ -76,7 +76,11 @@ def _safe_target(value: object, context: SemanticContext) -> dict[str, object]:
     return safe
 
 
-def _safe_option_snapshot(value: object) -> dict[str, object]:
+def _safe_option_snapshot(
+    value: object,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     safe: dict[str, object] = {}
@@ -105,6 +109,13 @@ def _safe_option_snapshot(value: object) -> dict[str, object]:
             ):
                 if payload.get(key) not in (None, ""):
                     option[key] = payload.get(key)
+            device_ref = _entity_ref(
+                payload.get("device_key") or payload.get("laser_device_key"),
+                kind="device",
+                context=context,
+            )
+            if device_ref is not None:
+                option["device_ref"] = device_ref
         options.append(option)
     if options:
         safe["options"] = options
@@ -139,7 +150,10 @@ def active_task_semantic_view(
         if replacement:
             safe["replacement"] = replacement
 
-    snapshot = _safe_option_snapshot(active_task.get("option_snapshot"))
+    snapshot = _safe_option_snapshot(
+        active_task.get("option_snapshot"),
+        context=context,
+    )
     if snapshot:
         safe["pending_choice"] = snapshot
     return safe
@@ -165,8 +179,12 @@ def verified_read_semantic_view(
     return safe
 
 
-def pending_choice_semantic_view(value: dict[str, Any] | None) -> dict[str, object]:
-    return _safe_option_snapshot(value)
+def pending_choice_semantic_view(
+    value: dict[str, Any] | None,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
+    return _safe_option_snapshot(value, context=context)
 
 
 def with_safe_task_context(
@@ -177,7 +195,10 @@ def with_safe_task_context(
 ) -> SemanticContext:
     model_input = dict(context.model_input)
     model_input["active_task"] = active_task_semantic_view(active_task, context=context)
-    model_input["pending_choice"] = pending_choice_semantic_view(pending_choice)
+    model_input["pending_choice"] = pending_choice_semantic_view(
+        pending_choice,
+        context=context,
+    )
     return SemanticContext(model_input=model_input, reference_map=context.reference_map)
 
 
