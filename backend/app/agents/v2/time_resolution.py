@@ -31,7 +31,7 @@ def _twelve_hour_candidates(value: str) -> tuple[int, int]:
 
 
 def _operating_hours(context: SemanticContext) -> list[dict[str, object]]:
-    raw = context.model_input.get("clinic_operating_hours")
+    raw = context.server_metadata.get("clinic_operating_hours")
     if not isinstance(raw, list):
         return []
     return [dict(row) for row in raw if isinstance(row, dict)]
