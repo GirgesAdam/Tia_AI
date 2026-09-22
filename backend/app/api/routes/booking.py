@@ -257,6 +257,7 @@ def get_availability(
     db: Annotated[Session, Depends(get_db)],
     doctor_id: UUID | None = None,
     laser_device_key: str | None = None,
+    exclude_appointment_id: UUID | None = None,
 ) -> AvailabilityResponse:
     try:
         timezone_name, slots = calculate_availability(
@@ -267,6 +268,7 @@ def get_availability(
             booking_date=booking_date,
             doctor_id=doctor_id,
             laser_device_key=laser_device_key,
+            exclude_appointment_id=exclude_appointment_id,
         )
     except BookingRuleError as exc:
         raise HTTPException(
