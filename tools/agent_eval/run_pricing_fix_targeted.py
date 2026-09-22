@@ -16,6 +16,7 @@ from tools.agent_eval.harness import (
     ScenarioResult,
     aggregate_tokens,
     assert_demo_only,
+    batch_token_summary,
     default_evaluation,
     jsonable,
     money,
@@ -27,7 +28,6 @@ from tools.agent_eval.run_batch_01 import (
     classify_issue,
     quiet_patient,
     run_messages,
-    summarize,
 )
 
 PRIMARY_CASES = [case_price, case_device_price]
@@ -272,6 +272,23 @@ def _locked_run_case(engine, slug: str, case_fn) -> ScenarioResult:
         connection.close()
 
 
+def summarize_pricing(results: list[ScenarioResult]) -> dict:
+    pcounts = {f"P{i}": 0 for i in range(4)}
+    for row in results:
+        for issue in row.issues:
+            severity = str(issue.get("severity") or "")
+            if severity in pcounts:
+                pcounts[severity] += 1
+    return {
+        "scenarios_run": len(results),
+        **pcounts,
+        "eval_infra_errors": sum(
+            row.execution_error is not None for row in results
+        ),
+        "tokens": batch_token_summary(results),
+    }
+
+
 def _emit(payload: dict) -> None:
     encoded = base64.b64encode(
         json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
@@ -300,10 +317,7 @@ def main() -> int:
 
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     results = [_locked_run_case(engine, "tia", case_fn) for case_fn in cases]
-    summary = summarize(results)
-    summary["eval_infra_errors"] = sum(
-        row.execution_error is not None for row in results
-    )
+    summary = summarize_pricing(results)
     payload = {
         "run_metadata": {
             "kind": "pricing_fix_targeted",
