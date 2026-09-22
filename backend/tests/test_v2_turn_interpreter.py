@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agents.v2 import turn_interpreter as interpreter
 from app.agents.v2.semantic_context import (
     SemanticContext,
     build_semantic_context,
@@ -18,7 +19,6 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2 import turn_interpreter as interpreter
 from app.agents.v2.turn_interpreter import (
     _build_interpreter_messages,
     interpret_customer_turn_v2,
