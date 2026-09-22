@@ -5,8 +5,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_only
 from tools.agent_eval.run_batch_01 import _reschedule_relationships_moved
+from tools.agent_eval.run_token_attribution_baseline import CASES as ATTRIBUTION_CASES
 from tools.agent_eval.run_token_attribution_baseline import (
-    CASES as ATTRIBUTION_CASES,
     selected_cases,
     summarize_attribution,
 )
