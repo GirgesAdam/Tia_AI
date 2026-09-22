@@ -190,6 +190,21 @@ function appointmentColumn(appointment: Appointment, serviceById: Map<string, Se
   return "other";
 }
 
+function appointmentsForColumn(
+  appointments: Appointment[],
+  column: ScheduleColumnId,
+  serviceById: Map<string, Service>,
+) {
+  if (column === "quick") {
+    return appointments.filter((appointment) => appointment.is_quick_booking === true);
+  }
+  return appointments.filter(
+    (appointment) =>
+      appointment.is_quick_booking !== true &&
+      appointmentColumn(appointment, serviceById) === column,
+  );
+}
+
 function scheduleHref(current: SearchParams, date: string, branchId: string) {
   const query = new URLSearchParams({ date, branch_id: branchId });
   if (current.patient_id) query.set("patient_id", current.patient_id);
@@ -330,8 +345,10 @@ function DailySchedule({
               <div className="overflow-x-auto">
                 <div className="grid min-w-max" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(230px, 1fr))` }}>
                   {columns.map((column) => {
-                    const columnAppointments = appointments.filter(
-                      (appointment) => appointmentColumn(appointment, serviceById) === column.id,
+                    const columnAppointments = appointmentsForColumn(
+                      appointments,
+                      column.id,
+                      serviceById,
                     );
                     const periods = buildSchedulePeriods(columnAppointments, interval, timezone);
                     periods.forEach((period) => period.appointments.forEach((appointment) => rendered.add(appointment.id)));
