@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-from tools.agent_eval.token_attribution import estimate_json_tokens
-
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.semantic_state_view import with_safe_read_context, with_safe_task_context
+from app.agents.v2.semantic_state_view import (
+    with_safe_read_context,
+    with_safe_task_context,
+)
 from app.core.config import settings
 from app.models.workspace import Workspace
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from tools.agent_eval.token_attribution import estimate_json_tokens
 
 
 def _section_tokens(model_input: dict[str, object]) -> dict[str, int]:

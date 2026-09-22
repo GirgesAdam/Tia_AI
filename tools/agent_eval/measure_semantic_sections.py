@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-from tools.agent_eval.token_attribution import estimate_json_tokens
-
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.v2.semantic_context import build_semantic_context
 from app.core.config import settings
 from app.models.workspace import Workspace
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from tools.agent_eval.token_attribution import estimate_json_tokens
 
 
 def main() -> int:
