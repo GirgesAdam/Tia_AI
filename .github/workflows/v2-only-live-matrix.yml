@@ -1,18 +1,6 @@
 name: V2 Only Live Matrix
 
 on:
-  push:
-    branches:
-      - main
-      - agent-core-v2-semantic-contract
-    paths:
-      - .github/workflows/v2-only-live-matrix.yml
-      - backend/app/agents/v2/**
-      - backend/app/services/agent_v2/**
-      - backend/scripts/run_v2_only_chat.py
-      - backend/scripts/run_v2_kb_smoke.py
-      - backend/scripts/run_v2_compound_sequence_review.py
-      - backend/scripts/validate_v2_compound_sequence_report.py
   workflow_dispatch:
 
 permissions:

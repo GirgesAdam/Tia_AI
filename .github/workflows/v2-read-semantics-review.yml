@@ -1,14 +1,6 @@
 name: V2 Read Semantics Review
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/v2-read-semantics-review.yml
-      - backend/scripts/run_v2_read_semantics_live_review.py
-      - backend/app/agents/v2/**
-      - backend/app/services/agent_v2/**
   workflow_dispatch:
 
 permissions:
