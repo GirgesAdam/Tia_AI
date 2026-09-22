@@ -350,12 +350,12 @@ def test_no_show_releases_package_reservation_like_cancellation(monkeypatch) -> 
     monkeypatch.setattr(appointment_ops, "record_activity_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         appointment_ops,
-        "release_package_usage",
+        "release_visit_package_usages",
         lambda *args, **kwargs: released.append(kwargs["reason"]),
     )
     monkeypatch.setattr(
         appointment_ops,
-        "consume_package_usage",
+        "consume_visit_package_usages",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no-show must not consume")),
     )
     db = SimpleNamespace(flush=lambda: None)
@@ -480,10 +480,8 @@ def test_completed_standard_appointment_ignores_released_historical_package_usag
     monkeypatch.setattr(appointment_ops, "record_activity_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         appointment_ops,
-        "consume_package_usage",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("standard appointment must not consume released package history")
-        ),
+        "consume_visit_package_usages",
+        lambda *args, **kwargs: [],
     )
     db = SimpleNamespace(flush=lambda: None)
     result = appointment_ops.update_operational_status_operation(

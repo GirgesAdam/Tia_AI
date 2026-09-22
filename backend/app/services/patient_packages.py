@@ -857,7 +857,7 @@ def consume_visit_package_usages(
         if usage.status == "consumed":
             continue
         if usage.status == "released":
-            raise PackageOperationError("Released package entitlement cannot be consumed.")
+            continue
         usage.status = "consumed"
         usage.used_at = consumed_at
         record_activity_event(

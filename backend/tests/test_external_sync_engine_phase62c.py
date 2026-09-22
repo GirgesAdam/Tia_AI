@@ -135,6 +135,7 @@ def _create_sqlite_schema(engine) -> None:
             service_name VARCHAR(200) NOT NULL, unit_price_minor INTEGER NOT NULL,
             currency VARCHAR(3) NOT NULL DEFAULT 'EGP',
             laser_device_key VARCHAR(40), laser_device_name VARCHAR(120),
+            patient_package_id CHAR(32),
             created_by_user_id CHAR(32), created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
