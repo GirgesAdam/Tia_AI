@@ -24,8 +24,11 @@ from tools.agent_eval.harness import (
 )
 from tools.agent_eval.run_batch_01 import (
     branch_name,
+    case_change_mind,
     case_device_price,
     case_full_booking,
+    case_handoff,
+    case_multi_question,
     case_price,
     context_with_two_doctors,
     created_appointments,
@@ -37,6 +40,50 @@ from tools.agent_eval.run_batch_01 import (
 ATTRIBUTION_VERSION = 1
 SCHEMA_HEAD = "0078_repair_schedule_billing_categories"
 CASES = [case_price, case_device_price, case_full_booking]
+
+
+def case_unavailable_dynamic(db: Session, workspace: Workspace):
+    patient = quiet_patient(db, workspace)
+    _, service, _, first, _ = context_with_two_doctors(db, workspace)
+    doctor, _, available = first
+    date_text, _ = local_slot(available, available.slots[0])
+    before = state_snapshot(db, workspace, patient)
+    turns = run_messages(
+        db,
+        workspace,
+        patient,
+        "unavailable_time",
+        [
+            (
+                f"عايزه احجز {service['name']} مع {doctor_name(doctor)} "
+                f"يوم {date_text} الساعة 03:17"
+            )
+        ],
+    )
+    after = state_snapshot(db, workspace, patient)
+    created = created_appointments(before, after)
+    ok = len(created) == 0
+    return (
+        "unavailable_time",
+        "availability",
+        "Reject an unavailable exact time without inventing or silently rounding it.",
+        turns,
+        before,
+        after,
+        {
+            "fixture_service": str(service["name"]),
+            "fixture_doctor": doctor_name(doctor),
+            "created_appointments": created,
+            "no_invalid_booking": ok,
+        },
+        default_evaluation(action_ok=ok, db_ok=ok),
+        classify_issue(
+            ok,
+            severity="P1",
+            title="Unavailable time was booked",
+            detail="03:17 should not be silently rounded or invented.",
+        ),
+    )
 
 
 def case_full_booking_dynamic(db: Session, workspace: Workspace):
@@ -96,6 +143,13 @@ def selected_cases() -> list:
         return CASES
     if requested == "full_booking":
         return [case_full_booking_dynamic]
+    if requested == "responder_regressions":
+        return [
+            case_unavailable_dynamic,
+            case_change_mind,
+            case_multi_question,
+            case_handoff,
+        ]
     raise RuntimeError(f"Unsupported token baseline scenario selection: {requested!r}")
 
 
