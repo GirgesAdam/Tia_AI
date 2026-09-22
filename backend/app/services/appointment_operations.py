@@ -18,8 +18,8 @@ from app.services.booking import BookingRuleError, find_exact_slot, get_effectiv
 from app.services.campaign_attribution import transfer_campaign_booking_conversion
 from app.services.patient_packages import (
     PackageOperationError,
-    consume_package_usage,
-    release_package_usage,
+    consume_visit_package_usages,
+    release_visit_package_usages,
     transfer_package_usage,
 )
 from app.services.payments import reallocate_appointment_payments_on_reschedule
@@ -305,7 +305,7 @@ def cancel_appointment_operation(
         now=now,
     )
     try:
-        release_package_usage(
+        release_visit_package_usages(
             db,
             appointment=appointment,
             actor_type=actor_type,
@@ -633,20 +633,15 @@ def update_operational_status_operation(
                 # A released historical PackageUsage may remain after the package
                 # itself was cancelled/refunded. Only currently package-backed
                 # appointments are allowed to consume entitlement.
-                if (
-                    getattr(appointment, "patient_package_id", None) is not None
-                    and getattr(appointment, "billing_context", "standard")
-                    == "package_prepaid"
-                ):
-                    consume_package_usage(
-                        db,
-                        appointment=appointment,
-                        used_at=now,
-                        actor_type=actor_type,
-                        actor_user_id=changed_by_user_id,
-                    )
+                consume_visit_package_usages(
+                    db,
+                    appointment=appointment,
+                    used_at=now,
+                    actor_type=actor_type,
+                    actor_user_id=changed_by_user_id,
+                )
             else:
-                release_package_usage(
+                release_visit_package_usages(
                     db,
                     appointment=appointment,
                     actor_type=actor_type,

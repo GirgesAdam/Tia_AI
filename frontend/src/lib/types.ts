@@ -169,7 +169,7 @@ export interface PaymentTransaction {
   source:string; external_reference:string|null; reason:string|null; created_at:string; refunded_minor:number; refundable_minor:number;
 }
 export interface AppointmentPaymentSummary {
-  appointment_id:string; patient_id:string; currency:string; price_minor:number; service_price_minor:number; products_total_minor:number; additional_services_total_minor:number; gross_paid_minor:number; refunded_minor:number;
+  appointment_id:string; patient_id:string; currency:string; price_minor:number; service_price_minor:number; products_total_minor:number; additional_services_total_minor:number; package_sales_total_minor:number; gross_paid_minor:number; refunded_minor:number;
   net_paid_minor:number; balance_minor:number; payment_status:string; billing_context:string; package_external_id:string|null; transactions:PaymentTransaction[]; can_refund:boolean;
 }
 export interface PatientPackage {

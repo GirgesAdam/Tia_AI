@@ -29,6 +29,7 @@ import {
   addAppointmentProduct,
   cancelAppointment,
   confirmAppointment,
+  purchasePackageForAdditionalService,
   purchasePackageFromAppointment,
   recordAppointmentPayment,
   refundAppointmentPayment,
@@ -76,6 +77,7 @@ type PaymentSummaryWithProducts = AppointmentPaymentSummary & {
   service_price_minor?: number;
   products_total_minor?: number;
   additional_services_total_minor?: number;
+  package_sales_total_minor?: number;
 };
 
 type AppointmentAdditionalService = {
@@ -87,6 +89,7 @@ type AppointmentAdditionalService = {
   currency: string;
   laser_device_key: string | null;
   laser_device_name: string | null;
+  patient_package_id: string | null;
 };
 
 type PackageOffer = {
@@ -167,7 +170,11 @@ export default async function AppointmentOperationsPage({
       )}
       {feedback.visit_saved && !feedback.visit_error && (
         <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm font-bold text-teal-800">
-          {feedback.visit_saved === "package" ? "تم شراء الباكيدج واحتساب الجلسة الحالية منها." : "تم تحديث خدمات الزيارة والحساب."}
+          {feedback.visit_saved === "package"
+            ? "تمت إضافة الباكيدج للحساب واحتساب الجلسة الحالية منها."
+            : feedback.visit_saved === "extra_package"
+              ? "تمت إضافة الباكيدج للخدمة الإضافية واحتسابها كجلسة منها."
+              : "تم تحديث خدمات الزيارة والحساب."}
         </div>
       )}
 
@@ -271,13 +278,14 @@ export default async function AppointmentOperationsPage({
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="flex items-center gap-2"><CircleDollarSign size={17} /> المدفوعات</CardTitle>
-                {payments.balance_minor > 0 && payments.billing_context !== "package_prepaid" && <Badge tone="yellow">متبقي {formatMoney(payments.balance_minor, payments.currency)}</Badge>}
+                {payments.balance_minor > 0 && <Badge tone="yellow">متبقي {formatMoney(payments.balance_minor, payments.currency)}</Badge>}
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الخدمة الأساسية</div><b className="mt-1 block">{packageBacked ? "ضمن الباكيدج" : formatMoney(payments.service_price_minor ?? appointment.price_minor, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">خدمات إضافية</div><b className="mt-1 block">{formatMoney(payments.additional_services_total_minor ?? 0, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الباكيدجات</div><b className="mt-1 block">{formatMoney(payments.package_sales_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المنتجات</div><b className="mt-1 block">{formatMoney(payments.products_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي المستحق للزيارة</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
               </div>
@@ -287,24 +295,60 @@ export default async function AppointmentOperationsPage({
                 <div className="mt-4 space-y-3">
                   {additionalServices.length > 0 && (
                     <div className="space-y-2">
-                      {additionalServices.map((line) => (
-                        <div key={line.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 p-3">
-                          <div>
-                            <div className="text-sm font-black">{line.service_name}</div>
-                            <div className="mt-1 text-xs text-[var(--muted)]">
-                              {line.laser_device_name ? `${line.laser_device_name} · ` : ""}{formatMoney(line.unit_price_minor, line.currency)}
+                      {additionalServices.map((line) => {
+                        const linePackageOffers = packageOffers.filter(
+                          (offer) =>
+                            offer.service_id === line.service_id &&
+                            (!line.laser_device_key || offer.device_key === line.laser_device_key),
+                        );
+                        return (
+                          <div key={line.id} className="rounded-xl bg-slate-50 p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="text-sm font-black">{line.service_name}</div>
+                                  {line.patient_package_id && <Badge tone="green">ضمن باكيدج</Badge>}
+                                </div>
+                                <div className="mt-1 text-xs text-[var(--muted)]">
+                                  {line.laser_device_name ? `${line.laser_device_name} · ` : ""}
+                                  {line.patient_package_id ? "سعر الجلسة الفردية غير محسوب" : formatMoney(line.unit_price_minor, line.currency)}
+                                </div>
+                              </div>
+                              {canEditVisitCharges && !line.patient_package_id && (
+                                <form action={removeAppointmentAdditionalService}>
+                                  <input type="hidden" name="appointment_id" value={appointment.id} />
+                                  <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                                  <input type="hidden" name="line_id" value={line.id} />
+                                  <Button size="sm" variant="ghost" aria-label={`حذف ${line.service_name}`}><Trash2 size={14} /></Button>
+                                </form>
+                              )}
                             </div>
+
+                            {!line.patient_package_id && canEditVisitCharges && linePackageOffers.length > 0 && (
+                              <details className="mt-3 rounded-lg border border-teal-200 bg-white p-3">
+                                <summary className="cursor-pointer text-xs font-black text-teal-800">تحويل الخدمة دي لباكيدج</summary>
+                                <form action={purchasePackageForAdditionalService} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                  <input type="hidden" name="appointment_id" value={appointment.id} />
+                                  <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                                  <input type="hidden" name="line_id" value={line.id} />
+                                  <label className="min-w-0 flex-1 text-xs font-bold">
+                                    الباكيدج
+                                    <select name="offer_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
+                                      <option value="" disabled>اختار الباكيدج</option>
+                                      {linePackageOffers.map((offer) => (
+                                        <option key={offer.id} value={offer.id}>
+                                          {offer.sessions_count} جلسات · {offer.device_name} · {formatMoney(offer.price_minor, offer.currency)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <Button size="sm"><PackagePlus size={14} /> إضافة الباكيدج للحساب</Button>
+                                </form>
+                              </details>
+                            )}
                           </div>
-                          {canEditVisitCharges && (
-                            <form action={removeAppointmentAdditionalService}>
-                              <input type="hidden" name="appointment_id" value={appointment.id} />
-                              <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                              <input type="hidden" name="line_id" value={line.id} />
-                              <Button size="sm" variant="ghost" aria-label={`حذف ${line.service_name}`}><Trash2 size={14} /></Button>
-                            </form>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                   {canEditVisitCharges ? (
@@ -343,7 +387,7 @@ export default async function AppointmentOperationsPage({
               {!packageBacked && compatiblePackageOffers.length > 0 && canEditVisitCharges && (
                 <details className="rounded-xl border border-teal-200 bg-teal-50/40 p-3">
                   <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-teal-950"><PackagePlus size={16} /> تحويل الجلسة الحالية إلى باكيدج</summary>
-                  <form action={purchasePackageFromAppointment} className="mt-4 grid gap-3 md:grid-cols-2">
+                  <form action={purchasePackageFromAppointment} className="mt-4 grid gap-3">
                     <input type="hidden" name="appointment_id" value={appointment.id} />
                     <input type="hidden" name="patient_id" value={appointment.patient_id} />
                     <label className="text-xs font-bold">
@@ -357,22 +401,10 @@ export default async function AppointmentOperationsPage({
                         ))}
                       </select>
                     </label>
-                    <label className="text-xs font-bold">
-                      طريقة الدفع
-                      <select name="payment_method" defaultValue="cash" className="form-control mt-1.5 h-10 min-h-10">
-                        <option value="cash">Cash</option>
-                        <option value="visa">Visa</option>
-                        <option value="instapay">InstaPay</option>
-                      </select>
-                    </label>
-                    <label className="text-xs font-bold md:col-span-2">
-                      رقم الإيصال أو المرجع - اختياري
-                      <input name="external_reference" maxLength={128} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: رقم الإيصال" />
-                    </label>
-                    <div className="rounded-xl border border-teal-200 bg-white p-3 text-xs leading-5 text-teal-950 md:col-span-2">
-                      عند التأكيد سيتسجل سعر الباكيدج كاملًا، والجلسة الحالية هتتحسب تلقائيًا كأول جلسة منها بدل سعر الجلسة الفردية. أي خدمات إضافية أو منتجات تفضل على حساب الزيارة بشكل مستقل.
+                    <div className="rounded-xl border border-teal-200 bg-white p-3 text-xs leading-5 text-teal-950">
+                      عند التأكيد هيتضاف سعر الباكيدج إلى إجمالي الزيارة، والجلسة الحالية هتتحسب تلقائيًا كأول جلسة منها بدل سعر الجلسة الفردية. الدفع نفسه بيتسجل من قسم المدفوعات تحت.
                     </div>
-                    <div className="md:col-span-2"><Button><PackagePlus size={15} /> شراء الباكيدج واحتساب الجلسة</Button></div>
+                    <div><Button><PackagePlus size={15} /> إضافة الباكيدج للحساب واحتساب الجلسة</Button></div>
                   </form>
                 </details>
               )}
@@ -409,14 +441,15 @@ export default async function AppointmentOperationsPage({
                 </div>
               </details>
 
-              {payments.billing_context === "package_prepaid" ? (
-                <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">الجلسة نفسها ضمن باقة مدفوعة مسبقًا. أي منتجات مضافة تظهر كمبلغ إضافي مستقل إذا وُجدت.</div>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">صافي المدفوع</div><b className="mt-1 block">{formatMoney(payments.net_paid_minor, payments.currency)}</b></div>
-                  <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المتبقي</div><b className="mt-1 block">{formatMoney(payments.balance_minor, payments.currency)}</b></div>
+              {payments.billing_context === "package_prepaid" && (
+                <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                  الجلسة الأساسية محسوبة من الباكيدج، وسعر الباكيدج المشتراة من الزيارة ظاهر ضمن الإجمالي المستحق أعلاه.
                 </div>
               )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">صافي المدفوع</div><b className="mt-1 block">{formatMoney(payments.net_paid_minor, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المتبقي</div><b className="mt-1 block">{formatMoney(payments.balance_minor, payments.currency)}</b></div>
+              </div>
 
               {payments.refunded_minor > 0 && <div className="text-xs text-[var(--muted)]">تم استرداد {formatMoney(payments.refunded_minor, payments.currency)} من المدفوعات المسجلة.</div>}
 

@@ -45,6 +45,12 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
             name="fk_appointment_additional_services_service",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "patient_package_id"],
+            ["patient_packages.workspace_id", "patient_packages.id"],
+            ondelete="RESTRICT",
+            name="fk_appointment_additional_services_patient_package",
+        ),
         Index(
             "ix_appointment_additional_services_workspace_appointment",
             "workspace_id",
@@ -55,6 +61,7 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     appointment_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    patient_package_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     service_name: Mapped[str] = mapped_column(String(200), nullable=False)
     unit_price_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(

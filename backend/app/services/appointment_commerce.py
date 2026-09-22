@@ -20,6 +20,8 @@ from app.services.package_offers import (
 from app.services.patient_packages import (
     PackageOperationError,
     consume_package_usage,
+    consume_visit_package_usages,
+    reserve_additional_service_package_usage,
     reserve_package_usage,
 )
 from app.services.payments import (
@@ -232,6 +234,10 @@ def remove_additional_service(
     )
     if line is None:
         raise AppointmentCommerceNotFound("Additional service not found.")
+    if line.patient_package_id is not None:
+        raise AppointmentCommerceError(
+            "A package-backed additional service cannot be removed from the visit."
+        )
     service_id = line.service_id
     db.delete(line)
     db.flush()
@@ -257,8 +263,6 @@ def purchase_package_for_appointment(
     workspace_id: UUID,
     appointment_id: UUID,
     offer_id: UUID,
-    payment_method: str,
-    external_reference: str | None,
     created_by_user_id: UUID | None,
     idempotency_key: str | None,
 ) -> PatientPackage:
@@ -312,12 +316,13 @@ def purchase_package_for_appointment(
             workspace_id=workspace_id,
             patient_id=appointment.patient_id,
             offer_id=offer.id,
-            amount_paid_minor=int(offer.price_minor),
-            payment_method=payment_method,
+            amount_paid_minor=0,
+            payment_method="unknown",
             created_by_user_id=created_by_user_id,
-            external_reference=external_reference,
+            external_reference=None,
             idempotency_key=idempotency_key,
             actor_type="staff",
+            origin_appointment_id=appointment.id,
         )
         reserve_package_usage(
             db,
@@ -351,3 +356,118 @@ def purchase_package_for_appointment(
         metadata={"package_id": package.id, "offer_id": offer.id},
     )
     return package
+
+
+def purchase_package_for_additional_service(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    line_id: UUID,
+    offer_id: UUID,
+    created_by_user_id: UUID | None,
+    idempotency_key: str | None,
+) -> PatientPackage:
+    appointment = _locked_appointment(
+        db, workspace_id=workspace_id, appointment_id=appointment_id
+    )
+    _require_editable_visit(appointment)
+    line = db.scalar(
+        select(AppointmentAdditionalService)
+        .where(
+            AppointmentAdditionalService.workspace_id == workspace_id,
+            AppointmentAdditionalService.appointment_id == appointment.id,
+            AppointmentAdditionalService.id == line_id,
+        )
+        .with_for_update()
+    )
+    if line is None:
+        raise AppointmentCommerceNotFound("Additional service not found.")
+
+    if line.patient_package_id is not None:
+        if idempotency_key:
+            existing = db.scalar(
+                select(PatientPackage).where(
+                    PatientPackage.workspace_id == workspace_id,
+                    PatientPackage.id == line.patient_package_id,
+                    PatientPackage.idempotency_key == idempotency_key,
+                )
+            )
+            if existing is not None:
+                return existing
+        raise AppointmentCommerceError(
+            "This additional service is already linked to a package."
+        )
+
+    payment_summary = get_appointment_payment_summary(
+        db, workspace_id=workspace_id, appointment_id=appointment.id
+    )
+    if payment_summary.net_paid_minor > 0:
+        raise AppointmentCommerceError(
+            "Refund or reconcile the existing appointment payment before "
+            "converting this additional service to a package."
+        )
+
+    try:
+        offer = get_active_package_offer(
+            db, workspace_id=workspace_id, offer_id=offer_id, for_update=True
+        )
+    except PackageOfferError as exc:
+        raise AppointmentCommerceError(str(exc)) from exc
+    if offer.service_id != line.service_id:
+        raise AppointmentCommerceError(
+            "The selected package is for a different service."
+        )
+    if offer.device_key != line.laser_device_key:
+        raise AppointmentCommerceError(
+            "The selected package is for a different laser device."
+        )
+
+    try:
+        package = purchase_package_offer(
+            db,
+            workspace_id=workspace_id,
+            patient_id=appointment.patient_id,
+            offer_id=offer.id,
+            amount_paid_minor=0,
+            payment_method="unknown",
+            created_by_user_id=created_by_user_id,
+            external_reference=None,
+            idempotency_key=idempotency_key,
+            actor_type="staff",
+            origin_appointment_id=appointment.id,
+        )
+        reserve_additional_service_package_usage(
+            db,
+            appointment=appointment,
+            line=line,
+            package=package,
+            actor_type="staff",
+            actor_user_id=created_by_user_id,
+        )
+        if appointment.status == "completed":
+            consume_visit_package_usages(
+                db,
+                appointment=appointment,
+                actor_type="staff",
+                actor_user_id=created_by_user_id,
+            )
+    except (PackageOfferError, PackageOperationError) as exc:
+        raise AppointmentCommerceError(str(exc)) from exc
+
+    refresh_appointment_payment_snapshots(
+        db, workspace_id=workspace_id, appointment_ids={appointment.id}
+    )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=created_by_user_id,
+        action="appointment.additional_service_converted_to_package",
+        entity_type="appointment_additional_service",
+        entity_id=line.id,
+        summary="Additional visit service converted to package usage",
+        metadata={"package_id": package.id, "offer_id": offer.id},
+    )
+    return package
+

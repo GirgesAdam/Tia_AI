@@ -163,7 +163,8 @@ function appointmentCommerceError(error: unknown) {
   if (detail.includes("laser device")) return "اختار جهاز الليزر الصحيح للخدمة.";
   if (detail.includes("existing appointment payment")) return "فيه دفعة مسجلة على الموعد. راجعها أو استردها أولًا قبل تحويل الجلسة لباكيدج.";
   if (detail.includes("different service") || detail.includes("different laser device")) return "الباكيدج المختارة لا تطابق الخدمة أو جهاز الليزر في الموعد.";
-  if (detail.includes("already linked to a package")) return "الموعد مرتبط بباكيدج بالفعل.";
+  if (detail.includes("already linked to a package")) return "الخدمة مرتبطة بباكيدج بالفعل.";
+  if (detail.includes("package-backed additional service")) return "الخدمة الإضافية مرتبطة بباكيدج، لذلك لا يمكن حذفها كخدمة عادية.";
   return error.message;
 }
 
@@ -207,19 +208,13 @@ export async function purchasePackageFromAppointment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");
   const offerId = String(formData.get("offer_id") || "");
-  const paymentMethod = String(formData.get("payment_method") || "");
-  const externalReference = String(formData.get("external_reference") || "").trim();
-  if (!appointmentId || !offerId || !paymentMethod) return;
+  if (!appointmentId || !offerId) return;
   let errorMessage: string | null = null;
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/package-offer`, {
       method: "POST",
       headers: { "Idempotency-Key": `appointment-package:${randomUUID()}` },
-      body: JSON.stringify({
-        offer_id: offerId,
-        payment_method: paymentMethod,
-        external_reference: externalReference || null,
-      }),
+      body: JSON.stringify({ offer_id: offerId }),
     });
   } catch (error) {
     errorMessage = appointmentCommerceError(error);
@@ -227,6 +222,30 @@ export async function purchasePackageFromAppointment(formData: FormData) {
   if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
   refreshAppointmentViews(appointmentId, patientId || undefined);
   redirect(`/appointments/${appointmentId}?visit_saved=package`);
+}
+
+export async function purchasePackageForAdditionalService(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const lineId = String(formData.get("line_id") || "");
+  const offerId = String(formData.get("offer_id") || "");
+  if (!appointmentId || !lineId || !offerId) return;
+  let errorMessage: string | null = null;
+  try {
+    await tiaRequest(
+      `/booking/appointments/${appointmentId}/additional-services/${lineId}/package-offer`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": `appointment-extra-package:${lineId}:${randomUUID()}` },
+        body: JSON.stringify({ offer_id: offerId }),
+      },
+    );
+  } catch (error) {
+    errorMessage = appointmentCommerceError(error);
+  }
+  if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=extra_package`);
 }
 
 export async function refundAppointmentPayment(formData: FormData) {

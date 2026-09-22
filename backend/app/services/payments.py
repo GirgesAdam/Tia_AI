@@ -14,6 +14,7 @@ from app.integrations.clinic.authority import (
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.clinic_inventory import AppointmentProductLine
+from app.models.patient_package import PatientPackage
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
 from app.schemas.payments import AppointmentPaymentSummaryRead, PaymentTransactionRead
 from app.services.activity import record_activity_event
@@ -107,11 +108,11 @@ def _appointment_charge_breakdown(
     *,
     workspace_id: UUID,
     appointment: Appointment,
-) -> tuple[int, int, int, int]:
-    """Return primary service, products, extra services, and total amount due.
+) -> tuple[int, int, int, int, int]:
+    """Return primary service, products, extra services, package sales, and due.
 
-    A package-backed appointment contributes no charge for its primary scheduled
-    service. Products and manually-added services remain ordinary visit revenue.
+    A package-backed service does not charge its standalone session price. A
+    package purchased from this visit is charged once at its package sale price.
     """
     products_total = int(
         db.scalar(
@@ -139,6 +140,17 @@ def _appointment_charge_breakdown(
             ).where(
                 AppointmentAdditionalService.workspace_id == workspace_id,
                 AppointmentAdditionalService.appointment_id == appointment.id,
+                AppointmentAdditionalService.patient_package_id.is_(None),
+            )
+        )
+        or 0
+    )
+    package_sales_total = int(
+        db.scalar(
+            select(func.coalesce(func.sum(PatientPackage.sale_price_minor), 0)).where(
+                PatientPackage.workspace_id == workspace_id,
+                PatientPackage.origin_appointment_id == appointment.id,
+                PatientPackage.status != "cancelled",
             )
         )
         or 0
@@ -153,7 +165,8 @@ def _appointment_charge_breakdown(
         service_price,
         products_total,
         additional_services_total,
-        service_due + products_total + additional_services_total,
+        package_sales_total,
+        service_due + products_total + additional_services_total + package_sales_total,
     )
 
 
@@ -353,7 +366,7 @@ def refresh_appointment_payment_snapshots(
             appointment_id=appointment_id,
             for_update=True,
         )
-        _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
+        _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
             db,
             workspace_id=workspace_id,
             appointment=appointment,
@@ -377,7 +390,7 @@ def get_appointment_payment_summary(
     if appointment is None:
         raise PaymentOperationNotFound("Appointment not found.")
     rows = _ledger_rows(db, workspace_id=workspace_id, appointment_id=appointment.id)
-    service_price, products_total, additional_services_total, due = _appointment_charge_breakdown(
+    service_price, products_total, additional_services_total, package_sales_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -391,6 +404,7 @@ def get_appointment_payment_summary(
         service_price_minor=service_price,
         products_total_minor=products_total,
         additional_services_total_minor=additional_services_total,
+        package_sales_total_minor=package_sales_total,
         gross_paid_minor=totals.gross_paid_minor,
         refunded_minor=totals.refunded_minor,
         net_paid_minor=totals.net_paid_minor,
@@ -401,6 +415,74 @@ def get_appointment_payment_summary(
         transactions=_transaction_reads(rows),
         can_refund=can_refund,
     )
+
+
+
+def _visit_packages(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    for_update: bool = False,
+) -> list[PatientPackage]:
+    stmt = (
+        select(PatientPackage)
+        .where(
+            PatientPackage.workspace_id == workspace_id,
+            PatientPackage.origin_appointment_id == appointment_id,
+            PatientPackage.status != "cancelled",
+        )
+        .order_by(PatientPackage.purchased_at, PatientPackage.id)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list(db.scalars(stmt).all())
+
+
+def _package_net_paid_minor(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    package_id: UUID,
+) -> int:
+    payments = list(
+        db.scalars(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.patient_package_id == package_id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        ).all()
+    )
+    payment_ids = [row.id for row in payments]
+    refunds: list[PaymentTransaction] = []
+    if payment_ids:
+        refunds = list(
+            db.scalars(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == workspace_id,
+                    PaymentTransaction.transaction_type == "refund",
+                    (
+                        (PaymentTransaction.patient_package_id == package_id)
+                        | (PaymentTransaction.reference_transaction_id.in_(payment_ids))
+                    ),
+                )
+            ).all()
+        )
+    return max(
+        sum(int(row.amount_minor) for row in payments)
+        - sum(int(row.amount_minor) for row in refunds),
+        0,
+    )
+
+
+def _payment_part_key(base_key: str | None, index: int) -> str | None:
+    if not base_key:
+        return None
+    if index == 0:
+        return base_key
+    suffix = f":part{index + 1}"
+    return f"{base_key[: 128 - len(suffix)]}{suffix}"
 
 
 def record_payment(
@@ -470,7 +552,7 @@ def record_payment(
         appointment_id=appointment.id,
         for_update=True,
     )
-    _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
+    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -484,38 +566,106 @@ def record_payment(
             f"{appointment.currency} minor units."
         )
 
-    transaction = PaymentTransaction(
+    remaining = amount_minor
+    created_transactions: list[PaymentTransaction] = []
+    transaction_index = 0
+    now = datetime.now(UTC)
+
+    for package in _visit_packages(
+        db,
         workspace_id=workspace_id,
         appointment_id=appointment.id,
-        origin_appointment_id=appointment.id,
-        patient_id=appointment.patient_id,
-        created_by_user_id=created_by_user_id,
-        reference_transaction_id=None,
-        transaction_type="payment",
-        amount_minor=amount_minor,
-        currency=appointment.currency,
-        payment_method=payment_method,
-        source=source,
-        external_reference=external_reference,
-        reason=None,
-        idempotency_key=idempotency_key,
-        created_at=datetime.now(UTC),
-    )
-    db.add(transaction)
-    db.flush()
-    _add_single_appointment_allocation(
-        db,
-        transaction=transaction,
-        appointment_id=appointment.id,
-        amount_minor=amount_minor,
-    )
-    rows.append(
-        AppointmentLedgerEntry(
-            transaction=transaction,
-            allocated_amount_minor=amount_minor,
+        for_update=True,
+    ):
+        if remaining <= 0:
+            break
+        package_balance = max(
+            int(package.sale_price_minor)
+            - _package_net_paid_minor(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+            ),
+            0,
         )
-    )
+        if package_balance <= 0:
+            continue
+        allocated = min(remaining, package_balance)
+        transaction = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=appointment.id,
+            origin_appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=None,
+            patient_package_id=package.id,
+            transaction_type="payment",
+            amount_minor=allocated,
+            currency=appointment.currency,
+            payment_method=payment_method,
+            source=source,
+            external_reference=external_reference,
+            reason="Package payment from appointment checkout",
+            idempotency_key=_payment_part_key(idempotency_key, transaction_index),
+            created_at=now,
+        )
+        db.add(transaction)
+        db.flush()
+        _add_single_appointment_allocation(
+            db,
+            transaction=transaction,
+            appointment_id=appointment.id,
+            amount_minor=allocated,
+        )
+        if package.purchase_transaction_id is None:
+            package.purchase_transaction_id = transaction.id
+        rows.append(
+            AppointmentLedgerEntry(
+                transaction=transaction,
+                allocated_amount_minor=allocated,
+            )
+        )
+        created_transactions.append(transaction)
+        transaction_index += 1
+        remaining -= allocated
+
+    if remaining > 0:
+        transaction = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=appointment.id,
+            origin_appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=None,
+            patient_package_id=None,
+            transaction_type="payment",
+            amount_minor=remaining,
+            currency=appointment.currency,
+            payment_method=payment_method,
+            source=source,
+            external_reference=external_reference,
+            reason=None,
+            idempotency_key=_payment_part_key(idempotency_key, transaction_index),
+            created_at=now,
+        )
+        db.add(transaction)
+        db.flush()
+        _add_single_appointment_allocation(
+            db,
+            transaction=transaction,
+            appointment_id=appointment.id,
+            amount_minor=remaining,
+        )
+        rows.append(
+            AppointmentLedgerEntry(
+                transaction=transaction,
+                allocated_amount_minor=remaining,
+            )
+        )
+        created_transactions.append(transaction)
+
     sync_appointment_payment_snapshot(appointment, list(rows), due_minor=due)
+    primary_transaction = created_transactions[0]
     record_activity_event(
         db,
         workspace_id=workspace_id,
@@ -523,7 +673,7 @@ def record_payment(
         actor_user_id=created_by_user_id,
         action="payment.recorded",
         entity_type="payment_transaction",
-        entity_id=transaction.id,
+        entity_id=primary_transaction.id,
         summary="Payment recorded",
         metadata={
             "appointment_id": appointment.id,
@@ -531,10 +681,11 @@ def record_payment(
             "currency": appointment.currency,
             "payment_method": payment_method,
             "source": source,
+            "transaction_ids": [str(row.id) for row in created_transactions],
         },
     )
     db.flush()
-    return transaction
+    return primary_transaction
 
 
 def record_refund(
@@ -650,7 +801,7 @@ def record_refund(
             allocated_amount_minor=amount_minor,
         )
     )
-    _service_price, _products_total, _additional_services_total, due = _appointment_charge_breakdown(
+    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,

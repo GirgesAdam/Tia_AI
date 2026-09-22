@@ -81,6 +81,12 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="fk_patient_packages_service",
         ),
         ForeignKeyConstraint(
+            ["workspace_id", "origin_appointment_id"],
+            ["appointments.workspace_id", "appointments.id"],
+            ondelete="RESTRICT",
+            name="fk_patient_packages_origin_appointment",
+        ),
+        ForeignKeyConstraint(
             ["workspace_id", "purchase_transaction_id"],
             ["payment_transactions.workspace_id", "payment_transactions.id"],
             ondelete="RESTRICT",
@@ -112,6 +118,11 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "patient_id",
             "service_id",
         ),
+        Index(
+            "ix_patient_packages_workspace_origin_appointment",
+            "workspace_id",
+            "origin_appointment_id",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
@@ -119,6 +130,7 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     purchase_transaction_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     package_offer_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    origin_appointment_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
     )
@@ -149,16 +161,28 @@ class PackageUsage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     ``reserved`` counts against remaining entitlement, ``consumed`` is a
     completed treatment, and ``released`` no longer consumes entitlement.
-    One appointment can own at most one usage row.
+    One primary usage is allowed per appointment, plus one usage for each
+    package-backed additional service line.
     """
 
     __tablename__ = "package_usages"
     __table_args__ = (
         UniqueConstraint("workspace_id", "id", name="uq_package_usages_workspace_id_id"),
-        UniqueConstraint(
+        Index(
+            "uq_package_usages_workspace_primary_appointment",
             "workspace_id",
             "appointment_id",
-            name="uq_package_usages_workspace_appointment",
+            unique=True,
+            postgresql_where=text("appointment_additional_service_id IS NULL"),
+            sqlite_where=text("appointment_additional_service_id IS NULL"),
+        ),
+        Index(
+            "uq_package_usages_workspace_additional_service",
+            "workspace_id",
+            "appointment_additional_service_id",
+            unique=True,
+            postgresql_where=text("appointment_additional_service_id IS NOT NULL"),
+            sqlite_where=text("appointment_additional_service_id IS NOT NULL"),
         ),
         CheckConstraint("sessions_used > 0", name="package_usage_sessions_positive"),
         CheckConstraint(
@@ -183,6 +207,12 @@ class PackageUsage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
             name="fk_package_usages_appointment",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "appointment_additional_service_id"],
+            ["appointment_additional_services.workspace_id", "appointment_additional_services.id"],
+            ondelete="CASCADE",
+            name="fk_package_usages_additional_service",
+        ),
         Index(
             "uq_package_usages_workspace_external_id",
             "workspace_id",
@@ -201,6 +231,7 @@ class PackageUsage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     patient_package_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     appointment_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    appointment_additional_service_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     sessions_used: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved", server_default="reserved")

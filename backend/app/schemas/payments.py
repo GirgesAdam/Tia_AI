@@ -71,6 +71,7 @@ class AppointmentPaymentSummaryRead(BaseModel):
     service_price_minor: int = 0
     products_total_minor: int = 0
     additional_services_total_minor: int = 0
+    package_sales_total_minor: int = 0
     gross_paid_minor: int
     refunded_minor: int
     net_paid_minor: int

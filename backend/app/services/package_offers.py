@@ -195,6 +195,7 @@ def purchase_package_offer(
     external_reference: str | None = None,
     idempotency_key: str | None = None,
     actor_type: str = "staff",
+    origin_appointment_id: UUID | None = None,
 ):
     """Create a patient package from one verified offer snapshot.
 
@@ -243,6 +244,7 @@ def purchase_package_offer(
         idempotency_key=idempotency_key,
         actor_type=actor_type,
         package_offer_id=offer.id,
+        origin_appointment_id=origin_appointment_id,
         laser_device_key=offer.device_key,
         laser_device_name=offer.device_name,
         standalone_session_price_minor_at_purchase=int(device_price.price_minor),

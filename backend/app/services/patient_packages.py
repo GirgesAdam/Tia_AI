@@ -11,9 +11,10 @@ from app.integrations.clinic.authority import (
     require_tia_workspace_domain_write,
 )
 from app.models.appointment import Appointment
+from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
-from app.models.payment_transaction import PAYMENT_METHODS, PaymentTransaction
+from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
 from app.models.service import Service
 from app.schemas.patient_packages import PatientPackageRead
 from app.services.activity import ActivityActorType, record_activity_event
@@ -167,6 +168,7 @@ def create_patient_package(
     idempotency_key: str | None = None,
     actor_type: ActivityActorType = "staff",
     package_offer_id: UUID | None = None,
+    origin_appointment_id: UUID | None = None,
     laser_device_key: str | None = None,
     laser_device_name: str | None = None,
     standalone_session_price_minor_at_purchase: int | None = None,
@@ -256,6 +258,7 @@ def create_patient_package(
         service_id=service_id,
         purchase_transaction_id=transaction.id if transaction else None,
         package_offer_id=package_offer_id,
+        origin_appointment_id=origin_appointment_id,
         created_by_user_id=created_by_user_id,
         external_id=external_id,
         name=name.strip(),
@@ -393,8 +396,8 @@ def record_package_payment(
         )
     transaction = PaymentTransaction(
         workspace_id=workspace_id,
-        appointment_id=None,
-        origin_appointment_id=None,
+        appointment_id=package.origin_appointment_id,
+        origin_appointment_id=package.origin_appointment_id,
         patient_id=package.patient_id,
         created_by_user_id=created_by_user_id,
         reference_transaction_id=None,
@@ -411,6 +414,22 @@ def record_package_payment(
     )
     db.add(transaction)
     db.flush()
+    if package.origin_appointment_id is not None:
+        db.add(
+            PaymentAllocation(
+                workspace_id=workspace_id,
+                transaction_id=transaction.id,
+                appointment_id=package.origin_appointment_id,
+                amount_minor=amount_minor,
+                created_at=transaction.created_at,
+            )
+        )
+        db.flush()
+        refresh_appointment_payment_snapshots(
+            db,
+            workspace_id=workspace_id,
+            appointment_ids={package.origin_appointment_id},
+        )
     if package.purchase_transaction_id is None:
         package.purchase_transaction_id = transaction.id
     record_activity_event(
@@ -556,6 +575,17 @@ def cancel_patient_package_with_refund(
         )
         db.add(refund)
         db.flush()
+        if package.origin_appointment_id is not None:
+            db.add(
+                PaymentAllocation(
+                    workspace_id=workspace_id,
+                    transaction_id=refund.id,
+                    appointment_id=package.origin_appointment_id,
+                    amount_minor=amount,
+                    created_at=refund.created_at,
+                )
+            )
+            db.flush()
         created_refunds.append(refund)
         remaining_to_refund -= amount
 
@@ -568,23 +598,29 @@ def cancel_patient_package_with_refund(
             .where(
                 PackageUsage.workspace_id == workspace_id,
                 PackageUsage.patient_package_id == package.id,
-                PackageUsage.status == "reserved",
             )
             .with_for_update()
         ).all()
     )
-    released_appointment_ids: set[UUID] = set()
+    linked_appointment_ids = {usage.appointment_id for usage in usages}
+    additional_line_ids = {
+        usage.appointment_additional_service_id
+        for usage in usages
+        if usage.appointment_additional_service_id is not None
+    }
     for usage in usages:
-        usage.status = "released"
-        usage.used_at = None
-        released_appointment_ids.add(usage.appointment_id)
+        if usage.status == "reserved":
+            usage.status = "released"
+            usage.used_at = None
 
-    if released_appointment_ids:
+    package.status = "cancelled"
+
+    if linked_appointment_ids:
         db.execute(
             update(Appointment)
             .where(
                 Appointment.workspace_id == workspace_id,
-                Appointment.id.in_(released_appointment_ids),
+                Appointment.id.in_(linked_appointment_ids),
                 Appointment.patient_package_id == package.id,
                 Appointment.billing_context == "package_prepaid",
             )
@@ -594,13 +630,22 @@ def cancel_patient_package_with_refund(
                 package_external_id=None,
             )
         )
+    if additional_line_ids:
+        db.execute(
+            update(AppointmentAdditionalService)
+            .where(
+                AppointmentAdditionalService.workspace_id == workspace_id,
+                AppointmentAdditionalService.id.in_(additional_line_ids),
+                AppointmentAdditionalService.patient_package_id == package.id,
+            )
+            .values(patient_package_id=None)
+        )
+    if linked_appointment_ids:
         refresh_appointment_payment_snapshots(
             db,
             workspace_id=workspace_id,
-            appointment_ids=released_appointment_ids,
+            appointment_ids=linked_appointment_ids,
         )
-
-    package.status = "cancelled"
     record_activity_event(
         db,
         workspace_id=workspace_id,
@@ -690,6 +735,7 @@ def reserve_package_usage(
         select(PackageUsage).where(
             PackageUsage.workspace_id == appointment.workspace_id,
             PackageUsage.appointment_id == appointment.id,
+            PackageUsage.appointment_additional_service_id.is_(None),
         )
     )
     if existing is not None:
@@ -703,6 +749,7 @@ def reserve_package_usage(
         workspace_id=appointment.workspace_id,
         patient_package_id=package.id,
         appointment_id=appointment.id,
+        appointment_additional_service_id=None,
         sessions_used=sessions,
         status="reserved",
         used_at=None,
@@ -729,6 +776,151 @@ def reserve_package_usage(
     return usage
 
 
+
+def reserve_additional_service_package_usage(
+    db: Session,
+    *,
+    appointment: Appointment,
+    line: AppointmentAdditionalService,
+    package: PatientPackage,
+    sessions: int = 1,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+) -> PackageUsage:
+    if package.service_id != line.service_id:
+        raise PackageOperationError("Package service does not match the additional service.")
+    if package.laser_device_key is not None and package.laser_device_key != line.laser_device_key:
+        raise PackageOperationError("Package laser device does not match the additional service device.")
+    existing = db.scalar(
+        select(PackageUsage).where(
+            PackageUsage.workspace_id == appointment.workspace_id,
+            PackageUsage.appointment_additional_service_id == line.id,
+        )
+    )
+    if existing is not None:
+        if existing.patient_package_id != package.id:
+            raise PackageOperationError("Additional service is already linked to another package.")
+        if existing.status == "released":
+            existing.status = "reserved"
+            existing.used_at = None
+        return existing
+    usage = PackageUsage(
+        workspace_id=appointment.workspace_id,
+        patient_package_id=package.id,
+        appointment_id=appointment.id,
+        appointment_additional_service_id=line.id,
+        sessions_used=sessions,
+        status="reserved",
+        used_at=None,
+    )
+    line.patient_package_id = package.id
+    db.add(usage)
+    db.flush()
+    record_activity_event(
+        db,
+        workspace_id=appointment.workspace_id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        action="package.additional_service_session_reserved",
+        entity_type="patient_package",
+        entity_id=package.id,
+        summary="Additional visit service reserved from package",
+        metadata={
+            "appointment_id": appointment.id,
+            "appointment_additional_service_id": line.id,
+            "sessions": sessions,
+        },
+    )
+    return usage
+
+
+def consume_visit_package_usages(
+    db: Session,
+    *,
+    appointment: Appointment,
+    used_at: datetime | None = None,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+) -> list[PackageUsage]:
+    usages = list(
+        db.scalars(
+            select(PackageUsage)
+            .where(
+                PackageUsage.workspace_id == appointment.workspace_id,
+                PackageUsage.appointment_id == appointment.id,
+            )
+            .with_for_update()
+        ).all()
+    )
+    consumed_at = (used_at or datetime.now(UTC)).astimezone(UTC)
+    for usage in usages:
+        if usage.status == "consumed":
+            continue
+        if usage.status == "released":
+            raise PackageOperationError("Released package entitlement cannot be consumed.")
+        usage.status = "consumed"
+        usage.used_at = consumed_at
+        record_activity_event(
+            db,
+            workspace_id=appointment.workspace_id,
+            actor_type=actor_type,
+            actor_user_id=actor_user_id,
+            action="package.session_consumed",
+            entity_type="patient_package",
+            entity_id=usage.patient_package_id,
+            summary="Package session consumed",
+            metadata={
+                "appointment_id": appointment.id,
+                "appointment_additional_service_id": usage.appointment_additional_service_id,
+                "sessions": usage.sessions_used,
+            },
+        )
+    return usages
+
+
+def release_visit_package_usages(
+    db: Session,
+    *,
+    appointment: Appointment,
+    actor_type: ActivityActorType = "staff",
+    actor_user_id: UUID | None = None,
+    reason: str,
+) -> list[PackageUsage]:
+    usages = list(
+        db.scalars(
+            select(PackageUsage)
+            .where(
+                PackageUsage.workspace_id == appointment.workspace_id,
+                PackageUsage.appointment_id == appointment.id,
+            )
+            .with_for_update()
+        ).all()
+    )
+    for usage in usages:
+        if usage.status == "released":
+            continue
+        if usage.status == "consumed":
+            raise PackageOperationError("Consumed package entitlement cannot be released.")
+        usage.status = "released"
+        usage.used_at = None
+        record_activity_event(
+            db,
+            workspace_id=appointment.workspace_id,
+            actor_type=actor_type,
+            actor_user_id=actor_user_id,
+            action="package.session_released",
+            entity_type="patient_package",
+            entity_id=usage.patient_package_id,
+            summary="Package session released",
+            metadata={
+                "appointment_id": appointment.id,
+                "appointment_additional_service_id": usage.appointment_additional_service_id,
+                "reason": reason[:80],
+            },
+        )
+    return usages
+
+
 def consume_package_usage(
     db: Session,
     *,
@@ -742,6 +934,7 @@ def consume_package_usage(
         .where(
             PackageUsage.workspace_id == appointment.workspace_id,
             PackageUsage.appointment_id == appointment.id,
+            PackageUsage.appointment_additional_service_id.is_(None),
         )
         .with_for_update()
     )
@@ -780,6 +973,7 @@ def release_package_usage(
         .where(
             PackageUsage.workspace_id == appointment.workspace_id,
             PackageUsage.appointment_id == appointment.id,
+            PackageUsage.appointment_additional_service_id.is_(None),
         )
         .with_for_update()
     )
@@ -814,6 +1008,7 @@ def transfer_package_usage(
         .where(
             PackageUsage.workspace_id == from_appointment.workspace_id,
             PackageUsage.appointment_id == from_appointment.id,
+            PackageUsage.appointment_additional_service_id.is_(None),
         )
         .with_for_update()
     )
