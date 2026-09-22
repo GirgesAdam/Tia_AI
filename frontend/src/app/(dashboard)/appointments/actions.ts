@@ -120,6 +120,18 @@ function appointmentErrorMessage(error: unknown, bookingMode: "quick" | "standar
   if (detail.includes("laser device cannot be selected")) {
     return "الخدمة المختارة لا تستخدم جهاز ليزر.";
   }
+  if (detail.includes("scheduling override could not be applied")) {
+    return "تعذر تطبيق تجاوز التعارض الزمني للحجز السريع بسبب إعداد غير متوقع في قاعدة البيانات. لم يتم إنشاء الموعد.";
+  }
+  if (detail.includes("only available to authenticated clinic staff")) {
+    return "الحجز السريع متاح فقط لموظفي العيادة المسجلين.";
+  }
+  if (detail.includes("already submitted")) {
+    return "تم إرسال طلب الحجز السريع بالفعل. حدّث الجدول للتأكد من الموعد.";
+  }
+  if (detail.includes("violates a database constraint")) {
+    return "تعذر إنشاء الحجز السريع بسبب قيد في بيانات الموعد، وليس بسبب تداخل الوقت. راجع الخدمة والجهاز والباكدج.";
+  }
 
   if (bookingMode === "quick" && error.status === 409) {
     return "تعذر إنشاء الحجز السريع بسبب قيد في بيانات الموعد. التداخل الزمني مسموح في الحجز السريع؛ راجع العميل والخدمة والجهاز أو الباكدج.";
