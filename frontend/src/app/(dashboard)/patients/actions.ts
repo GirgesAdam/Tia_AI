@@ -124,3 +124,24 @@ export async function recordPatientPackagePayment(formData: FormData) {
   });
   revalidatePackageViews(patientId);
 }
+
+
+export async function cancelPatientPackage(formData: FormData) {
+  const patientId = String(formData.get("patient_id") || "").trim();
+  const packageId = String(formData.get("package_id") || "").trim();
+  const settlementTarget = String(formData.get("settlement_target") || "0").trim() || "0";
+  const paymentMethod = String(formData.get("payment_method") || "cash").trim() || "cash";
+  const reason = String(formData.get("reason") || "").trim();
+  if (!patientId || !packageId || !reason) return;
+
+  await tiaRequest(`/booking/patient-packages/${packageId}/cancel-refund`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `dashboard-package-cancel:${randomUUID()}` },
+    body: JSON.stringify({
+      reason,
+      settlement_target_minor: moneyToMinor(settlementTarget),
+      payment_method: paymentMethod,
+    }),
+  });
+  revalidatePackageViews(patientId);
+}

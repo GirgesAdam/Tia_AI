@@ -4,7 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
 import { tiaRequest } from "@/lib/tia/api";
+import { getAppContext } from "@/lib/tia/workspace";
 import { purchasePatientPackage, recordPatientPackagePayment } from "../actions";
+import { PackageCancellationForm } from "./package-cancellation-form";
 
 type PackageOffer = {
   id: string;
@@ -27,6 +29,8 @@ type PatientPackage = {
   amount_paid_minor: number;
   amount_refunded_minor: number;
   balance_due_minor: number;
+  cancellation_consumed_sessions: number;
+  cancellation_default_charge_minor: number | null;
   laser_device_name: string | null;
   currency: string;
   effective_status: string;
@@ -51,10 +55,12 @@ function majorAmount(minor: number) {
 }
 
 export async function PatientPackagePanel({ patientId }: { patientId: string }) {
-  const [packages, offers] = await Promise.all([
+  const [ctx, packages, offers] = await Promise.all([
+    getAppContext(),
     tiaRequest<PatientPackage[]>(`/booking/patients/${patientId}/packages`),
     tiaRequest<PackageOffer[]>("/booking/package-offers?active_only=true"),
   ]);
+  const canCancelPackages = ctx.workspace.role === "admin";
 
   return (
     <Card>
@@ -129,6 +135,23 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
                       <Button type="submit" size="sm">حفظ الدفعة</Button>
                     </form>
                   </details>
+                )}
+
+                {canCancelPackages && item.effective_status === "active" && item.cancellation_default_charge_minor != null && (
+                  <PackageCancellationForm
+                    patientId={patientId}
+                    packageId={item.id}
+                    currency={item.currency}
+                    consumedSessions={item.cancellation_consumed_sessions}
+                    defaultChargeMinor={item.cancellation_default_charge_minor}
+                    amountPaidMinor={item.amount_paid_minor}
+                    amountRefundedMinor={item.amount_refunded_minor}
+                  />
+                )}
+                {canCancelPackages && item.effective_status === "active" && item.cancellation_default_charge_minor == null && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+                    لا يمكن حساب تسوية الإلغاء تلقائيًا للباكيدج القديمة دي لأن بيانات السعر أو عدد الجلسات الأصلي غير مكتملة.
+                  </div>
                 )}
               </div>
             ))}
