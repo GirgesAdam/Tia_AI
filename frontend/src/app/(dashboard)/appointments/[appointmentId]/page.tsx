@@ -31,12 +31,12 @@ import {
   confirmAppointment,
   purchasePackageForAdditionalService,
   purchasePackageFromAppointment,
-  recordAppointmentPayment,
   refundAppointmentPayment,
   removeAppointmentAdditionalService,
   removeAppointmentProduct,
   updateAppointmentStatus,
 } from "./actions";
+import { AppointmentPaymentForm } from "./appointment-payment-form";
 import {
   AppointmentServiceEditor,
   type AppointmentDevicePrice,
@@ -74,6 +74,8 @@ type AppointmentProductLine = {
 };
 
 type PaymentSummaryWithProducts = AppointmentPaymentSummary & {
+  subtotal_minor?: number;
+  discount_minor?: number;
   service_price_minor?: number;
   products_total_minor?: number;
   additional_services_total_minor?: number;
@@ -282,12 +284,14 @@ export default async function AppointmentOperationsPage({
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الخدمة الأساسية</div><b className="mt-1 block">{packageBacked ? "ضمن الباكيدج" : formatMoney(payments.service_price_minor ?? appointment.price_minor, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">خدمات إضافية</div><b className="mt-1 block">{formatMoney(payments.additional_services_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الباكيدجات</div><b className="mt-1 block">{formatMoney(payments.package_sales_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المنتجات</div><b className="mt-1 block">{formatMoney(payments.products_total_minor ?? 0, payments.currency)}</b></div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي المستحق للزيارة</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">قبل الخصم</div><b className="mt-1 block">{formatMoney(payments.subtotal_minor ?? payments.price_minor, payments.currency)}</b></div>
+                <div className="rounded-xl bg-teal-50 p-3"><div className="text-xs text-teal-700">الخصم</div><b className="mt-1 block text-teal-900">{formatMoney(payments.discount_minor ?? 0, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي بعد الخصم</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
               </div>
 
               <details className="rounded-xl border border-slate-200 p-3" open={additionalServices.length > 0 ? true : undefined}>
@@ -454,14 +458,15 @@ export default async function AppointmentOperationsPage({
               {payments.refunded_minor > 0 && <div className="text-xs text-[var(--muted)]">تم استرداد {formatMoney(payments.refunded_minor, payments.currency)} من المدفوعات المسجلة.</div>}
 
               {payments.balance_minor > 0 && ["pending", "confirmed", "completed"].includes(appointment.status) && (
-                <form action={recordAppointmentPayment} className="grid gap-3 rounded-xl border border-[var(--border)] p-4 md:grid-cols-2">
-                  <input type="hidden" name="appointment_id" value={appointment.id} />
-                  <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                  <label className="text-sm font-bold">المبلغ ({payments.currency})<input name="amount" inputMode="decimal" required defaultValue={minorInput(payments.balance_minor)} className="form-control mt-2 h-10 min-h-10" /></label>
-                  <label className="text-sm font-bold">طريقة الدفع<select name="payment_method" defaultValue="cash" className="form-control mt-2 h-10 min-h-10"><option value="cash">Cash</option><option value="visa">Visa</option><option value="instapay">InstaPay</option></select></label>
-                  <label className="text-sm font-bold md:col-span-2">رقم الإيصال أو المرجع - اختياري<input name="external_reference" maxLength={128} placeholder="مثال: رقم الإيصال" className="form-control mt-2 h-10 min-h-10" /></label>
-                  <div className="md:col-span-2"><Button><CircleDollarSign size={15} /> تسجيل الدفعة</Button></div>
-                </form>
+                <AppointmentPaymentForm
+                  appointmentId={appointment.id}
+                  patientId={appointment.patient_id}
+                  currency={payments.currency}
+                  subtotalMinor={payments.subtotal_minor ?? payments.price_minor}
+                  discountMinor={payments.discount_minor ?? 0}
+                  netPaidMinor={payments.net_paid_minor}
+                  balanceMinor={payments.balance_minor}
+                />
               )}
 
               {payments.transactions.length > 0 && (

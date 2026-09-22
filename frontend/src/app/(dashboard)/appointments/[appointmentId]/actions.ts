@@ -112,19 +112,30 @@ function moneyToMinor(raw: string) {
 export async function recordAppointmentPayment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");
-  const amount = String(formData.get("amount") || "");
+  const amount = String(formData.get("amount") || "0");
+  const discount = String(formData.get("discount") || "0");
   const paymentMethod = String(formData.get("payment_method") || "");
   const externalReference = String(formData.get("external_reference") || "").trim();
-  if (!appointmentId || !amount || !paymentMethod) return;
-  await tiaRequest(`/payments/appointments/${appointmentId}/payments`, {
-    method: "POST",
-    headers: { "Idempotency-Key": `dashboard-payment:${randomUUID()}` },
-    body: JSON.stringify({
-      amount_minor: moneyToMinor(amount),
-      payment_method: paymentMethod,
-      external_reference: externalReference || null,
-    }),
-  });
+  if (!appointmentId || !paymentMethod) return;
+  const amountMinor = moneyToMinor(amount);
+  const discountMinor = moneyToMinor(discount);
+  if (amountMinor === 0) {
+    await tiaRequest(`/payments/appointments/${appointmentId}/discount`, {
+      method: "PUT",
+      body: JSON.stringify({ discount_minor: discountMinor }),
+    });
+  } else {
+    await tiaRequest(`/payments/appointments/${appointmentId}/payments`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `dashboard-payment:${randomUUID()}` },
+      body: JSON.stringify({
+        amount_minor: amountMinor,
+        discount_minor: discountMinor,
+        payment_method: paymentMethod,
+        external_reference: externalReference || null,
+      }),
+    });
+  }
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 
