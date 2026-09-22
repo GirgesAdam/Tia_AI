@@ -148,6 +148,7 @@ export interface Appointment {
   id:string; workspace_id:string; patient_id:string; branch_id:string; doctor_id:string; service_id:string; patient_package_id:string|null; lead_id:string|null;
   created_by_user_id:string|null; rescheduled_from_appointment_id:string|null; status:AppointmentStatus; source:string;
   start_at:string; end_at:string; busy_start_at:string; busy_end_at:string; duration_minutes:number; price_minor:number; currency:string;
+  doctor_assignment_known?:boolean; laser_device_key?:string|null; laser_device_name?:string|null; discount_minor?:number;
   payment_status:string; amount_paid_minor:number|null; payment_method:string; billing_context:string; package_external_id:string|null; customer_note:string|null; cancellation_reason:string|null;
   confirmed_at:string|null; cancelled_at:string|null; completed_at:string|null; no_show_at:string|null; created_at:string; updated_at:string;
 }
@@ -184,7 +185,7 @@ export interface AvailabilitySlot {
 }
 export interface AvailabilityResponse { date:string; timezone:string; slots:AvailabilitySlot[]; }
 export interface Branch { id:string; name:string; city:string|null; is_active:boolean; }
-export interface Service { id:string; name:string; duration_minutes:number; price_minor:number; currency:string; is_active:boolean; }
+export interface Service { id:string; name:string; category:"laser"|"dermatology"|"slimming"; duration_minutes:number; price_minor:number; currency:string; requires_laser_device?:boolean; is_active:boolean; }
 export interface Doctor { id:string; staff_id:string; specialization:string|null; is_active:boolean; }
 export interface Staff { id:string; first_name:string; last_name:string; is_active:boolean; }
 

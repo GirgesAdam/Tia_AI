@@ -23,6 +23,7 @@ type SearchParams = {
   date?: string;
   branch_id?: string;
   manual_phone?: string;
+  column?: string | string[];
 };
 
 type KnowledgeHour = {
@@ -158,9 +159,38 @@ function scheduleStatus(status: Appointment["status"]) {
   return { label: "مؤكد", className: "bg-teal-50 text-teal-800 ring-teal-200" };
 }
 
+type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
+
+const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
+  { id: "prime", label: "Prime" },
+  { id: "candela", label: "Candela" },
+  { id: "dermatology", label: "جلدية" },
+  { id: "slimming", label: "تخسيس" },
+  { id: "quick", label: "حجوزات سريعة" },
+];
+
+function requestedColumns(value: SearchParams["column"]) {
+  const raw = Array.isArray(value) ? value : value ? [value] : scheduleColumns.map((item) => item.id);
+  const allowed = new Set(scheduleColumns.map((item) => item.id));
+  const selected = raw.filter((item): item is ScheduleColumnId => allowed.has(item as ScheduleColumnId));
+  return selected.length ? selected : scheduleColumns.map((item) => item.id);
+}
+
+function appointmentColumn(appointment: Appointment, serviceById: Map<string, Service>): ScheduleColumnId {
+  if (appointment.doctor_assignment_known === false) return "quick";
+  if (appointment.laser_device_key === "prime_lase") return "prime";
+  if (appointment.laser_device_key === "candela_gentle") return "candela";
+  const category = serviceById.get(appointment.service_id)?.category;
+  if (category === "dermatology") return "dermatology";
+  if (category === "slimming") return "slimming";
+  return "quick";
+}
+
 function scheduleHref(current: SearchParams, date: string, branchId: string) {
   const query = new URLSearchParams({ date, branch_id: branchId });
   if (current.patient_id) query.set("patient_id", current.patient_id);
+  const columns = Array.isArray(current.column) ? current.column : current.column ? [current.column] : [];
+  columns.forEach((column) => query.append("column", column));
   return `/appointments?${query.toString()}`;
 }
 
@@ -232,13 +262,15 @@ function DailySchedule({
   hours,
   timezone,
   patientNames,
-  serviceNames,
+  serviceById,
+  visibleColumns,
 }: {
   appointments: Appointment[];
   hours: KnowledgeHour[];
   timezone: string;
   patientNames: Map<string, string>;
-  serviceNames: Map<string, string>;
+  serviceById: Map<string, Service>;
+  visibleColumns: ScheduleColumnId[];
 }) {
   if (!hours.length) {
     return (
@@ -251,6 +283,8 @@ function DailySchedule({
   }
 
   const rendered = new Set<string>();
+  const columns = scheduleColumns.filter((column) => visibleColumns.includes(column.id));
+
   return (
     <div className="space-y-4">
       {hours
@@ -259,101 +293,92 @@ function DailySchedule({
         .map((interval, intervalIndex) => {
           const start = toMinutes(interval.start_time);
           const end = toMinutes(interval.end_time);
-          const periods = buildSchedulePeriods(appointments, interval, timezone);
-
-          periods.forEach((period) => {
-            period.appointments.forEach((appointment) => rendered.add(appointment.id));
-          });
-
           return (
-            <div
-              key={`${interval.start_time}-${interval.end_time}-${intervalIndex}`}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
-            >
+            <div key={`${interval.start_time}-${interval.end_time}-${intervalIndex}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-600">
                 ساعات العمل: {minuteLabel(start)} – {minuteLabel(end)}
               </div>
+              <div className="overflow-x-auto">
+                <div className="grid min-w-max" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(230px, 1fr))` }}>
+                  {columns.map((column) => {
+                    const columnAppointments = appointments.filter(
+                      (appointment) => appointmentColumn(appointment, serviceById) === column.id,
+                    );
+                    const periods = buildSchedulePeriods(columnAppointments, interval, timezone);
+                    periods.forEach((period) => period.appointments.forEach((appointment) => rendered.add(appointment.id)));
 
-              <div>
-                {periods.map((period, periodIndex) => {
-                  const isAvailable = period.appointments.length === 0;
-                  return (
-                    <div
-                      key={`${period.start}-${period.end}-${periodIndex}`}
-                      className={`grid min-h-[72px] grid-cols-[108px_minmax(0,1fr)] border-b border-slate-100 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)] ${
-                        isAvailable ? "bg-slate-50/45" : "bg-white"
-                      }`}
-                    >
-                      <div className="flex flex-col justify-center border-l border-slate-100 px-3 py-3 text-left sm:px-4">
-                        <span className="text-xs font-black text-slate-700">
-                          {minuteLabel(period.start)}
-                        </span>
-                        <span className="mt-1 text-[11px] font-semibold text-slate-400">
-                          إلى {minuteLabel(period.end)}
-                        </span>
-                      </div>
-
-                      <div className="min-w-0 p-2">
-                        {isAvailable ? (
-                          <div className="flex min-h-14 items-center rounded-xl border border-dashed border-slate-200 bg-white/70 px-4 text-xs font-bold text-slate-400">
-                            فترة متاحة
-                          </div>
-                        ) : (
-                          <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
-                            {period.appointments.map((appointment) => {
-                              const status = scheduleStatus(appointment.status);
-                              return (
-                                <Link
-                                  key={appointment.id}
-                                  href={`/appointments/${appointment.id}`}
-                                  className="group rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition hover:border-teal-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-teal-300"
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="truncate text-sm font-black text-slate-950">
-                                        {patientNames.get(appointment.patient_id) || "عميل"}
-                                      </div>
-                                      <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">
-                                        {serviceNames.get(appointment.service_id) || "خدمة"}
-                                      </div>
-                                    </div>
-                                    <span
-                                      className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-black ring-1 ${status.className}`}
-                                    >
-                                      {status.label}
-                                    </span>
+                    return (
+                      <div key={column.id} className="w-[260px] border-l border-slate-200 first:border-l-0 lg:w-auto">
+                        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-3 py-3 text-center text-sm font-black text-slate-900">
+                          {column.label}
+                          <span className="mr-2 text-[11px] font-bold text-slate-400">
+                            {columnAppointments.length.toLocaleString("ar-EG")}
+                          </span>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                          {periods.map((period, periodIndex) => {
+                            const isAvailable = period.appointments.length === 0;
+                            return (
+                              <div key={`${column.id}-${period.start}-${period.end}-${periodIndex}`} className={isAvailable ? "bg-slate-50/50 p-2" : "bg-white p-2"}>
+                                <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-bold">
+                                  <span className="text-slate-700">{minuteLabel(period.start)} – {minuteLabel(period.end)}</span>
+                                  {isAvailable && <span className="text-slate-400">متاح</span>}
+                                </div>
+                                {isAvailable ? (
+                                  <div className="min-h-11 rounded-xl border border-dashed border-slate-200 bg-white/80" />
+                                ) : (
+                                  <div className="space-y-2">
+                                    {period.appointments.map((appointment) => {
+                                      const status = scheduleStatus(appointment.status);
+                                      const service = serviceById.get(appointment.service_id);
+                                      return (
+                                        <Link
+                                          key={appointment.id}
+                                          href={`/appointments/${appointment.id}`}
+                                          className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition hover:border-teal-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-teal-300"
+                                        >
+                                          <div className="flex items-start justify-between gap-2">
+                                            <div className="min-w-0">
+                                              <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                                              <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div>
+                                            </div>
+                                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ring-1 ${status.className}`}>{status.label}</span>
+                                          </div>
+                                          <div className="mt-2 text-xs font-bold text-teal-700">
+                                            {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
+                                          </div>
+                                        </Link>
+                                      );
+                                    })}
                                   </div>
-                                  <div className="mt-2 text-xs font-bold text-teal-700">
-                                    {appointmentTime(appointment.start_at, timezone)} –{" "}
-                                    {appointmentTime(appointment.end_at, timezone)}
-                                  </div>
-                                </Link>
-                              );
-                            })}
-                          </div>
-                        )}
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             </div>
           );
         })}
 
-      {appointments.some((appointment) => !rendered.has(appointment.id)) && (
+      {appointments.some((appointment) => !rendered.has(appointment.id) && visibleColumns.includes(appointmentColumn(appointment, serviceById))) && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="text-sm font-black text-amber-950">مواعيد خارج ساعات العمل الحالية</div>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
-            {appointments.filter((appointment) => !rendered.has(appointment.id)).map((appointment) => (
-              <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="rounded-xl bg-white p-3 text-sm shadow-sm">
-                <div className="font-black">{patientNames.get(appointment.patient_id) || "عميل"}</div>
-                <div className="mt-1 text-xs text-slate-600">
-                  {serviceNames.get(appointment.service_id) || "خدمة"} · {appointmentTime(appointment.start_at, timezone)} –{" "}
-                  {appointmentTime(appointment.end_at, timezone)}
-                </div>
-              </Link>
-            ))}
+            {appointments
+              .filter((appointment) => !rendered.has(appointment.id) && visibleColumns.includes(appointmentColumn(appointment, serviceById)))
+              .map((appointment) => (
+                <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="rounded-xl bg-white p-3 text-sm shadow-sm">
+                  <div className="font-black">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                  <div className="mt-1 text-xs text-slate-600">
+                    {serviceById.get(appointment.service_id)?.name || "خدمة"} · {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
+                  </div>
+                </Link>
+              ))}
           </div>
         </div>
       )}
@@ -369,6 +394,7 @@ export default async function AppointmentsPage({
   const raw = await searchParams;
   const patientId = raw.patient_id;
   const manualPhone = (raw.manual_phone || "").trim();
+  const visibleColumns = requestedColumns(raw.column);
 
   const [knowledge, services, doctors, staff] = await Promise.all([
     tiaRequest<BookingKnowledge>("/clinic/knowledge"),
@@ -441,6 +467,7 @@ export default async function AppointmentsPage({
     );
   }
   const serviceNames = new Map(services.map((service) => [service.id, service.name]));
+  const serviceById = new Map(services.map((service) => [service.id, service]));
   const firstHour = workingHours.slice().sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
   const defaultStart =
     selectedDate === today
@@ -450,6 +477,7 @@ export default async function AppointmentsPage({
     patient_id: patientId,
     date: selectedDate,
     branch_id: selectedBranch?.id,
+    column: visibleColumns,
   };
 
   return (
@@ -547,6 +575,7 @@ export default async function AppointmentsPage({
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <form method="get" className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(150px,1fr)_minmax(150px,1fr)_auto]">
               {patientId && <input type="hidden" name="patient_id" value={patientId} />}
+              {visibleColumns.map((column) => <input key={column} type="hidden" name="column" value={column} />)}
               <label className="text-xs font-bold text-slate-700">
                 اليوم
                 <Input name="date" type="date" defaultValue={selectedDate} className="mt-1.5" />
@@ -572,6 +601,20 @@ export default async function AppointmentsPage({
                 </Link>
               </div>
             )}
+
+          <form method="get" className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+            <input type="hidden" name="date" value={selectedDate} />
+            {selectedBranch && <input type="hidden" name="branch_id" value={selectedBranch.id} />}
+            {patientId && <input type="hidden" name="patient_id" value={patientId} />}
+            <span className="ml-1 text-xs font-black text-slate-600">الأعمدة الظاهرة:</span>
+            {scheduleColumns.map((column) => (
+              <label key={column.id} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700">
+                <input type="checkbox" name="column" value={column.id} defaultChecked={visibleColumns.includes(column.id)} />
+                {column.label}
+              </label>
+            ))}
+            <Button type="submit" size="sm" variant="outline">تطبيق</Button>
+          </form>
           </div>
         </CardHeader>
 
@@ -582,7 +625,8 @@ export default async function AppointmentsPage({
               hours={workingHours}
               timezone={timezone}
               patientNames={patientNames}
-              serviceNames={serviceNames}
+              serviceById={serviceById}
+              visibleColumns={visibleColumns}
             />
           ) : (
             <div className="py-12 text-center text-sm font-semibold text-[var(--muted)]">لا يوجد فرع نشط لعرض جدول المواعيد.</div>
