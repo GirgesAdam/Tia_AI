@@ -95,6 +95,7 @@ class LaserDevicePriceUpsert(BaseModel):
     service_id: UUID
     device_key: str
     price_minor: int = Field(ge=0)
+    duration_minutes: int = Field(gt=0, le=1440)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
 
     @field_validator("device_key")
@@ -111,5 +112,6 @@ class LaserDevicePriceRead(BaseModel):
     device_key: str
     device_name: str
     price_minor: int | None
+    duration_minutes: int | None
     currency: str
     configured: bool

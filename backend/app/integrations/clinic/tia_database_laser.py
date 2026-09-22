@@ -59,6 +59,7 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
                     "device_key": item.device_key,
                     "device_name": item.device_name,
                     "price_minor": item.price_minor,
+                    "duration_minutes": item.duration_minutes,
                     "currency": item.currency,
                     "configured": item.configured,
                 }
@@ -95,6 +96,7 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
                     ServiceDevicePrice.service_id == service_id,
                     ServiceDevicePrice.is_active.is_(True),
                     ServiceDevicePrice.price_minor.is_not(None),
+                    ServiceDevicePrice.duration_minutes.is_not(None),
                 )
                 .order_by(ServiceDevicePrice.device_key)
             )
@@ -196,7 +198,9 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
             branch_name=branch.name,
             service_id=str(service.id),
             service_name=service.name,
-            service_duration_minutes=service.duration_minutes,
+            service_duration_minutes=(
+                int(one_device.duration_minutes) if one_device is not None else None
+            ),
             service_price_minor=(int(one_device.price_minor or 0) if one_device else None),
             service_currency=(one_device.currency if one_device else service.currency),
             slots=slots,

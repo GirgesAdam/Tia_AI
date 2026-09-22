@@ -70,8 +70,13 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
                     device_key=device_key,
                     device_name=LASER_DEVICE_NAMES[device_key],
                     price_minor=(int(row.price_minor) if row and row.price_minor is not None else None),
+                    duration_minutes=(int(row.duration_minutes) if row else None),
                     currency=(row.currency if row else service.currency or "EGP"),
-                    configured=bool(row and row.price_minor is not None),
+                    configured=bool(
+                        row
+                        and row.price_minor is not None
+                        and row.duration_minutes is not None
+                    ),
                 )
             )
     return result
@@ -84,10 +89,15 @@ def upsert_laser_device_price(
     service_id: UUID,
     device_key: str,
     price_minor: int,
+    duration_minutes: int,
     currency: str,
 ) -> ServiceDevicePrice:
     if device_key not in LASER_DEVICE_NAMES:
         raise InventoryOperationError("Unsupported laser device.")
+    if duration_minutes <= 0 or duration_minutes > 1440:
+        raise InventoryOperationError(
+            "Laser device duration must be between 1 and 1440 minutes."
+        )
     service = db.scalar(
         select(Service).where(
             Service.workspace_id == workspace_id,
@@ -113,6 +123,7 @@ def upsert_laser_device_price(
             device_key=device_key,
             device_name=LASER_DEVICE_NAMES[device_key],
             price_minor=price_minor,
+            duration_minutes=duration_minutes,
             currency=currency.upper(),
             is_active=True,
         )
@@ -120,6 +131,7 @@ def upsert_laser_device_price(
     else:
         row.device_name = LASER_DEVICE_NAMES[device_key]
         row.price_minor = price_minor
+        row.duration_minutes = duration_minutes
         row.currency = currency.upper()
         row.is_active = True
     db.flush()
@@ -156,9 +168,10 @@ def configured_device_price(
             ServiceDevicePrice.is_active.is_(True),
         )
     )
-    if row is None or row.price_minor is None:
+    if row is None or row.price_minor is None or row.duration_minutes is None:
         raise InventoryOperationError(
-            f"Price for {LASER_DEVICE_NAMES[device_key]} is not configured for this laser service."
+            f"Price and duration for {LASER_DEVICE_NAMES[device_key]} are not configured "
+            "for this laser service."
         )
     return row
 

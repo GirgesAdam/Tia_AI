@@ -44,6 +44,10 @@ class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "price_minor IS NULL OR price_minor >= 0",
             name="service_device_price_non_negative",
         ),
+        CheckConstraint(
+            "duration_minutes > 0 AND duration_minutes <= 1440",
+            name="service_device_price_duration_valid",
+        ),
         ForeignKeyConstraint(
             ["workspace_id", "service_id"],
             ["services.workspace_id", "services.id"],
@@ -57,6 +61,7 @@ class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     device_key: Mapped[str] = mapped_column(String(40), nullable=False)
     device_name: Mapped[str] = mapped_column(String(120), nullable=False)
     price_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EGP", server_default="EGP")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
 

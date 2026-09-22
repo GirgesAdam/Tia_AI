@@ -275,7 +275,11 @@ def calculate_availability(
     if not assignments:
         return tz.key, []
 
-    duration_minutes = service_duration_minutes(service)
+    duration_minutes = (
+        int(device_price.duration_minutes)
+        if device_price is not None
+        else service_duration_minutes(service)
+    )
     before = timedelta(minutes=service.buffer_before_minutes)
     duration = timedelta(minutes=duration_minutes)
     after = timedelta(minutes=service.buffer_after_minutes)

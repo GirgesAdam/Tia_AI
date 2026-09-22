@@ -294,6 +294,7 @@ def set_laser_price(
             service_id=payload.service_id,
             device_key=payload.device_key,
             price_minor=payload.price_minor,
+            duration_minutes=payload.duration_minutes,
             currency=payload.currency,
         )
         db.commit()
