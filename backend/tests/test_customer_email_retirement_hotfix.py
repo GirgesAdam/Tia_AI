@@ -70,6 +70,7 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
         "0052_payment_reference_constraint_repair",
         "0061_clinic_ops_inventory_products",
         "0073_appointment_additional_services",
+        "0078_repair_schedule_billing_categories",
     }
     assert "ALTER COLUMN version_num TYPE VARCHAR(255)" in long_revisions[
         "0052_payment_reference_constraint_repair"
