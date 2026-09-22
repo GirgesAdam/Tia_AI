@@ -10,6 +10,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -38,6 +39,9 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(16), nullable=False, default="regular", server_default="regular"
     )
     specialization: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    service_categories: Mapped[list[str]] = mapped_column(
+        ARRAY(String(20)), nullable=False, default=list, server_default="{}"
+    )
     license_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     bio: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     booking_enabled: Mapped[bool] = mapped_column(

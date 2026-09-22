@@ -74,6 +74,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("busy_end_at >= end_at", name="appointment_busy_end_valid"),
         CheckConstraint("duration_minutes > 0", name="appointment_duration_positive"),
         CheckConstraint("price_minor >= 0", name="appointment_price_non_negative"),
+        CheckConstraint("discount_minor >= 0", name="appointment_discount_non_negative"),
         CheckConstraint(
             "payment_status IN ('unknown', 'unpaid', 'partial', 'paid', 'refunded')",
             name="appointment_payment_status_valid",
@@ -208,6 +209,9 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     price_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    discount_minor: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, default="EGP", server_default="EGP"
     )

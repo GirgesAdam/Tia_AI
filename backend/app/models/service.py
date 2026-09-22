@@ -26,6 +26,10 @@ class Service(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "duration_minutes > 0 AND duration_minutes <= 1440", name="service_duration_valid"
         ),
         CheckConstraint("price_minor >= 0", name="service_price_non_negative"),
+        CheckConstraint(
+            "category IN ('laser', 'dermatology', 'slimming')",
+            name="service_category_valid",
+        ),
         CheckConstraint("buffer_before_minutes >= 0", name="service_buffer_before_non_negative"),
         CheckConstraint("buffer_after_minutes >= 0", name="service_buffer_after_non_negative"),
     )
@@ -35,7 +39,9 @@ class Service(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(160), nullable=False)
-    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    category: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="dermatology", server_default="dermatology"
+    )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     buffer_before_minutes: Mapped[int] = mapped_column(

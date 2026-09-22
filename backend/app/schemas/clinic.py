@@ -1,7 +1,11 @@
 from datetime import datetime, time
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+ServiceCategory = Literal["laser", "dermatology", "slimming"]
 
 
 class ORMModel(BaseModel):
@@ -108,6 +112,7 @@ class DoctorRead(ORMModel):
     staff_id: UUID
     doctor_type: str
     specialization: str | None
+    service_categories: list[ServiceCategory] = Field(default_factory=list)
     license_number: str | None
     bio: str | None
     booking_enabled: bool
@@ -119,7 +124,7 @@ class DoctorRead(ORMModel):
 class ServiceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=160, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    category: str | None = Field(default=None, max_length=120)
+    category: ServiceCategory = "dermatology"
     description: str | None = None
     duration_minutes: int = Field(gt=0, le=1440)
     buffer_before_minutes: int = Field(default=0, ge=0, le=1440)
@@ -132,7 +137,7 @@ class ServiceCreate(BaseModel):
 
 class ServiceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    category: str | None = Field(default=None, max_length=120)
+    category: ServiceCategory | None = None
     description: str | None = None
     duration_minutes: int | None = Field(default=None, gt=0, le=1440)
     buffer_before_minutes: int | None = Field(default=None, ge=0, le=1440)
@@ -149,7 +154,7 @@ class ServiceRead(ORMModel):
     workspace_id: UUID
     name: str
     slug: str
-    category: str | None
+    category: ServiceCategory
     description: str | None
     duration_minutes: int
     buffer_before_minutes: int
