@@ -39,6 +39,17 @@ def _check_names(table_name: str) -> set[str]:
     }
 
 
+def _check_name(table_name: str, logical_name: str) -> str | None:
+    expected = {
+        logical_name,
+        f"ck_{table_name}_{logical_name}",
+    }
+    for name in _check_names(table_name):
+        if name in expected or name.endswith(f"_{logical_name}"):
+            return name
+    return None
+
+
 def _table_names() -> set[str]:
     return set(_inspector().get_table_names(schema="public"))
 
@@ -54,7 +65,7 @@ def upgrade() -> None:
                 server_default="0",
             ),
         )
-    if "appointment_discount_non_negative" not in _check_names("appointments"):
+    if _check_name("appointments", "appointment_discount_non_negative") is None:
         op.create_check_constraint(
             "appointment_discount_non_negative",
             "appointments",
@@ -88,7 +99,7 @@ def upgrade() -> None:
             """
         )
     )
-    if "service_operational_category_valid" not in _check_names("services"):
+    if _check_name("services", "service_operational_category_valid") is None:
         op.create_check_constraint(
             "service_operational_category_valid",
             "services",
@@ -98,8 +109,9 @@ def upgrade() -> None:
     # An earlier 0077 shape repurposed services.category as the operational
     # taxonomy.  The current model keeps category as optional legacy/display
     # metadata and stores scheduling taxonomy separately.
-    if "service_category_valid" in _check_names("services"):
-        op.drop_constraint("service_category_valid", "services", type_="check")
+    legacy_category_check = _check_name("services", "service_category_valid")
+    if legacy_category_check is not None:
+        op.drop_constraint(legacy_category_check, "services", type_="check")
     op.alter_column(
         "services",
         "category",
