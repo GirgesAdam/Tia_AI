@@ -246,3 +246,16 @@ def test_pricing_summary_does_not_depend_on_batch_one_evaluation_shape():
     assert summary["P1"] == 0
     assert summary["eval_infra_errors"] == 0
     assert summary["tokens"]["total_tokens"] == 120
+
+
+def test_token_attribution_responder_regression_mode_is_targeted(monkeypatch):
+    monkeypatch.setenv("TIA_TOKEN_BASELINE_SCENARIOS", "responder_regressions")
+
+    cases = selected_cases()
+
+    assert [case.__name__ for case in cases] == [
+        "case_unavailable_dynamic",
+        "case_change_mind",
+        "case_multi_question",
+        "case_handoff",
+    ]
