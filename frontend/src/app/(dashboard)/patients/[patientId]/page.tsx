@@ -266,10 +266,22 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                   <label className="block text-xs font-bold text-slate-700">
                     المسؤول عن المتابعة
                     <select name="execution_mode" defaultValue="ai" className="form-control mt-1 h-10 min-h-10">
-                      <option value="ai">Tia — ترسل المتابعة تلقائيًا في الموعد</option>
+                      <option value="ai">Tia — متابعة تلقائية عبر WhatsApp</option>
                       <option value="human">الفريق — متابعة يدوية</option>
                     </select>
                   </label>
+                  <div role="note" className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950">
+                    <CircleAlert size={16} className="mt-0.5 shrink-0 text-amber-700" />
+                    <div className="min-w-0">
+                      <b className="block">مهم عند اختيار Tia</b>
+                      <p className="mt-1 leading-5">
+                        لو مرّ أكثر من 24 ساعة على آخر رسالة من العميل، سياسات WhatsApp من Meta تسمح للمتابعة التلقائية فقط باستخدام قالب معتمد.
+                      </p>
+                      <Link href="/automations#whatsapp-templates" className="mt-2 inline-flex font-bold text-teal-700 underline underline-offset-2">
+                        مراجعة وتجهيز قوالب WhatsApp
+                      </Link>
+                    </div>
+                  </div>
                   <label className="block text-xs font-bold text-slate-700">
                     ماذا تريد أن تقول Tia للعميل؟
                     <Textarea name="description" maxLength={5000} className="mt-1" placeholder="مثال: اسأليه إذا كان مناسب له نثبت ميعاد الجلسة القادمة، ولو محتاج يغير الموعد ساعديه." />
