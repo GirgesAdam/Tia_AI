@@ -102,6 +102,24 @@ def booking_conflict(detail: str) -> HTTPException:
     )
 
 
+def quick_booking_integrity_detail(exc: IntegrityError) -> str:
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    constraint_name = getattr(diag, "constraint_name", None)
+    if constraint_name in {
+        "excl_appointments_doctor_busy_time",
+        "excl_appointments_laser_device_busy_time",
+    }:
+        return (
+            "Quick booking scheduling override could not be applied. "
+            "The database still enforced a schedule-overlap constraint."
+        )
+    if constraint_name == "appointment_quick_booking_staff_only":
+        return "Quick booking is only available to authenticated clinic staff."
+    if constraint_name == "uq_appointments_workspace_idempotency_key":
+        return "This quick booking request was already submitted."
+    return "Quick appointment data violates a database constraint."
+
+
 def require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
     try:
         require_tia_workspace_domain_write(
@@ -521,9 +539,12 @@ def create_quick_appointment(
             },
         )
         db.commit()
+    except PackageOperationError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     except IntegrityError as exc:
         db.rollback()
-        raise booking_conflict("Quick appointment could not be created.") from exc
+        raise booking_conflict(quick_booking_integrity_detail(exc)) from exc
     db.refresh(appointment)
     return appointment
 
