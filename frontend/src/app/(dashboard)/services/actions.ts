@@ -10,6 +10,15 @@ function moneyMinor(value: FormDataEntryValue | null) {
   return Math.round(amount * 100);
 }
 
+function serviceCategory(formData: FormData, requiresLaserDevice: boolean) {
+  if (requiresLaserDevice) return "laser";
+  const value = String(formData.get("category") || "");
+  if (!["laser", "dermatology", "slimming"].includes(value)) {
+    throw new Error("اختار تصنيف الخدمة.");
+  }
+  return value;
+}
+
 function positiveInteger(value: FormDataEntryValue | null, fallback: number) {
   const parsed = Number(String(value || fallback));
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("اكتب مدة صحيحة.");
@@ -42,7 +51,7 @@ export async function createService(formData: FormData) {
     body: JSON.stringify({
       name,
       slug: `service-${randomUUID()}`,
-      category: String(formData.get("category") || "").trim() || null,
+      category: serviceCategory(formData, requiresLaserDevice),
       description: null,
       duration_minutes: requiresLaserDevice
         ? (primeLaseDurationMinutes ?? 60)
@@ -89,6 +98,7 @@ export async function updateServicePricing(formData: FormData) {
   const serviceId = String(formData.get("service_id") || "");
   const name = String(formData.get("name") || "").trim();
   const requiresLaserDevice = formData.get("requires_laser_device") === "1";
+  const category = serviceCategory(formData, requiresLaserDevice);
   if (!serviceId || !name) return;
 
   if (requiresLaserDevice) {
@@ -101,6 +111,7 @@ export async function updateServicePricing(formData: FormData) {
       method: "PATCH",
       body: JSON.stringify({
         name,
+        category,
         price_minor: 0,
         duration_minutes: primeDurationMinutes,
         requires_laser_device: true,
@@ -133,6 +144,7 @@ export async function updateServicePricing(formData: FormData) {
       method: "PATCH",
       body: JSON.stringify({
         name,
+        category,
         price_minor: moneyMinor(formData.get("price")),
         duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
         requires_laser_device: false,

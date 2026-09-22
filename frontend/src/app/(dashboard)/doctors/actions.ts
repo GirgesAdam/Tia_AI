@@ -27,8 +27,13 @@ function clean(value: FormDataEntryValue | null) {
   return normalized || null;
 }
 
-function serviceIds(formData: FormData) {
-  return [...new Set(formData.getAll("service_id").map((value) => String(value).trim()).filter(Boolean))];
+function serviceCategories(formData: FormData) {
+  const values = [...new Set(
+    formData.getAll("service_category").map((value) => String(value).trim()).filter(Boolean),
+  )];
+  const allowed = new Set(["laser", "dermatology", "slimming"]);
+  if (values.some((value) => !allowed.has(value))) throw new Error("تصنيف خدمات الدكتور غير صالح.");
+  return values;
 }
 
 function parseIntervals(formData: FormData): WorkingHourInterval[] {
@@ -86,7 +91,7 @@ export async function createDoctorAction(
         name: clean(formData.get("name")),
         phone: clean(formData.get("phone")),
         specialization: clean(formData.get("specialization")),
-        service_ids: serviceIds(formData),
+        service_categories: serviceCategories(formData),
         booking_enabled: true,
         working_hours: { intervals: parseIntervals(formData) },
       }),
@@ -117,7 +122,7 @@ export async function updateDoctorAction(
         name,
         phone,
         specialization,
-        service_ids: serviceIds(formData),
+        service_categories: serviceCategories(formData),
         booking_enabled: bookingEnabled,
       }),
     });
@@ -126,7 +131,7 @@ export async function updateDoctorAction(
     // committed values; related server views can still be invalidated safely.
     refreshDoctorRelatedViews();
     return {
-      notice: "تم تحديث بيانات الدكتور والخدمات المتاحة له.",
+      notice: "تم تحديث بيانات الدكتور وتصنيفات الخدمات المتاحة له.",
       error: null,
       saved: {
         doctor_id: doctorId,

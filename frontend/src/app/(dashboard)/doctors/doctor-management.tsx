@@ -5,7 +5,7 @@ import { CheckCircle2, Clock3, LoaderCircle, Plus, Save, Stethoscope, Trash2, Us
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { KnowledgeHour, KnowledgeService } from "@/lib/agent-knowledge-types";
+import type { KnowledgeHour } from "@/lib/agent-knowledge-types";
 
 import {
   createDoctorAction,
@@ -24,6 +24,7 @@ export type DoctorAdminItem = {
   booking_enabled: boolean;
   is_active: boolean;
   services: Array<{ id: string; name: string }>;
+  service_categories: Array<"laser" | "dermatology" | "slimming">;
   working_hours: KnowledgeHour[];
 };
 
@@ -115,21 +116,32 @@ function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] 
   );
 }
 
-function ServiceChecklist({ services, selectedIds = [] }: { services: KnowledgeService[]; selectedIds?: string[] }) {
-  const selected = new Set(selectedIds);
+const categoryOptions = [
+  { value: "laser", label: "ليزر" },
+  { value: "dermatology", label: "جلدية" },
+  { value: "slimming", label: "تخسيس" },
+] as const;
+
+function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: string[] }) {
+  const selected = new Set(selectedCategories);
   return (
-    <div className="grid max-h-52 gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-3">
-      {services.map((service) => (
-        <label key={service.id} className="flex items-start gap-2 rounded-lg p-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-          <input type="checkbox" name="service_id" value={service.id} defaultChecked={selected.has(service.id)} className="mt-0.5" />
-          <span>{service.name}</span>
+    <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-3">
+      {categoryOptions.map((category) => (
+        <label key={category.value} className="flex items-center gap-2 rounded-lg p-2 text-sm font-bold text-slate-700 hover:bg-slate-50">
+          <input
+            type="checkbox"
+            name="service_category"
+            value={category.value}
+            defaultChecked={selected.has(category.value)}
+          />
+          <span>{category.label}</span>
         </label>
       ))}
     </div>
   );
 }
 
-function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
+function CreateDoctorForm() {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(createDoctorAction, initialDoctorAdminState);
   return (
@@ -149,7 +161,7 @@ function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
             <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
             <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
           </div>
-          <div><div className="mb-2 text-xs font-black text-slate-700">الخدمات التي يقدمها الدكتور</div><ServiceChecklist services={services} /></div>
+          <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist /></div>
           <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
           <ActionState state={state} />
           <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
@@ -159,7 +171,7 @@ function CreateDoctorForm({ services }: { services: KnowledgeService[] }) {
   );
 }
 
-function DoctorProfileForm({ doctor, services }: { doctor: DoctorAdminItem; services: KnowledgeService[] }) {
+function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorAction, initialDoctorAdminState);
   return (
     <form action={action} className="space-y-4">
@@ -171,9 +183,9 @@ function DoctorProfileForm({ doctor, services }: { doctor: DoctorAdminItem; serv
         <label className="flex items-center gap-2 self-end rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700"><input type="checkbox" name="booking_enabled" defaultChecked={doctor.booking_enabled} /> متاح للحجز</label>
       </div>
       <div>
-        <div className="mb-2 text-xs font-black text-slate-700">الخدمات</div>
-        <ServiceChecklist services={services} selectedIds={doctor.services.map((service) => service.id)} />
-        <div className="mt-1 text-[11px] font-semibold text-slate-500">ممكن تسيب الخدمات كلها من غير اختيار.</div>
+        <div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات</div>
+        <CategoryChecklist selectedCategories={doctor.service_categories} />
+        <div className="mt-1 text-[11px] font-semibold text-slate-500">ممكن تختار أكثر من تصنيف، أو تسيبها بدون اختيار لو الدكتور غير متاح للحجز حاليًا.</div>
       </div>
       <ActionState state={state} />
       <Button type="submit" size="sm" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} حفظ البيانات</Button>
@@ -206,7 +218,7 @@ function RemoveDoctorForm({ doctor }: { doctor: DoctorAdminItem }) {
   );
 }
 
-function DoctorEditorCard({ doctor, services }: { doctor: DoctorAdminItem; services: KnowledgeService[] }) {
+function DoctorEditorCard({ doctor }: { doctor: DoctorAdminItem }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -221,7 +233,7 @@ function DoctorEditorCard({ doctor, services }: { doctor: DoctorAdminItem; servi
       </button>
       {open && (
         <div className="mt-5 space-y-5">
-          <DoctorProfileForm doctor={doctor} services={services} />
+          <DoctorProfileForm doctor={doctor} />
           <DoctorScheduleForm doctor={doctor} />
           <RemoveDoctorForm doctor={doctor} />
         </div>
@@ -230,20 +242,19 @@ function DoctorEditorCard({ doctor, services }: { doctor: DoctorAdminItem; servi
   );
 }
 
-export function DoctorManagementPanel({ doctors, services }: { doctors: DoctorAdminItem[]; services: KnowledgeService[] }) {
+export function DoctorManagementPanel({ doctors }: { doctors: DoctorAdminItem[] }) {
   const activeDoctors = doctors.filter((doctor) => doctor.is_active);
-  const activeServices = services.filter((service) => service.is_active);
 
   return (
     <Card className="mb-5">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Stethoscope size={18} /> إدارة الدكاترة</CardTitle>
-        <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: كل بيانات الدكتور اختيارية. أضف أو عدّل الاسم، التخصص، الهاتف، الخدمات ومواعيد العمل حسب احتياج العيادة.</p>
+        <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: كل بيانات الدكتور اختيارية. أضف أو عدّل الاسم، التخصص، الهاتف، تصنيفات الخدمات ومواعيد العمل حسب احتياج العيادة.</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <CreateDoctorForm services={activeServices} />
+        <CreateDoctorForm />
         {activeDoctors.map((doctor) => (
-          <DoctorEditorCard key={doctor.id} doctor={doctor} services={activeServices} />
+          <DoctorEditorCard key={doctor.id} doctor={doctor} />
         ))}
       </CardContent>
     </Card>

@@ -9,6 +9,7 @@ import { createService } from "./actions";
 
 export function ServiceCreateForm() {
   const [requiresLaserDevice, setRequiresLaserDevice] = useState(false);
+  const [category, setCategory] = useState<"laser" | "dermatology" | "slimming">("dermatology");
 
   return (
     <form action={createService} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6 xl:items-end">
@@ -18,7 +19,18 @@ export function ServiceCreateForm() {
       </label>
       <label>
         <span className="mb-1.5 block text-xs font-bold">التصنيف</span>
-        <Input name="category" maxLength={120} placeholder="مثال: Laser" />
+        {requiresLaserDevice && <input type="hidden" name="category" value="laser" />}
+        <select
+          name="category"
+          value={requiresLaserDevice ? "laser" : category}
+          disabled={requiresLaserDevice}
+          onChange={(event) => setCategory(event.target.value as "laser" | "dermatology" | "slimming")}
+          className="form-control h-10 min-h-10"
+        >
+          <option value="laser">ليزر</option>
+          <option value="dermatology">جلدية</option>
+          <option value="slimming">تخسيس</option>
+        </select>
       </label>
 
       <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700">
@@ -27,7 +39,10 @@ export function ServiceCreateForm() {
           name="requires_laser_device"
           value="1"
           checked={requiresLaserDevice}
-          onChange={(event) => setRequiresLaserDevice(event.target.checked)}
+          onChange={(event) => {
+            setRequiresLaserDevice(event.target.checked);
+            if (event.target.checked) setCategory("laser");
+          }}
         />
         يحتاج تحديد جهاز ليزر
       </label>

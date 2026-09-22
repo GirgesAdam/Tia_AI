@@ -20,6 +20,7 @@ type ServiceConfig = {
   name: string;
   duration_minutes: number;
   price_minor: number;
+  category: "laser" | "dermatology" | "slimming";
   requires_laser_device: boolean;
 };
 
@@ -35,16 +36,32 @@ export function ServicePricingForm({
   devicePrices: DeviceConfig[];
 }) {
   const [requiresLaserDevice, setRequiresLaserDevice] = useState(service.requires_laser_device);
+  const [category, setCategory] = useState(service.category);
   const config = (key: DeviceConfig["device_key"]) =>
     devicePrices.find((item) => item.device_key === key);
 
   return (
     <form action={updateServicePricing} className="grid gap-3 rounded-xl bg-slate-50 p-3">
       <input type="hidden" name="service_id" value={service.id} />
-      <div className="grid gap-3 md:grid-cols-[minmax(180px,1.4fr)_auto_auto] md:items-end">
+      <div className="grid gap-3 md:grid-cols-[minmax(180px,1.4fr)_minmax(130px,.7fr)_auto_auto] md:items-end">
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم الخدمة</span>
           <Input name="name" required maxLength={200} defaultValue={service.name} />
+        </label>
+        <label>
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">التصنيف</span>
+          {requiresLaserDevice && <input type="hidden" name="category" value="laser" />}
+          <select
+            name="category"
+            value={requiresLaserDevice ? "laser" : category}
+            disabled={requiresLaserDevice}
+            onChange={(event) => setCategory(event.target.value as typeof category)}
+            className="form-control h-10 min-h-10"
+          >
+            <option value="laser">ليزر</option>
+            <option value="dermatology">جلدية</option>
+            <option value="slimming">تخسيس</option>
+          </select>
         </label>
         <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700">
           <input
@@ -52,7 +69,10 @@ export function ServicePricingForm({
             name="requires_laser_device"
             value="1"
             checked={requiresLaserDevice}
-            onChange={(event) => setRequiresLaserDevice(event.target.checked)}
+            onChange={(event) => {
+              setRequiresLaserDevice(event.target.checked);
+              if (event.target.checked) setCategory("laser");
+            }}
           />
           خدمة تحتاج اختيار جهاز ليزر
         </label>

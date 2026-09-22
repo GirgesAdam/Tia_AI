@@ -5,7 +5,6 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { KnowledgeService } from "@/lib/agent-knowledge-types";
 import { appointmentLabels, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -147,10 +146,9 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
   const query = new URLSearchParams({ start_date: dateKey(rangeStart), end_date: dateKey(rangeEnd) });
   if (doctorId) query.set("doctor_id", doctorId);
 
-  const [calendar, adminDoctors, services] = await Promise.all([
+  const [calendar, adminDoctors] = await Promise.all([
     tiaRequest<DoctorCalendar>(`/booking/doctor-calendar?${query.toString()}`),
     isAdmin ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin") : Promise.resolve([]),
-    isAdmin ? tiaRequest<KnowledgeService[]>("/clinic/services") : Promise.resolve([]),
   ]);
 
   const selectedDoctor = calendar.doctors.find((doctor) => doctor.id === doctorId) || null;
@@ -181,7 +179,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
         description="تابع مواعيد كل دكتور يوميًا أو على مستوى الشهر، وافتح أي موعد مباشرة من الجدول."
       />
 
-      {isAdmin && <DoctorManagementPanel doctors={adminDoctors} services={services} />}
+      {isAdmin && <DoctorManagementPanel doctors={adminDoctors} />}
 
       <Card className="mb-5">
         <CardContent className="flex flex-col gap-4 p-4 sm:p-4">

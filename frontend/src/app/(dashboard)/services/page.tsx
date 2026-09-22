@@ -15,7 +15,7 @@ import { ServicePricingForm } from "./service-pricing-form";
 type Service = {
   id: string;
   name: string;
-  category: string | null;
+  category: "laser" | "dermatology" | "slimming";
   duration_minutes: number;
   price_minor: number;
   currency: string;
@@ -44,6 +44,10 @@ type PackageOffer = {
   standalone_session_price_minor: number;
   savings_minor: number;
 };
+
+function categoryLabel(value: Service["category"]) {
+  return value === "laser" ? "ليزر" : value === "slimming" ? "تخسيس" : "جلدية";
+}
 
 function major(minor: number | null) {
   return minor == null ? "" : String(minor / 100);
@@ -86,7 +90,7 @@ export default async function ServicesPage() {
               <CardHeader className="flex-row items-start justify-between gap-3">
                 <div>
                   <CardTitle>{service.name}</CardTitle>
-                  <p className="mt-1 text-xs font-semibold text-[var(--muted)]">{service.category || "بدون تصنيف"} · {service.requires_laser_device ? "المدة حسب الجهاز" : `${service.duration_minutes} دقيقة`}</p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--muted)]">{categoryLabel(service.category)} · {service.requires_laser_device ? "المدة حسب الجهاز" : `${service.duration_minutes} دقيقة`}</p>
                 </div>
                 <span className="text-sm font-black text-slate-900">{service.requires_laser_device ? "حسب الجهاز" : formatMoney(service.price_minor, service.currency)}</span>
               </CardHeader>
