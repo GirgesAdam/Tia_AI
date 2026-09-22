@@ -55,6 +55,8 @@ def test_quick_booking_backend_is_an_audited_override() -> None:
     assert "is_quick_booking=True" in route
     assert "doctor_assignment_known=True" in route
     assert 'action="appointment.quick_created"' in route
+    assert "quick_booking_integrity_detail" in route
+    assert "except PackageOperationError as exc:" in route
     assert "excl_appointments_doctor_busy_time" in model
     assert "excl_appointments_laser_device_busy_time" in model
     assert model.count("NOT is_quick_booking") >= 2
@@ -75,8 +77,13 @@ def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
     page = (
         root / "frontend/src/app/(dashboard)/appointments/page.tsx"
     ).read_text(encoding="utf-8")
-    assert 'column.id === "quick" ? start : period.start' in page
+    assert 'column.id !== "quick"' in page
+    assert 'return "other";' in page
+    assert '{ id: "other", label: "أخرى" }' in page
+    assert "لا توجد حجوزات سريعة" in page
     assert "حجز سريع" in page
+    assert "scheduling override could not be applied" in actions
+    assert "التداخل الزمني مسموح في الحجز السريع" in actions
 
 
 def test_laser_pulses_are_tracking_only_on_appointment_detail() -> None:
