@@ -320,6 +320,7 @@ def calculate_availability(
     appointment_stmt = select(Appointment).where(
         Appointment.workspace_id == workspace.id,
         Appointment.doctor_id.in_(doctor_ids),
+        Appointment.is_quick_booking.is_(False),
         Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
         Appointment.busy_start_at < conflict_end_utc,
         Appointment.busy_end_at > conflict_start_utc,
@@ -338,6 +339,7 @@ def calculate_availability(
         device_stmt = select(Appointment).where(
             Appointment.workspace_id == workspace.id,
             Appointment.laser_device_key == laser_device_key,
+            Appointment.is_quick_booking.is_(False),
             Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
             Appointment.busy_start_at < conflict_end_utc,
             Appointment.busy_end_at > conflict_start_utc,
