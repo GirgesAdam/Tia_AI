@@ -155,11 +155,14 @@ def canonicalize_provider_json_schema(
             cleaned[key] = walk(item, stack)
         return cleaned
 
+    root_title = root.get("title")
     result = walk(root)
     if not isinstance(result, dict):
         raise StructuredOutputSchemaCompatibilityError(
             "Root structured-output schema must be an object."
         )
+    if isinstance(root_title, str) and root_title:
+        result["title"] = root_title
     return result
 
 
