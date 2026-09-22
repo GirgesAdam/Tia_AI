@@ -21,11 +21,20 @@ export async function createService(formData: FormData) {
   if (!name) return;
   const requiresLaserDevice = formData.get("requires_laser_device") === "1";
   const basePriceMinor = requiresLaserDevice ? 0 : moneyMinor(formData.get("price"));
+  const baseDurationMinutes = requiresLaserDevice
+    ? null
+    : positiveInteger(formData.get("duration_minutes"), 60);
   const primeLasePriceMinor = requiresLaserDevice
     ? moneyMinor(formData.get("prime_lase_price"))
     : null;
+  const primeLaseDurationMinutes = requiresLaserDevice
+    ? positiveInteger(formData.get("prime_lase_duration_minutes"), 60)
+    : null;
   const candelaGentlePriceMinor = requiresLaserDevice
     ? moneyMinor(formData.get("candela_gentle_price"))
+    : null;
+  const candelaGentleDurationMinutes = requiresLaserDevice
+    ? positiveInteger(formData.get("candela_gentle_duration_minutes"), 60)
     : null;
 
   const service = await tiaRequest<{ id: string }>("/clinic/services", {
@@ -35,7 +44,9 @@ export async function createService(formData: FormData) {
       slug: `service-${randomUUID()}`,
       category: String(formData.get("category") || "").trim() || null,
       description: null,
-      duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
+      duration_minutes: requiresLaserDevice
+        ? (primeLaseDurationMinutes ?? 60)
+        : (baseDurationMinutes ?? 60),
       buffer_before_minutes: 0,
       buffer_after_minutes: 0,
       price_minor: requiresLaserDevice ? 0 : basePriceMinor,
@@ -53,6 +64,7 @@ export async function createService(formData: FormData) {
           service_id: service.id,
           device_key: "prime_lase",
           price_minor: primeLasePriceMinor,
+          duration_minutes: primeLaseDurationMinutes,
           currency: "EGP",
         }),
       }),
@@ -62,6 +74,7 @@ export async function createService(formData: FormData) {
           service_id: service.id,
           device_key: "candela_gentle",
           price_minor: candelaGentlePriceMinor,
+          duration_minutes: candelaGentleDurationMinutes,
           currency: "EGP",
         }),
       }),
@@ -77,14 +90,56 @@ export async function updateServicePricing(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   const requiresLaserDevice = formData.get("requires_laser_device") === "1";
   if (!serviceId || !name) return;
-  await tiaRequest(`/clinic/services/${serviceId}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      name,
-      price_minor: requiresLaserDevice ? 0 : moneyMinor(formData.get("price")),
-      requires_laser_device: requiresLaserDevice,
-    }),
-  });
+
+  if (requiresLaserDevice) {
+    const primePriceMinor = moneyMinor(formData.get("prime_lase_price"));
+    const primeDurationMinutes = positiveInteger(formData.get("prime_lase_duration_minutes"), 60);
+    const candelaPriceMinor = moneyMinor(formData.get("candela_gentle_price"));
+    const candelaDurationMinutes = positiveInteger(formData.get("candela_gentle_duration_minutes"), 60);
+
+    await tiaRequest(`/clinic/services/${serviceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name,
+        price_minor: 0,
+        duration_minutes: primeDurationMinutes,
+        requires_laser_device: true,
+      }),
+    });
+    await Promise.all([
+      tiaRequest("/inventory/laser-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          service_id: serviceId,
+          device_key: "prime_lase",
+          price_minor: primePriceMinor,
+          duration_minutes: primeDurationMinutes,
+          currency: "EGP",
+        }),
+      }),
+      tiaRequest("/inventory/laser-prices", {
+        method: "PUT",
+        body: JSON.stringify({
+          service_id: serviceId,
+          device_key: "candela_gentle",
+          price_minor: candelaPriceMinor,
+          duration_minutes: candelaDurationMinutes,
+          currency: "EGP",
+        }),
+      }),
+    ]);
+  } else {
+    await tiaRequest(`/clinic/services/${serviceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name,
+        price_minor: moneyMinor(formData.get("price")),
+        duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
+        requires_laser_device: false,
+      }),
+    });
+  }
+
   revalidatePath("/services");
   revalidatePath("/appointments");
 }
@@ -99,6 +154,7 @@ export async function updateLaserDevicePrice(formData: FormData) {
       service_id: serviceId,
       device_key: deviceKey,
       price_minor: moneyMinor(formData.get("price")),
+      duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
       currency: "EGP",
     }),
   });

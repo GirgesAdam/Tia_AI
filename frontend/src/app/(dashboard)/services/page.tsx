@@ -1,4 +1,4 @@
-import { CircleDollarSign, Cpu, PackageCheck, PackagePlus, Save } from "lucide-react";
+import { Cpu, PackageCheck, PackagePlus, Save } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,12 +8,9 @@ import { formatMoney } from "@/lib/format";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
-import {
-  updateLaserDevicePrice,
-  updatePackageOffer,
-  updateServicePricing,
-} from "./actions";
+import { updatePackageOffer } from "./actions";
 import { ServiceCreateForm } from "./service-create-form";
+import { ServicePricingForm } from "./service-pricing-form";
 
 type Service = {
   id: string;
@@ -30,6 +27,7 @@ type DevicePrice = {
   device_key: "prime_lase" | "candela_gentle";
   device_name: string;
   price_minor: number | null;
+  duration_minutes: number | null;
   currency: string;
   configured: boolean;
 };
@@ -69,14 +67,14 @@ export default async function ServicesPage() {
     <>
       <PageHeader
         title="الخدمات والأسعار"
-        description="أضف الخدمات وعدّل أسماءها وأسعارها. خدمات الليزر لها سعر مستقل لكل جهاز، ويمكن تحديد باكيدجات 3 أو 6 أو 9 جلسات لكل جهاز."
+        description="أضف الخدمات وعدّل بياناتها. خدمات الليزر لها سعر ومدة مستقلان لكل جهاز، ويمكن تحديد باكيدجات 3 أو 6 أو 9 جلسات لكل جهاز."
       />
       {isAdmin && (
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة خدمة</CardTitle></CardHeader>
           <CardContent>
             <ServiceCreateForm />
-            <p className="mt-3 text-xs text-[var(--muted)]">لو الخدمة تحتاج تحديد جهاز ليزر، اكتب سعر الجلسة لكل جهاز بدل السعر الأساسي.</p>
+            <p className="mt-3 text-xs text-[var(--muted)]">لو الخدمة تحتاج جهاز ليزر، السعر والمدة بيتحددوا لكل جهاز بدل السعر والمدة الأساسيين.</p>
           </CardContent>
         </Card>
       )}
@@ -88,19 +86,13 @@ export default async function ServicesPage() {
               <CardHeader className="flex-row items-start justify-between gap-3">
                 <div>
                   <CardTitle>{service.name}</CardTitle>
-                  <p className="mt-1 text-xs font-semibold text-[var(--muted)]">{service.category || "بدون تصنيف"} · {service.duration_minutes} دقيقة</p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--muted)]">{service.category || "بدون تصنيف"} · {service.requires_laser_device ? "المدة حسب الجهاز" : `${service.duration_minutes} دقيقة`}</p>
                 </div>
                 <span className="text-sm font-black text-slate-900">{service.requires_laser_device ? "حسب الجهاز" : formatMoney(service.price_minor, service.currency)}</span>
               </CardHeader>
               <CardContent className="space-y-4">
                 {isAdmin ? (
-                  <form action={updateServicePricing} className="grid gap-3 rounded-xl bg-slate-50 p-3 md:grid-cols-[minmax(180px,1.5fr)_minmax(150px,1fr)_auto_auto] md:items-end">
-                    <input type="hidden" name="service_id" value={service.id} />
-                    <label><span className="mb-1.5 block text-xs font-bold text-slate-600">اسم الخدمة</span><Input name="name" required maxLength={200} defaultValue={service.name} /></label>
-                    <label><span className="mb-1.5 block text-xs font-bold text-slate-600">السعر الأساسي بالجنيه</span><Input name="price" type="number" min="0" step="0.01" required defaultValue={major(service.price_minor)} /><span className="mt-1 block text-[10px] text-slate-500">يُستخدم فقط عندما لا تحتاج الخدمة جهاز ليزر.</span></label>
-                    <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700"><input type="checkbox" name="requires_laser_device" value="1" defaultChecked={service.requires_laser_device} /> خدمة تحتاج اختيار جهاز ليزر</label>
-                    <Button type="submit" size="sm"><Save size={14} /> حفظ</Button>
-                  </form>
+                  <ServicePricingForm service={service} devicePrices={prices} />
                 ) : null}
 
                 {service.requires_laser_device && (
@@ -115,14 +107,14 @@ export default async function ServicesPage() {
                             <div className="flex items-center gap-2 font-black text-slate-900"><Cpu size={16} /> {name}</div>
                             {configured && row?.price_minor != null && <span className="text-xs font-black text-teal-800">{formatMoney(row.price_minor, row.currency)}</span>}
                           </div>
-                          {isAdmin ? (
-                            <form action={updateLaserDevicePrice} className="flex items-end gap-2">
-                              <input type="hidden" name="service_id" value={service.id} />
-                              <input type="hidden" name="device_key" value={deviceKey} />
-                              <label className="min-w-0 flex-1"><span className="mb-1.5 block text-xs font-bold text-slate-600">سعر الجلسة بهذا الجهاز</span><Input name="price" type="number" min="0" step="0.01" required defaultValue={major(row?.price_minor ?? null)} placeholder="حدد السعر" /></label>
-                              <Button type="submit" size="sm" variant="outline"><CircleDollarSign size={14} /> حفظ</Button>
-                            </form>
-                          ) : !configured ? <div className="font-black">غير محدد</div> : null}
+                          {configured && row?.duration_minutes ? (
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="rounded-lg bg-slate-50 p-2"><span className="text-slate-500">السعر</span><b className="mt-1 block">{row.price_minor != null ? formatMoney(row.price_minor, row.currency) : "—"}</b></div>
+                              <div className="rounded-lg bg-slate-50 p-2"><span className="text-slate-500">المدة</span><b className="mt-1 block">{row.duration_minutes} دقيقة</b></div>
+                            </div>
+                          ) : (
+                            <div className="rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-900">حدد السعر والمدة لهذا الجهاز من إعدادات الخدمة أعلاه.</div>
+                          )}
 
                           <div className="mt-4 border-t border-slate-100 pt-4">
                             <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><PackageCheck size={16} /> الباكيدجات</div>

@@ -91,7 +91,14 @@ def _busy_appointment(start_hour: int, end_hour: int):
     )
 
 
-def _configure(monkeypatch, *, device_key: str, device_name: str, price_minor: int):
+def _configure(
+    monkeypatch,
+    *,
+    device_key: str,
+    device_name: str,
+    price_minor: int,
+    duration_minutes: int = 60,
+):
     monkeypatch.setattr(
         booking,
         "get_effective_booking_settings",
@@ -112,6 +119,7 @@ def _configure(monkeypatch, *, device_key: str, device_name: str, price_minor: i
             device_key=device_key,
             device_name=device_name,
             price_minor=price_minor,
+            duration_minutes=duration_minutes,
             currency="EGP",
         ),
     )
@@ -149,6 +157,7 @@ def test_busy_candela_does_not_block_prime_for_another_free_doctor(monkeypatch) 
         device_key="prime_lase",
         device_name="Prime Lase",
         price_minor=120_000,
+        duration_minutes=45,
     )
     _, prime_slots = booking.calculate_availability(
         db=prime_db,
@@ -167,6 +176,8 @@ def test_busy_candela_does_not_block_prime_for_another_free_doctor(monkeypatch) 
     assert four_pm[0].laser_device_key == "prime_lase"
     assert four_pm[0].laser_device_name == "Prime Lase"
     assert four_pm[0].price_minor == 120_000
+    assert four_pm[0].duration_minutes == 45
+    assert int((four_pm[0].end_at - four_pm[0].start_at).total_seconds() // 60) == 45
 
 
 def test_free_second_device_cannot_double_book_the_same_doctor(monkeypatch) -> None:

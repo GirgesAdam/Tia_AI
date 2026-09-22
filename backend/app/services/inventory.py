@@ -89,12 +89,14 @@ def upsert_laser_device_price(
     service_id: UUID,
     device_key: str,
     price_minor: int,
-    duration_minutes: int,
+    duration_minutes: int | None,
     currency: str,
 ) -> ServiceDevicePrice:
     if device_key not in LASER_DEVICE_NAMES:
         raise InventoryOperationError("Unsupported laser device.")
-    if duration_minutes <= 0 or duration_minutes > 1440:
+    if duration_minutes is not None and (
+        duration_minutes <= 0 or duration_minutes > 1440
+    ):
         raise InventoryOperationError(
             "Laser device duration must be between 1 and 1440 minutes."
         )
@@ -116,6 +118,15 @@ def upsert_laser_device_price(
             ServiceDevicePrice.device_key == device_key,
         )
     )
+    resolved_duration_minutes = (
+        int(duration_minutes)
+        if duration_minutes is not None
+        else (
+            int(row.duration_minutes)
+            if row is not None and row.duration_minutes is not None
+            else int(service.duration_minutes)
+        )
+    )
     if row is None:
         row = ServiceDevicePrice(
             workspace_id=workspace_id,
@@ -123,7 +134,7 @@ def upsert_laser_device_price(
             device_key=device_key,
             device_name=LASER_DEVICE_NAMES[device_key],
             price_minor=price_minor,
-            duration_minutes=duration_minutes,
+            duration_minutes=resolved_duration_minutes,
             currency=currency.upper(),
             is_active=True,
         )
@@ -131,7 +142,7 @@ def upsert_laser_device_price(
     else:
         row.device_name = LASER_DEVICE_NAMES[device_key]
         row.price_minor = price_minor
-        row.duration_minutes = duration_minutes
+        row.duration_minutes = resolved_duration_minutes
         row.currency = currency.upper()
         row.is_active = True
     db.flush()
