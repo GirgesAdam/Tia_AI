@@ -170,6 +170,8 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
             {
                 "doctor_id": window.get("doctor_id"),
                 "doctor_name": window.get("doctor_name"),
+                "laser_device_key": window.get("laser_device_key") or window.get("device_key"),
+                "laser_device_name": window.get("laser_device_name"),
                 "start_time_24h": window.get("start_time_24h"),
                 "end_time_24h": window.get("end_time_24h"),
             }
@@ -185,6 +187,8 @@ def _option_summary(flow: ConversationFlowState | None) -> dict[str, object]:
                     "start_time_24h": slot.get("start_time_24h"),
                     "end_time_24h": slot.get("end_time_24h"),
                     "doctor_name": slot.get("doctor_name"),
+                    "laser_device_key": slot.get("laser_device_key") or slot.get("device_key"),
+                    "laser_device_name": slot.get("laser_device_name"),
                 }
                 for index, slot in enumerate(slots[:8])
                 if isinstance(slot, dict)
