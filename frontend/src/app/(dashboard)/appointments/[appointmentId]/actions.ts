@@ -16,6 +16,18 @@ function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/analytics");
 }
 
+export async function updateLaserPulses(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const pulsesUsed = Number(String(formData.get("pulses_used") || ""));
+  if (!appointmentId || !Number.isInteger(pulsesUsed) || pulsesUsed < 0) return;
+  await tiaRequest(`/booking/appointments/${appointmentId}/laser-usage`, {
+    method: "PUT",
+    body: JSON.stringify({ pulses_used: pulsesUsed }),
+  });
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+}
+
 export async function confirmAppointment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");

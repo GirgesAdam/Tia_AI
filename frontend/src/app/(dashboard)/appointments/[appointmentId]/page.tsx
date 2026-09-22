@@ -20,6 +20,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
@@ -35,6 +36,7 @@ import {
   removeAppointmentAdditionalService,
   removeAppointmentProduct,
   updateAppointmentStatus,
+  updateLaserPulses,
 } from "./actions";
 import { AppointmentPaymentForm } from "./appointment-payment-form";
 import {
@@ -135,6 +137,7 @@ export default async function AppointmentOperationsPage({
   const laserAppointment = appointment as typeof appointment & {
     laser_device_key?: string | null;
     laser_device_name?: string | null;
+    laser_pulses_used?: number | null;
   };
   const canAddProducts = !["cancelled", "no_show", "rescheduled"].includes(appointment.status);
   const canEditService = ["pending", "confirmed", "checked_in", "in_progress"].includes(appointment.status);
@@ -209,6 +212,24 @@ export default async function AppointmentOperationsPage({
                   {laserAppointment.laser_device_name && <div className="mt-1 text-xs font-bold text-teal-700">الجهاز: {laserAppointment.laser_device_name}</div>}
                 </div>
               </div>
+
+              {laserAppointment.laser_device_key && (
+                <form action={updateLaserPulses} className="mt-4 rounded-xl border border-teal-100 bg-teal-50/50 p-3">
+                  <input type="hidden" name="appointment_id" value={appointment.id} />
+                  <input type="hidden" name="patient_id" value={appointment.patient_id} />
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <label className="min-w-0 flex-1 text-xs font-bold text-slate-700">
+                      عدد الـ Pulses المستخدمة
+                      <Input name="pulses_used" type="number" min="0" max="10000000" step="1" required
+                        defaultValue={laserAppointment.laser_pulses_used ?? ""} placeholder="مثال: 2350" className="mt-1" />
+                      <span className="mt-1 block font-normal text-[var(--muted)]">
+                        للمتابعة والاستهلاك فقط، ولا يغيّر سعر الجلسة أو مدتها.
+                      </span>
+                    </label>
+                    <Button type="submit" variant="outline">حفظ الاستهلاك</Button>
+                  </div>
+                </form>
+              )}
 
               <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
                 {allowed.has("confirm") && (

@@ -46,6 +46,7 @@ class AvailabilitySlot(BaseModel):
     branch_id: UUID
     doctor_id: UUID
     doctor_assignment_known: bool = True
+    is_quick_booking: bool = False
     service_id: UUID
     start_at: datetime
     end_at: datetime
@@ -59,6 +60,34 @@ class AvailabilityResponse(BaseModel):
     date: date
     timezone: str
     slots: list[AvailabilitySlot]
+
+
+class QuickAppointmentCreate(BaseModel):
+    patient_id: UUID
+    branch_id: UUID
+    doctor_id: UUID
+    service_id: UUID
+    patient_package_id: UUID | None = None
+    start_at: datetime
+    customer_note: str | None = Field(default=None, max_length=5000)
+    laser_device_key: LaserDeviceKey | None = None
+
+    @field_validator("start_at")
+    @classmethod
+    def validate_start_at(cls, value: datetime) -> datetime:
+        return require_timezone_aware(value)
+
+    @field_validator("customer_note", mode="before")
+    @classmethod
+    def normalize_note(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+
+class AppointmentLaserUsageUpdate(BaseModel):
+    pulses_used: int = Field(ge=0, le=10_000_000)
 
 
 class AppointmentCreate(BaseModel):
@@ -149,6 +178,7 @@ class AppointmentRead(BaseModel):
     currency: str
     laser_device_key: LaserDeviceKey | None = None
     laser_device_name: str | None = None
+    laser_pulses_used: int | None = None
     payment_status: str = "unknown"
     amount_paid_minor: int | None = None
     payment_method: str = "unknown"

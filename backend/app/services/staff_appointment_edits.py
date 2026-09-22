@@ -122,8 +122,8 @@ def _same_start_slot_for_current_doctor(
 
         duration_minutes = int(service.duration_minutes)
         end_at = start_at + timedelta(minutes=duration_minutes)
-        busy_start_at = start_at - timedelta(minutes=int(service.buffer_before_minutes))
-        busy_end_at = end_at + timedelta(minutes=int(service.buffer_after_minutes))
+        busy_start_at = start_at
+        busy_end_at = end_at
         if _overlapping_appointment_id(
             db,
             workspace_id=workspace.id,

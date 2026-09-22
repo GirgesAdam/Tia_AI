@@ -88,6 +88,10 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="appointment_amount_paid_non_negative",
         ),
         CheckConstraint(
+            "laser_pulses_used IS NULL OR laser_pulses_used >= 0",
+            name="appointment_laser_pulses_non_negative",
+        ),
+        CheckConstraint(
             "billing_context IN ('standard', 'package_prepaid')",
             name="appointment_billing_context_valid",
         ),
@@ -141,7 +145,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ("workspace_id", "="),
             ("doctor_id", "="),
             (func.tstzrange(text("busy_start_at"), text("busy_end_at"), "[)"), "&&"),
-            where=text("doctor_assignment_known AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"),
+            where=text("doctor_assignment_known AND NOT is_quick_booking AND status IN ('pending', 'confirmed', 'checked_in', 'in_progress')"),
             using="gist",
             name="excl_appointments_doctor_busy_time",
         ),
@@ -172,6 +176,9 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     doctor_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     doctor_assignment_known: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    is_quick_booking: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     service_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     patient_package_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
@@ -217,6 +224,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     laser_device_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
     laser_device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    laser_pulses_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="unknown", server_default="unknown"
     )

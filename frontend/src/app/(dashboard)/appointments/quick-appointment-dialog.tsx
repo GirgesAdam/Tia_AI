@@ -36,6 +36,7 @@ export function QuickAppointmentDialog({
   staff,
   visibleColumns,
   closeHref,
+  timezone,
 }: {
   branchId: string;
   bookingDate: string;
@@ -51,6 +52,7 @@ export function QuickAppointmentDialog({
   staff: Staff[];
   visibleColumns: ScheduleColumnId[];
   closeHref: string;
+  timezone: string;
 }) {
   const fixedLaserDeviceKey =
     column === "prime" ? "prime_lase" : column === "candela" ? "candela_gentle" : undefined;
@@ -129,10 +131,13 @@ export function QuickAppointmentDialog({
                 doctors={doctors}
                 staff={staff}
                 packages={packages}
-                fixedLaserDeviceKey={fixedLaserDeviceKey}
-                allowedOperationalCategory={allowedOperationalCategory}
+                fixedLaserDeviceKey={column === "quick" ? undefined : fixedLaserDeviceKey}
+                allowedOperationalCategory={column === "quick" ? undefined : allowedOperationalCategory}
                 windowStartMinutes={windowStartMinutes}
                 windowEndMinutes={windowEndMinutes}
+                timezone={timezone}
+                schedulingMode={column === "quick" ? "quick" : "standard"}
+                successHref={closeHref}
               />
             </>
           )}

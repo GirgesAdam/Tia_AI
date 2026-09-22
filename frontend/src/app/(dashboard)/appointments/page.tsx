@@ -180,6 +180,7 @@ function requestedColumns(value: SearchParams["column"]) {
 }
 
 function appointmentColumn(appointment: Appointment, serviceById: Map<string, Service>): ScheduleColumnId {
+  if (appointment.is_quick_booking) return "quick";
   if (appointment.doctor_assignment_known === false) return "quick";
   if (appointment.laser_device_key === "prime_lase") return "prime";
   if (appointment.laser_device_key === "candela_gentle") return "candela";
@@ -590,6 +591,7 @@ export default async function AppointmentsPage({
                   doctors={doctors}
                   staff={staff}
                   packages={manualPackages}
+                  timezone={timezone}
                 />
               </div>
             )}
@@ -693,6 +695,7 @@ export default async function AppointmentsPage({
           staff={staff}
           visibleColumns={visibleColumns}
           closeHref={scheduleHref(currentParams, selectedDate, selectedBranch.id)}
+          timezone={timezone}
         />
       )}
     </>

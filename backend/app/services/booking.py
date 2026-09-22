@@ -149,6 +149,27 @@ def _overlaps_existing(
     )
 
 
+def _candidate_start_times(
+    *,
+    interval_start: datetime,
+    interval_end: datetime,
+    interval_minutes: int,
+    release_times: Collection[datetime],
+) -> list[datetime]:
+    """Keep the grid, plus exact resource-release times for back-to-back visits."""
+    candidates: set[datetime] = {interval_start}
+    candidate = ceil_to_interval(interval_start, interval_minutes)
+    while candidate <= interval_end:
+        candidates.add(candidate)
+        candidate += timedelta(minutes=interval_minutes)
+    timezone = interval_start.tzinfo
+    for release_at in release_times:
+        local_release = release_at.astimezone(timezone) if timezone is not None else release_at
+        if interval_start <= local_release <= interval_end:
+            candidates.add(local_release)
+    return sorted(candidates)
+
+
 def calculate_availability(
     db: Session,
     workspace: Workspace,
@@ -280,9 +301,9 @@ def calculate_availability(
         if device_price is not None
         else service_duration_minutes(service)
     )
-    before = timedelta(minutes=service.buffer_before_minutes)
+    before = timedelta(0)
     duration = timedelta(minutes=duration_minutes)
-    after = timedelta(minutes=service.buffer_after_minutes)
+    after = timedelta(0)
 
     doctor_ids = [doctor.id for _, _, doctor in assignments]
     day_start_local = datetime.combine(booking_date, time.min, tzinfo=tz)
@@ -402,12 +423,16 @@ def calculate_availability(
             device_key = None
             device_name = None
 
-        # Working-hours ranges describe when an appointment is allowed to START.
-        # A service may finish after the configured closing time; duration and
-        # buffers still participate fully in doctor/device conflict checks.
+        release_times = [appointment.busy_end_at for appointment in by_doctor.get(doctor.id, [])]
+        if device_key:
+            release_times.extend(appointment.busy_end_at for appointment in device_existing)
         for interval_start, interval_end in availability_intervals:
-            candidate = ceil_to_interval(interval_start, settings.slot_interval_minutes)
-            while candidate <= interval_end:
+            for candidate in _candidate_start_times(
+                interval_start=interval_start,
+                interval_end=interval_end,
+                interval_minutes=settings.slot_interval_minutes,
+                release_times=release_times,
+            ):
                 service_start = candidate
                 service_end = service_start + duration
                 busy_start = service_start - before
@@ -445,8 +470,6 @@ def calculate_availability(
                             laser_device_name=device_name,
                         )
                     )
-
-                candidate += timedelta(minutes=settings.slot_interval_minutes)
 
     slots.sort(key=lambda slot: (slot.start_at, str(slot.doctor_id)))
     return tz.key, slots

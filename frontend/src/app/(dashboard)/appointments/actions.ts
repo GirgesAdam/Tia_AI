@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { tiaRequest } from "@/lib/tia/api";
 import type { Appointment, Patient } from "@/lib/types";
@@ -95,22 +96,22 @@ function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/analytics");
 }
 
-function manualStartToIso(value: string) {
+function manualStartToIso(value: string, timezone: string) {
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) {
-    return cairoLocalToIso(value);
+    return localToIso(value, timezone);
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error("اختار وقت صحيح من المواعيد المتاحة.");
   return parsed.toISOString();
 }
 
-function cairoLocalToIso(value: string) {
+function localToIso(value: string, timezone: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
   if (!match) throw new Error("اختار تاريخ ووقت صحيحين.");
   const [, year, month, day, hour, minute] = match;
   const guess = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
   const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: timezone || "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
   });
   const parts = Object.fromEntries(formatter.formatToParts(new Date(guess)).map((part) => [part.type, part.value]));
@@ -136,6 +137,8 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     }
 
     const branchId = String(formData.get("branch_id") || "").trim();
+    const bookingMode = String(formData.get("booking_mode") || "standard") === "quick" ? "quick" : "standard";
+    const clinicTimezone = String(formData.get("clinic_timezone") || "Africa/Cairo").trim() || "Africa/Cairo";
     const doctorId = String(formData.get("doctor_id") || "").trim();
     const serviceId = String(formData.get("service_id") || "").trim();
     const startsAt = String(formData.get("start_at") || "").trim();
@@ -143,8 +146,10 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
     if (!patientId || !branchId || !doctorId || !serviceId || !startsAt) return { ok: false, message: "كمّل بيانات العميل والخدمة والدكتور والموعد." };
 
-    const appointment = await tiaRequest<Appointment>("/booking/appointments", {
+    const endpoint = bookingMode === "quick" ? "/booking/appointments/quick" : "/booking/appointments";
+    const appointment = await tiaRequest<Appointment>(endpoint, {
       method: "POST",
+      headers: { "Idempotency-Key": `dashboard-${bookingMode}-appointment:${randomUUID()}` },
       body: JSON.stringify({
         patient_id: patientId,
         branch_id: branchId,
@@ -152,8 +157,8 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
         service_id: serviceId,
         patient_package_id: packageId || null,
         laser_device_key: laserDeviceKey || null,
-        start_at: manualStartToIso(startsAt),
-        source: "staff",
+        start_at: manualStartToIso(startsAt, clinicTimezone),
+        ...(bookingMode === "standard" ? { source: "staff" } : {}),
       }),
     });
     refreshAppointmentViews(appointment.id, patientId);

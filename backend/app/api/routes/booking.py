@@ -33,6 +33,7 @@ from app.schemas.booking import (
     AppointmentCancel,
     AppointmentCreate,
     AppointmentEntitySummary,
+    AppointmentLaserUsageUpdate,
     AppointmentListScope,
     AppointmentOperationalStatusUpdate,
     AppointmentOperationsRead,
@@ -41,6 +42,7 @@ from app.schemas.booking import (
     AppointmentReschedule,
     AppointmentStatus,
     AppointmentStatusHistoryRead,
+    QuickAppointmentCreate,
     AvailabilityResponse,
     AvailabilitySlot,
 )
@@ -226,6 +228,7 @@ def make_appointment(
         patient_id=payload.patient_id,
         branch_id=payload.branch_id,
         doctor_id=payload.doctor_id,
+        is_quick_booking=False,
         service_id=payload.service_id,
         patient_package_id=payload.patient_package_id,
         lead_id=payload.lead_id,
@@ -405,6 +408,119 @@ def create_appointment(
         raise booking_conflict(
             "The requested slot was booked by another request. Refresh availability and try again."
         ) from exc
+    db.refresh(appointment)
+    return appointment
+
+
+@router.post(
+    "/appointments/quick",
+    response_model=AppointmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_quick_appointment(
+    payload: QuickAppointmentCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=128)] = None,
+) -> Appointment:
+    require_local_appointment_write(db, access.workspace.id)
+    if idempotency_key:
+        existing = db.scalar(select(Appointment).where(
+            Appointment.workspace_id == access.workspace.id,
+            Appointment.idempotency_key == idempotency_key,
+        ))
+        if existing is not None:
+            return existing
+    get_patient_for_booking(db, access.workspace.id, payload.patient_id)
+    branch = db.scalar(select(Branch).where(
+        Branch.workspace_id == access.workspace.id, Branch.id == payload.branch_id, Branch.is_active.is_(True)
+    ))
+    doctor = db.scalar(select(Doctor).where(
+        Doctor.workspace_id == access.workspace.id, Doctor.id == payload.doctor_id, Doctor.is_active.is_(True)
+    ))
+    service = db.scalar(select(Service).where(
+        Service.workspace_id == access.workspace.id, Service.id == payload.service_id, Service.is_active.is_(True)
+    ))
+    if branch is None: raise not_found("Branch")
+    if doctor is None: raise not_found("Doctor")
+    if service is None: raise not_found("Service")
+
+    if service.requires_laser_device:
+        if payload.laser_device_key is None:
+            raise booking_conflict("Laser device choice is required for this service.")
+        try:
+            device_price = configured_device_price(
+                db, workspace_id=access.workspace.id, service_id=service.id, device_key=payload.laser_device_key
+            )
+        except InventoryOperationError as exc:
+            raise booking_conflict(str(exc)) from exc
+        duration_minutes = int(device_price.duration_minutes)
+        price_minor = int(device_price.price_minor or 0)
+        currency = device_price.currency
+        laser_device_key = device_price.device_key
+        laser_device_name = device_price.device_name
+    else:
+        if payload.laser_device_key is not None:
+            raise booking_conflict("A laser device cannot be selected for this service.")
+        duration_minutes = int(service.duration_minutes)
+        price_minor = int(service.price_minor)
+        currency = service.currency
+        laser_device_key = None
+        laser_device_name = None
+
+    start_at = payload.start_at.astimezone(UTC)
+    end_at = start_at + timedelta(minutes=duration_minutes)
+    patient_package = None
+    if payload.patient_package_id is not None:
+        try:
+            patient_package = validate_package_for_booking(
+                db, workspace_id=access.workspace.id, package_id=payload.patient_package_id,
+                patient_id=payload.patient_id, service_id=service.id,
+                appointment_start_at=start_at, laser_device_key=laser_device_key,
+            )
+        except PackageOperationError as exc:
+            raise booking_conflict(str(exc)) from exc
+
+    appointment = Appointment(
+        workspace_id=access.workspace.id, patient_id=payload.patient_id, branch_id=branch.id,
+        doctor_id=doctor.id, doctor_assignment_known=True, is_quick_booking=True,
+        service_id=service.id, patient_package_id=payload.patient_package_id,
+        created_by_user_id=access.user.id, status="confirmed", source="staff",
+        start_at=start_at, end_at=end_at, busy_start_at=start_at, busy_end_at=end_at,
+        duration_minutes=duration_minutes, price_minor=price_minor, currency=currency,
+        laser_device_key=laser_device_key, laser_device_name=laser_device_name,
+        customer_note=payload.customer_note, idempotency_key=idempotency_key,
+        confirmed_at=datetime.now(UTC),
+    )
+    try:
+        db.add(appointment)
+        db.flush()
+        if patient_package is not None:
+            reserve_package_usage(
+                db, appointment=appointment, package=patient_package,
+                actor_type="staff", actor_user_id=access.user.id,
+            )
+        add_history(
+            db, appointment, changed_by_user_id=access.user.id, from_status=None,
+            to_status="confirmed", reason="quick_appointment_created",
+            metadata={"scheduling_override": True},
+        )
+        record_activity_event(
+            db, workspace_id=access.workspace.id, actor_type="staff",
+            actor_user_id=access.user.id, action="appointment.quick_created",
+            entity_type="appointment", entity_id=appointment.id,
+            summary="Quick appointment created",
+            metadata={
+                "service_id": str(service.id), "doctor_id": str(doctor.id),
+                "laser_device_key": laser_device_key,
+                "patient_package_id": str(appointment.patient_package_id) if appointment.patient_package_id else None,
+                "scheduling_override": True,
+            },
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise booking_conflict("Quick appointment could not be created.") from exc
     db.refresh(appointment)
     return appointment
 
@@ -787,6 +903,38 @@ def get_appointment_operations(
         cancellation_override_required=override_required,
         can_override_cancellation_policy=(access.membership.role == WORKSPACE_ROLE_ADMIN),
     )
+
+
+@router.put("/appointments/{appointment_id}/laser-usage", response_model=AppointmentRead)
+def update_appointment_laser_usage(
+    appointment_id: UUID,
+    payload: AppointmentLaserUsageUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Appointment:
+    require_local_appointment_write(db, access.workspace.id)
+    appointment = db.scalar(
+        select(Appointment).where(
+            Appointment.workspace_id == access.workspace.id,
+            Appointment.id == appointment_id,
+        ).with_for_update()
+    )
+    if appointment is None: raise not_found("Appointment")
+    if appointment.laser_device_key is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Laser pulses can only be recorded for a laser appointment.")
+    previous = appointment.laser_pulses_used
+    appointment.laser_pulses_used = payload.pulses_used
+    record_activity_event(
+        db, workspace_id=access.workspace.id, actor_type="staff",
+        actor_user_id=access.user.id, action="appointment.laser_usage_updated",
+        entity_type="appointment", entity_id=appointment.id,
+        summary="Laser pulse usage updated",
+        metadata={"previous_pulses_used": previous, "pulses_used": payload.pulses_used},
+    )
+    db.commit()
+    db.refresh(appointment)
+    return appointment
 
 
 @router.post("/appointments/{appointment_id}/confirm", response_model=AppointmentRead)

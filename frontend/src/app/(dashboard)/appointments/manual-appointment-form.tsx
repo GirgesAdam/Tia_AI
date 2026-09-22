@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,9 @@ export function ManualAppointmentForm({
   allowedOperationalCategory,
   windowStartMinutes,
   windowEndMinutes,
+  timezone,
+  schedulingMode = "standard",
+  successHref,
 }: {
   mode: "existing" | "new";
   phone: string;
@@ -59,7 +63,11 @@ export function ManualAppointmentForm({
   allowedOperationalCategory?: "laser" | "dermatology" | "slimming";
   windowStartMinutes?: number;
   windowEndMinutes?: number;
+  timezone: string;
+  schedulingMode?: "standard" | "quick";
+  successHref?: string;
 }) {
+  const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, initialState);
   const [serviceId, setServiceId] = useState("");
   const [laserDeviceKey, setLaserDeviceKey] = useState(fixedLaserDeviceKey || "");
@@ -70,6 +78,13 @@ export function ManualAppointmentForm({
   const [availabilityTimezone, setAvailabilityTimezone] = useState("Africa/Cairo");
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [availabilityMessage, setAvailabilityMessage] = useState("");
+  const [quickTime, setQuickTime] = useState("");
+
+  useEffect(() => {
+    if (!state.ok || !successHref) return;
+    router.replace(successHref);
+    router.refresh();
+  }, [router, state.ok, successHref]);
 
   const staffMap = useMemo(
     () => new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()])),
@@ -106,11 +121,13 @@ export function ManualAppointmentForm({
   }, [slots]);
 
   const doctorOptions = useMemo(() => {
+    if (schedulingMode === "quick") return doctors.filter((doctor) => doctor.is_active);
     const ids = new Set(slots.filter((slot) => slot.start_at === startAt).map((slot) => slot.doctor_id));
     return doctors.filter((doctor) => doctor.is_active && ids.has(doctor.id));
-  }, [doctors, slots, startAt]);
+  }, [doctors, schedulingMode, slots, startAt]);
 
   async function loadAvailability(nextServiceId: string, nextDeviceKey: string) {
+    if (schedulingMode === "quick") return;
     setStartAt("");
     setDoctorId("");
     setSlots([]);
@@ -142,6 +159,8 @@ export function ManualAppointmentForm({
   return (
     <form action={formAction} className="space-y-4">
       <input type="hidden" name="customer_mode" value={mode} />
+      <input type="hidden" name="booking_mode" value={schedulingMode} />
+      <input type="hidden" name="clinic_timezone" value={timezone} />
       <input type="hidden" name="branch_id" value={branchId} />
       <input type="hidden" name="start_at" value={startAt} />
       {mode === "existing" && <input type="hidden" name="patient_id" value={patientId} />}
@@ -187,7 +206,7 @@ export function ManualAppointmentForm({
               setServiceId(nextServiceId);
               setLaserDeviceKey(nextDeviceKey);
               setPackageId("");
-              void loadAvailability(nextServiceId, nextDeviceKey);
+              if (schedulingMode === "standard") void loadAvailability(nextServiceId, nextDeviceKey);
             }}
           >
             <option value="" disabled>اختار الخدمة</option>
@@ -214,7 +233,7 @@ export function ManualAppointmentForm({
                   const next = event.target.value;
                   setLaserDeviceKey(next);
                   setPackageId("");
-                  void loadAvailability(serviceId, next);
+                  if (schedulingMode === "standard") void loadAvailability(serviceId, next);
                 }}
               >
                 <option value="" disabled>اختار الجهاز</option>
@@ -228,53 +247,72 @@ export function ManualAppointmentForm({
 
       <div className="grid gap-3 md:grid-cols-2">
         <label>
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">الميعاد المتاح</span>
-          <Select
-            required
-            value={startAt}
-            disabled={!serviceId || availabilityLoading || timeOptions.length === 0}
-            onChange={(event) => {
-              setStartAt(event.target.value);
-              setDoctorId("");
-            }}
-          >
-            <option value="" disabled>
-              {availabilityLoading ? "جارٍ تحميل المواعيد..." : "اختار الميعاد"}
-            </option>
-            {timeOptions.map((slot) => (
-              <option key={slot.start_at} value={slot.start_at}>
-                {timeLabel(slot.start_at, availabilityTimezone)} – {timeLabel(slot.end_at, availabilityTimezone)}
-              </option>
-            ))}
-          </Select>
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">
+            {schedulingMode === "quick" ? "وقت الحجز السريع" : "الميعاد المتاح"}
+          </span>
+          {schedulingMode === "quick" ? (
+            <Input
+              type="time"
+              required
+              step="60"
+              value={quickTime}
+              min={typeof windowStartMinutes === "number" ? `${String(Math.floor(windowStartMinutes / 60)).padStart(2, "0")}:${String(windowStartMinutes % 60).padStart(2, "0")}` : undefined}
+              max={typeof windowEndMinutes === "number" ? `${String(Math.floor(windowEndMinutes / 60)).padStart(2, "0")}:${String(windowEndMinutes % 60).padStart(2, "0")}` : undefined}
+              onChange={(event) => {
+                const next = event.target.value;
+                setQuickTime(next);
+                setStartAt(next ? `${bookingDate}T${next}` : "");
+              }}
+            />
+          ) : (
+            <Select
+              required
+              value={startAt}
+              disabled={!serviceId || availabilityLoading || timeOptions.length === 0}
+              onChange={(event) => {
+                setStartAt(event.target.value);
+                setDoctorId("");
+              }}
+            >
+              <option value="" disabled>{availabilityLoading ? "جارٍ تحميل المواعيد..." : "اختار الميعاد"}</option>
+              {timeOptions.map((slot) => (
+                <option key={slot.start_at} value={slot.start_at}>
+                  {timeLabel(slot.start_at, availabilityTimezone)} – {timeLabel(slot.end_at, availabilityTimezone)}
+                </option>
+              ))}
+            </Select>
+          )}
           <span className="mt-1 block text-[11px] text-[var(--muted)]">
-            بنعرض فقط الأوقات المسموح حجزها يوم {bookingDate}.
+            {schedulingMode === "quick"
+              ? "اختار أي دقيقة داخل الفترة؛ الحجز السريع لا يطبّق قيود التوافر العادية."
+              : `بنعرض فقط الأوقات المسموح حجزها يوم ${bookingDate}.`}
           </span>
         </label>
-
         <label>
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">الدكتور المتاح في الميعاد</span>
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">
+            {schedulingMode === "quick" ? "الدكتور" : "الدكتور المتاح في الميعاد"}
+          </span>
           <Select
             name="doctor_id"
             required
             value={doctorId}
-            disabled={!startAt || doctorOptions.length === 0}
+            disabled={(schedulingMode === "standard" && !startAt) || doctorOptions.length === 0}
             onChange={(event) => setDoctorId(event.target.value)}
           >
             <option value="" disabled>اختار الدكتور</option>
             {doctorOptions.map((doctor) => (
-              <option key={doctor.id} value={doctor.id}>
-                {staffMap.get(doctor.staff_id) || "دكتور"}
-              </option>
+              <option key={doctor.id} value={doctor.id}>{staffMap.get(doctor.staff_id) || "دكتور"}</option>
             ))}
           </Select>
           <span className="mt-1 block text-[11px] text-[var(--muted)]">
-            القائمة دي بتتحدد بعد اختيار الميعاد، وبتشمل المتاحين في الوقت ده فقط.
+            {schedulingMode === "quick"
+              ? "كل الدكاترة النشطين متاحين هنا كحجز استثنائي من الريسبشن."
+              : "القائمة دي بتتحدد بعد اختيار الميعاد، وبتشمل المتاحين في الوقت ده فقط."}
           </span>
         </label>
       </div>
 
-      {availabilityMessage && (
+      {schedulingMode === "standard" && availabilityMessage && (
         <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
           {availabilityMessage}
         </div>
