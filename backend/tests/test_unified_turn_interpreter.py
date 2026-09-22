@@ -9,6 +9,7 @@ from app.agents.turn_interpreter import (
     _interpreter_system_prompt,
     _latest_customer_turn,
     _normalize_active_booking_decision,
+    _option_summary,
     _recent_conversation_excerpt,
 )
 from app.agents.turn_models import SemanticEntityHints
@@ -259,3 +260,25 @@ def test_unified_interpreter_contains_no_lexical_intent_shortcuts() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+def test_option_summary_preserves_laser_device_metadata() -> None:
+    flow = SimpleNamespace(
+        option_snapshot={
+            "availability_windows": [
+                {
+                    "doctor_id": "doctor-1",
+                    "doctor_name": "د. مريم",
+                    "laser_device_key": "candela_gentle",
+                    "laser_device_name": "Candela Gentle",
+                    "start_time_24h": "18:00",
+                    "end_time_24h": "20:00",
+                }
+            ]
+        }
+    )
+
+    summary = _option_summary(flow)
+    window = summary["availability_windows"][0]
+
+    assert window["laser_device_key"] == "candela_gentle"
+    assert window["laser_device_name"] == "Candela Gentle"
