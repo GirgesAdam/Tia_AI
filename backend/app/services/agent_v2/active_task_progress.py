@@ -119,25 +119,17 @@ def _constraint_parameters(state: BookingTaskState | RescheduleTaskState) -> dic
 def _service_requires_device(service_id: str | None, context: SemanticContext) -> bool:
     if service_id is None:
         return False
-    service_ref = next(
+    target = next(
         (
-            ref
-            for ref, target in context.reference_map.items()
+            target
+            for target in context.reference_map.values()
             if target.kind == "service" and target.canonical_id == service_id
         ),
         None,
     )
-    if service_ref is None:
+    if target is None:
         return False
-    rows = context.model_input.get("services")
-    if not isinstance(rows, list):
-        return False
-    return any(
-        isinstance(row, dict)
-        and row.get("ref") == service_ref
-        and row.get("requires_laser_device") is True
-        for row in rows
-    )
+    return target.metadata.get("requires_laser_device") is True
 
 
 def _booking_progress(
