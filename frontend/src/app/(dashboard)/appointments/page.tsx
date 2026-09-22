@@ -162,7 +162,7 @@ function scheduleStatus(status: Appointment["status"]) {
   return { label: "مؤكد", className: "bg-teal-50 text-teal-800 ring-teal-200" };
 }
 
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
+type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
 
 const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
   { id: "prime", label: "Prime" },
@@ -170,6 +170,7 @@ const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
   { id: "dermatology", label: "جلدية" },
   { id: "slimming", label: "تخسيس" },
   { id: "quick", label: "حجوزات سريعة" },
+  { id: "other", label: "أخرى" },
 ];
 
 function requestedColumns(value: SearchParams["column"]) {
@@ -181,13 +182,12 @@ function requestedColumns(value: SearchParams["column"]) {
 
 function appointmentColumn(appointment: Appointment, serviceById: Map<string, Service>): ScheduleColumnId {
   if (appointment.is_quick_booking) return "quick";
-  if (appointment.doctor_assignment_known === false) return "quick";
   if (appointment.laser_device_key === "prime_lase") return "prime";
   if (appointment.laser_device_key === "candela_gentle") return "candela";
   const category = serviceById.get(appointment.service_id)?.operational_category;
   if (category === "dermatology") return "dermatology";
   if (category === "slimming") return "slimming";
-  return "quick";
+  return "other";
 }
 
 function scheduleHref(current: SearchParams, date: string, branchId: string) {
@@ -364,25 +364,22 @@ function DailySchedule({
                               <div key={`${column.id}-${period.start}-${period.end}-${periodIndex}`} className={isAvailable ? "bg-slate-50/50 p-2" : "bg-white p-2"}>
                                 <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-bold">
                                   <span className="text-slate-700">{minuteLabel(period.start)} – {minuteLabel(period.end)}</span>
-                                  {isAvailable && <span className="text-slate-400">متاح</span>}
+                                  {isAvailable && column.id !== "quick" && <span className="text-slate-400">متاح</span>}
+                                  {isAvailable && column.id === "quick" && <span className="text-slate-400">لا توجد حجوزات سريعة</span>}
                                 </div>
                                 {isAvailable ? (
                                   <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
-                                    {allowQuickBooking && (
+                                    {allowQuickBooking && column.id !== "quick" && (
                                       <Link
                                         href={quickBookingHref(
                                           currentParams,
                                           selectedDate,
                                           branchId,
                                           column.id,
-                                          column.id === "quick" ? start : period.start,
-                                          column.id === "quick" ? end : period.end,
+                                          period.start,
+                                          period.end,
                                         )}
-                                        aria-label={
-                                          column.id === "quick"
-                                            ? `إضافة حجز سريع في فترة العمل من ${minuteLabel(start)} إلى ${minuteLabel(end)}`
-                                            : `إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`
-                                        }
+                                        aria-label={`إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`}
                                         className="absolute inset-0 grid place-items-center rounded-xl text-teal-700 outline-none transition hover:bg-teal-50/80 focus:bg-teal-50 focus:ring-2 focus:ring-teal-300"
                                       >
                                         <span className="grid size-8 place-items-center rounded-full border border-teal-200 bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
