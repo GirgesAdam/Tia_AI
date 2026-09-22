@@ -14,6 +14,7 @@ from app.database.session import get_db
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
+from app.models.doctor_service_category import DoctorServiceCategory
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import DoctorWorkingHour
@@ -90,6 +91,14 @@ def list_doctors_for_admin(
             )
         )
     )
+    category_rows = list(
+        db.scalars(
+            select(DoctorServiceCategory).where(
+                DoctorServiceCategory.workspace_id == workspace_id,
+                DoctorServiceCategory.doctor_id.in_(doctor_ids),
+            )
+        )
+    )
     assignments = list(
         db.scalars(
             select(DoctorBranch)
@@ -136,6 +145,9 @@ def list_doctors_for_admin(
         services_by_doctor[assignment.doctor_id].append(
             DoctorAdminNamedLink(id=service.id, name=service.name)
         )
+    categories_by_doctor: dict[UUID, list[str]] = defaultdict(list)
+    for row in category_rows:
+        categories_by_doctor[row.doctor_id].append(row.category)
 
     hours_by_doctor: dict[UUID, list[DoctorAdminHour]] = defaultdict(list)
     for hour in hour_rows:
@@ -160,7 +172,7 @@ def list_doctors_for_admin(
             booking_enabled=doctor.booking_enabled,
             is_active=doctor.is_active,
             services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
-            service_categories=list(doctor.service_categories or []),
+            service_categories=sorted(categories_by_doctor.get(doctor.id, [])),
             working_hours=hours_by_doctor.get(doctor.id, []),
         )
         for doctor, staff in rows

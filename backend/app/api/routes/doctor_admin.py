@@ -24,6 +24,7 @@ from app.schemas.clinic import DoctorRead, DoctorWorkingHourRead, WorkingHoursRe
 from app.services.activity import record_activity_event
 from app.services.doctor_categories import (
     categories_from_service_ids,
+    doctor_service_categories,
     normalized_service_categories,
     sync_doctor_service_assignments,
 )
@@ -249,7 +250,6 @@ def create_doctor_from_admin(
         staff_id=staff.id,
         doctor_type="regular",
         specialization=_clean_optional(payload.specialization),
-        service_categories=categories,
         booking_enabled=payload.booking_enabled,
     )
     db.add(doctor)
@@ -318,7 +318,11 @@ def update_doctor_from_admin(
             if "service_ids" in payload.model_fields_set
             else None
         ),
-        current=list(doctor.service_categories or []),
+        current=doctor_service_categories(
+            db,
+            workspace_id=workspace_id,
+            doctor_id=doctor.id,
+        ),
     )
     first_name, last_name = _stored_doctor_name(
         name=payload.name,

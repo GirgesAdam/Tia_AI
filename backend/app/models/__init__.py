@@ -40,6 +40,7 @@ from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
+from app.models.doctor_service_category import DoctorServiceCategory
 from app.models.expense import Expense
 from app.models.handoff_event import HandoffEvent
 from app.models.handoff_request import HandoffRequest
@@ -106,6 +107,7 @@ __all__ = [
     "Doctor",
     "DoctorBranch",
     "DoctorService",
+    "DoctorServiceCategory",
     "DoctorWorkingHour",
     "DoctorAvailabilityWindow",
     "Expense",

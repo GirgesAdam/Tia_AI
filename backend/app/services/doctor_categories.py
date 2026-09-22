@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.doctor import Doctor
 from app.models.doctor_service import DoctorService
+from app.models.doctor_service_category import DoctorServiceCategory
 from app.models.service import Service
 
 SERVICE_CATEGORIES = ("laser", "dermatology", "slimming")
@@ -31,7 +32,7 @@ def categories_from_service_ids(
         return []
     rows = list(
         db.execute(
-            select(Service.id, Service.category).where(
+            select(Service.id, Service.operational_category).where(
                 Service.workspace_id == workspace_id,
                 Service.id.in_(ids),
                 Service.is_active.is_(True),
@@ -43,6 +44,24 @@ def categories_from_service_ids(
     return normalized_service_categories([str(category) for _id, category in rows])
 
 
+def doctor_service_categories(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    doctor_id: UUID,
+) -> list[str]:
+    return normalized_service_categories(
+        list(
+            db.scalars(
+                select(DoctorServiceCategory.category).where(
+                    DoctorServiceCategory.workspace_id == workspace_id,
+                    DoctorServiceCategory.doctor_id == doctor_id,
+                )
+            )
+        )
+    )
+
+
 def sync_doctor_service_assignments(
     db: Session,
     *,
@@ -51,19 +70,42 @@ def sync_doctor_service_assignments(
     categories: list[str],
 ) -> set[UUID]:
     categories = normalized_service_categories(categories)
-    doctor.service_categories = categories
+
+    existing_categories = list(
+        db.scalars(
+            select(DoctorServiceCategory).where(
+                DoctorServiceCategory.workspace_id == workspace_id,
+                DoctorServiceCategory.doctor_id == doctor.id,
+            )
+        )
+    )
+    existing_by_category = {row.category: row for row in existing_categories}
+    for category, row in existing_by_category.items():
+        if category not in categories:
+            db.delete(row)
+    for category in categories:
+        if category not in existing_by_category:
+            db.add(
+                DoctorServiceCategory(
+                    workspace_id=workspace_id,
+                    doctor_id=doctor.id,
+                    category=category,
+                )
+            )
+
     if categories:
         target_ids = set(
             db.scalars(
                 select(Service.id).where(
                     Service.workspace_id == workspace_id,
                     Service.is_active.is_(True),
-                    Service.category.in_(categories),
+                    Service.operational_category.in_(categories),
                 )
             )
         )
     else:
         target_ids = set()
+
     assignments = list(
         db.scalars(
             select(DoctorService).where(
@@ -93,10 +135,17 @@ def sync_service_doctor_assignments(
     workspace_id: UUID,
     service: Service,
 ) -> None:
-    doctors = list(
+    selected_doctors = set(
         db.scalars(
-            select(Doctor).where(
-                Doctor.workspace_id == workspace_id,
+            select(DoctorServiceCategory.doctor_id)
+            .join(
+                Doctor,
+                (Doctor.workspace_id == DoctorServiceCategory.workspace_id)
+                & (Doctor.id == DoctorServiceCategory.doctor_id),
+            )
+            .where(
+                DoctorServiceCategory.workspace_id == workspace_id,
+                DoctorServiceCategory.category == service.operational_category,
                 Doctor.is_active.is_(True),
             )
         )
@@ -110,20 +159,15 @@ def sync_service_doctor_assignments(
         )
     )
     by_doctor = {row.doctor_id: row for row in assignments}
-    for doctor in doctors:
-        should_be_active = (
-            service.is_active
-            and service.category in set(doctor.service_categories or [])
-        )
-        row = by_doctor.get(doctor.id)
-        if row is None and should_be_active:
-            db.add(
-                DoctorService(
-                    workspace_id=workspace_id,
-                    doctor_id=doctor.id,
-                    service_id=service.id,
-                    is_active=True,
-                )
+    active_targets = selected_doctors if service.is_active else set()
+    for row in assignments:
+        row.is_active = row.doctor_id in active_targets
+    for doctor_id in active_targets - set(by_doctor):
+        db.add(
+            DoctorService(
+                workspace_id=workspace_id,
+                doctor_id=doctor_id,
+                service_id=service.id,
+                is_active=True,
             )
-        elif row is not None:
-            row.is_active = should_be_active
+        )

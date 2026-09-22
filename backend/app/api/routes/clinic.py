@@ -54,6 +54,7 @@ from app.schemas.clinic import (
     ServiceCreate,
     ServiceRead,
     ServiceUpdate,
+    _normalize_service_category,
     StaffCreate,
     StaffRead,
     StaffUpdate,
@@ -419,7 +420,7 @@ def create_service(
     db: Session = Depends(get_db),
 ) -> Service:
     service = Service(workspace_id=workspace.id, **payload.model_dump())
-    if service.requires_laser_device and service.category != "laser":
+    if service.requires_laser_device and service.operational_category != "laser":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Services that require a laser device must use the laser category.",
@@ -472,7 +473,9 @@ def update_service(
     changes = payload.model_dump(exclude_unset=True)
     if changes.get("category") is None:
         changes.pop("category", None)
-    final_category = changes.get("category", service.category)
+    if "operational_category" not in changes and "category" in changes:
+        changes["operational_category"] = _normalize_service_category(changes["category"])
+    final_category = changes.get("operational_category", service.operational_category)
     final_requires_laser = changes.get("requires_laser_device", service.requires_laser_device)
     if final_requires_laser and final_category != "laser":
         raise HTTPException(

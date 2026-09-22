@@ -130,7 +130,6 @@ class DoctorRead(ORMModel):
     staff_id: UUID
     doctor_type: str
     specialization: str | None
-    service_categories: list[ServiceCategory] = Field(default_factory=list)
     license_number: str | None
     bio: str | None
     booking_enabled: bool
@@ -142,12 +141,8 @@ class DoctorRead(ORMModel):
 class ServiceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=160, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    category: ServiceCategory = "dermatology"
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def normalize_category(cls, value: object) -> object:
-        return _normalize_service_category(value)
+    category: str | None = Field(default=None, max_length=120)
+    operational_category: ServiceCategory = "dermatology"
     description: str | None = None
     duration_minutes: int = Field(gt=0, le=1440)
     buffer_before_minutes: int = Field(default=0, ge=0, le=1440)
@@ -157,15 +152,24 @@ class ServiceCreate(BaseModel):
     requires_medical_review: bool = False
     requires_laser_device: bool = False
 
+    @field_validator("operational_category", mode="before")
+    @classmethod
+    def normalize_operational_category(cls, value: object) -> object:
+        return _normalize_service_category(value)
+
+    @model_validator(mode="after")
+    def infer_legacy_operational_category(self):
+        if self.requires_laser_device:
+            self.operational_category = "laser"
+        elif "operational_category" not in self.model_fields_set and self.category:
+            self.operational_category = _normalize_service_category(self.category)
+        return self
+
 
 class ServiceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    category: ServiceCategory | None = None
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def normalize_category(cls, value: object) -> object:
-        return _normalize_service_category(value, allow_none=True)
+    category: str | None = Field(default=None, max_length=120)
+    operational_category: ServiceCategory | None = None
     description: str | None = None
     duration_minutes: int | None = Field(default=None, gt=0, le=1440)
     buffer_before_minutes: int | None = Field(default=None, ge=0, le=1440)
@@ -176,13 +180,19 @@ class ServiceUpdate(BaseModel):
     requires_laser_device: bool | None = None
     is_active: bool | None = None
 
+    @field_validator("operational_category", mode="before")
+    @classmethod
+    def normalize_operational_category(cls, value: object) -> object:
+        return _normalize_service_category(value, allow_none=True)
+
 
 class ServiceRead(ORMModel):
     id: UUID
     workspace_id: UUID
     name: str
     slug: str
-    category: ServiceCategory
+    category: str | None
+    operational_category: ServiceCategory
     description: str | None
     duration_minutes: int
     buffer_before_minutes: int
