@@ -5,13 +5,13 @@ import json
 import os
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import Session
-
 from app.core.config import settings
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.demo_reset import acquire_demo_request_lock
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import Session
+
 from tools.agent_eval.harness import (
     ScenarioResult,
     aggregate_tokens,
