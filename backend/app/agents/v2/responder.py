@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -130,6 +131,144 @@ def _native_recent_messages(
             HumanMessage(content=text) if isinstance(message, HumanMessage) else AIMessage(content=text)
         )
     return selected[-limit:]
+
+
+def _format_verified_price(value: object, *, arabic: bool) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parts = value.strip().split()
+    if not parts:
+        return None
+    try:
+        amount = Decimal(parts[0])
+    except InvalidOperation:
+        return value.strip()
+    amount_text = format(amount, "f")
+    if "." in amount_text:
+        amount_text = amount_text.rstrip("0").rstrip(".")
+    currency = parts[1].upper() if len(parts) > 1 else ""
+    if arabic and currency == "EGP":
+        currency = "جنيه"
+    return " ".join(part for part in (amount_text, currency) if part)
+
+
+def _service_price_text(service: dict[str, object], *, arabic: bool) -> str | None:
+    minor = service.get("price_minor")
+    currency = service.get("currency")
+    if minor is not None and currency:
+        try:
+            value = Decimal(int(minor)) / Decimal(100)
+        except (TypeError, ValueError):
+            value = None
+        if value is not None:
+            amount_text = format(value, "f")
+            if "." in amount_text:
+                amount_text = amount_text.rstrip("0").rstrip(".")
+            currency_text = str(currency).upper()
+            if arabic and currency_text == "EGP":
+                currency_text = "جنيه"
+            return f"{amount_text} {currency_text}".strip()
+    return _format_verified_price(service.get("price"), arabic=arabic)
+
+
+def _deterministic_pure_price_reply(
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> tuple[str, str] | None:
+    if len(outcomes) != 1:
+        return None
+    outcome = outcomes[0]
+    if outcome.status != "answered" or outcome.response_goal != "answer_price":
+        return None
+
+    catalog = outcome.facts.get("service_catalog")
+    if not isinstance(catalog, dict):
+        return None
+    service = catalog.get("service")
+    if not isinstance(service, dict):
+        return None
+
+    arabic = _latest_customer_is_arabic(history)
+    service_name = str(service.get("name") or "").strip()
+    selected_device = service.get("selected_laser_device")
+    if isinstance(selected_device, dict):
+        device_name = str(selected_device.get("device_name") or "").strip()
+        price = _service_price_text(selected_device, arabic=arabic)
+        if price:
+            if arabic:
+                return (
+                    f"جلسة {service_name} على {device_name} سعرها {price}.",
+                    "deterministic:verified-device-price",
+                )
+            return (
+                f"{service_name} on {device_name} is {price}.",
+                "deterministic:verified-device-price",
+            )
+
+    raw_devices = service.get("laser_devices")
+    if isinstance(raw_devices, list):
+        priced_devices: list[tuple[str, str]] = []
+        for raw in raw_devices:
+            if not isinstance(raw, dict):
+                continue
+            device_name = str(raw.get("device_name") or "").strip()
+            price = _service_price_text(raw, arabic=arabic)
+            if device_name and price:
+                priced_devices.append((device_name, price))
+        if len(priced_devices) == 1:
+            device_name, price = priced_devices[0]
+            if arabic:
+                return (
+                    f"جلسة {service_name} على {device_name} سعرها {price}.",
+                    "deterministic:verified-device-price",
+                )
+            return (
+                f"{service_name} on {device_name} is {price}.",
+                "deterministic:verified-device-price",
+            )
+        if len(priced_devices) > 1:
+            if arabic:
+                options = "، ".join(
+                    f"{device_name} — {price}"
+                    for device_name, price in priced_devices
+                )
+                return (
+                    f"سعر جلسة {service_name} حسب الجهاز: {options}. تحب أي جهاز؟",
+                    "deterministic:verified-device-prices",
+                )
+            options = "; ".join(
+                f"{device_name} — {price}"
+                for device_name, price in priced_devices
+            )
+            return (
+                f"{service_name} pricing depends on the device: {options}. Which device would you like?",
+                "deterministic:verified-device-prices",
+            )
+
+    if service.get("requires_laser_device") is True:
+        return (
+            (
+                f"سعر جلسة {service_name} بيعتمد على الجهاز، ومحتاج الجهاز علشان أقولك السعر المؤكد."
+                if arabic
+                else f"{service_name} pricing depends on the device. I need the device to give you the verified price."
+            ),
+            "deterministic:verified-device-price-missing",
+        )
+
+    price = _service_price_text(service, arabic=arabic)
+    if price:
+        if arabic:
+            return f"جلسة {service_name} سعرها {price}.", "deterministic:verified-price"
+        return f"{service_name} is {price}.", "deterministic:verified-price"
+
+    return (
+        (
+            f"السعر المؤكد لخدمة {service_name} مش متاح في بيانات العيادة الحالية."
+            if arabic
+            else f"The verified price for {service_name} is not available in the current clinic data."
+        ),
+        "deterministic:verified-price-missing",
+    )
 
 
 def _verified_doctor_names(outcomes: list[TurnOutcome]) -> list[str]:
@@ -401,6 +540,10 @@ def compose_v2_customer_reply(
     deterministic_doctors = _deterministic_pure_doctor_list_reply(history, outcomes)
     if deterministic_doctors is not None:
         return deterministic_doctors, "deterministic:doctor-list"
+
+    deterministic_price = _deterministic_pure_price_reply(history, outcomes)
+    if deterministic_price is not None:
+        return deterministic_price
 
     messages = _build_responder_messages(
         clinic_name=clinic_name,
