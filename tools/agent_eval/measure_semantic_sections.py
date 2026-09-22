@@ -33,7 +33,7 @@ def main() -> int:
         services = list(model_input.get("services") or [])
         doctors = list(model_input.get("doctors") or [])
         service_names_only = [
-            {key: row[key] for key in ("ref", "name", "devices") if key in row}
+            {key: row[key] for key in ("ref", "name") if key in row}
             for row in services
             if isinstance(row, dict)
         ]
@@ -52,7 +52,7 @@ def main() -> int:
             if isinstance(row, dict)
         ]
         doctor_names_only = [
-            {key: row[key] for key in ("ref", "name", "specialization") if key in row}
+            {key: row[key] for key in ("ref", "name") if key in row}
             for row in doctors
             if isinstance(row, dict)
         ]
@@ -72,6 +72,9 @@ def main() -> int:
                         ),
                         "doctors_full": estimate_json_tokens(doctors),
                         "doctors_identity_only": estimate_json_tokens(doctor_names_only),
+                        "devices_full": estimate_json_tokens(
+                            list(model_input.get("devices") or [])
+                        ),
                     },
                 },
                 ensure_ascii=False,

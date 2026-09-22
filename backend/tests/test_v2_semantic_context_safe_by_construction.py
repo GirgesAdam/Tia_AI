@@ -70,9 +70,12 @@ def test_semantic_catalog_keeps_business_constraints_server_side() -> None:
     service = context.model_input["services"][0]
     doctor = context.model_input["doctors"][0]
 
-    assert service["ref"] == "S1"
-    assert service["category"] == "laser"
-    assert service["devices"] == [{"ref": "V1", "name": "Candela Gentle"}]
+    assert service == {"ref": "S1", "name": "ليزر إبط"}
+    assert context.model_input["devices"] == [
+        {"ref": "V1", "name": "Candela Gentle"}
+    ]
+    assert context.server_metadata["focus_details"]["S1"]["category"] == "laser"
+    assert context.server_metadata["focus_details"]["S1"]["device_refs"] == ["V1"]
     assert "requires_laser_device" not in service
     assert "service_refs" not in doctor
     assert context.reference_map["S1"].metadata["requires_laser_device"] is True
