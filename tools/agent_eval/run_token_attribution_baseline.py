@@ -16,17 +16,87 @@ from tools.agent_eval.harness import (
     aggregate_tokens,
     assert_demo_only,
     batch_token_summary,
+    classify_issue,
+    default_evaluation,
     jsonable,
+    local_slot,
+    state_snapshot,
 )
 from tools.agent_eval.run_batch_01 import (
+    branch_name,
     case_device_price,
     case_full_booking,
     case_price,
+    context_with_two_doctors,
+    created_appointments,
+    doctor_name,
+    quiet_patient,
+    run_messages,
 )
 
 ATTRIBUTION_VERSION = 1
 SCHEMA_HEAD = "0078_repair_schedule_billing_categories"
 CASES = [case_price, case_device_price, case_full_booking]
+
+
+def case_full_booking_dynamic(db: Session, workspace: Workspace):
+    patient = quiet_patient(db, workspace)
+    catalog, service, branch_id, first, _ = context_with_two_doctors(db, workspace)
+    doctor, _, available = first
+    date_text, time_text = local_slot(available, available.slots[0])
+    before = state_snapshot(db, workspace, patient)
+    turns = run_messages(
+        db,
+        workspace,
+        patient,
+        "full_booking",
+        [
+            f"عايزه احجز {service['name']}",
+            f"في {branch_name(catalog, branch_id)}",
+            f"مع دكتورة {doctor_name(doctor)}",
+            f"يوم {date_text} الساعة {time_text}",
+            "تمام احجزي",
+        ],
+    )
+    after = state_snapshot(db, workspace, patient)
+    created = created_appointments(before, after)
+    ok = (
+        len(created) == 1
+        and created[0]["service_id"] == str(service["id"])
+        and created[0]["doctor_id"] == str(doctor["id"])
+        and created[0]["branch_id"] == branch_id
+    )
+    return (
+        "full_booking",
+        "booking",
+        "Complete a canonical bookable service→branch→doctor→slot→booking flow.",
+        turns,
+        before,
+        after,
+        {
+            "fixture_service": str(service["name"]),
+            "fixture_doctor": doctor_name(doctor),
+            "fixture_branch": branch_name(catalog, branch_id),
+            "created_appointments": created,
+            "exactly_one_correct_booking": ok,
+        },
+        default_evaluation(action_ok=ok, db_ok=ok),
+        classify_issue(
+            ok,
+            severity="P1",
+            title="Full booking final state incorrect",
+            detail=f"Expected exactly one grounded appointment, got {len(created)}.",
+        ),
+    )
+
+
+def selected_cases() -> list:
+    requested = os.getenv("TIA_TOKEN_BASELINE_SCENARIOS", "all").strip().lower()
+    if requested in {"", "all"}:
+        return CASES
+    if requested == "full_booking":
+        return [case_full_booking_dynamic]
+    raise RuntimeError(f"Unsupported token baseline scenario selection: {requested!r}")
 
 
 def _run_case(engine, slug: str, case_fn) -> ScenarioResult:
@@ -140,7 +210,8 @@ def main() -> int:
         raise RuntimeError("Set TIA_AGENT_EVAL_CONFIRM_DEMO=1")
 
     engine = create_engine(settings.database_url, pool_pre_ping=True)
-    results = [_run_case(engine, "tia", case_fn) for case_fn in CASES]
+    cases = selected_cases()
+    results = [_run_case(engine, "tia", case_fn) for case_fn in cases]
     summary = summarize_attribution(results)
     payload = {
         "run_metadata": {
