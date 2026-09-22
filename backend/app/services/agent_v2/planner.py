@@ -184,14 +184,10 @@ def _service_requires_laser_device(
     service = operation.entities.service
     if service is None or service.ref is None:
         return False
-    rows = context.semantic_context.model_input.get("services")
-    if not isinstance(rows, list):
+    target = context.semantic_context.reference_map.get(service.ref)
+    if target is None or target.kind != "service":
         return False
-    for row in rows:
-        if not isinstance(row, dict) or row.get("ref") != service.ref:
-            continue
-        return row.get("requires_laser_device") is True
-    return False
+    return target.metadata.get("requires_laser_device") is True
 
 
 def _slot_ambiguity_field(step: PlanStep) -> ClarificationField:
