@@ -8,7 +8,7 @@ import { appointmentLabels } from "@/lib/status";
 import type { Appointment, Doctor, Patient, PatientPackage, Service, Staff } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
+type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
 
 function minuteLabel(total: number) {
   const hour = Math.floor(total / 60);
@@ -70,10 +70,15 @@ export function QuickAppointmentDialog({
       <section className="relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:max-w-3xl sm:rounded-3xl">
         <header className="sticky top-0 z-20 flex items-start justify-between gap-3 border-b border-slate-100 bg-white/95 px-4 py-4 backdrop-blur sm:px-6">
           <div>
-            <h2 className="text-base font-black text-slate-950">إضافة موعد</h2>
+            <h2 className="text-base font-black text-slate-950">{column === "quick" ? "حجز سريع استثنائي" : "إضافة موعد"}</h2>
             <p className="mt-1 text-xs font-semibold text-[var(--muted)]">
               {bookingDate} · الفترة {minuteLabel(windowStartMinutes)} – {minuteLabel(windowEndMinutes)}
             </p>
+            {column === "quick" && (
+              <p className="mt-1.5 max-w-xl text-[11px] font-semibold text-amber-700">
+                الحجز السريع يسمح بتسجيل الموعد حتى مع وجود تداخل زمني مقصود. قيود العميل والخدمة والباكدج تظل مطبقة.
+              </p>
+            )}
           </div>
           <Link href={closeHref} className="grid size-9 place-items-center rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50" aria-label="إغلاق">
             <X size={17} />
