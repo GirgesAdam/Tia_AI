@@ -141,6 +141,9 @@ def build_semantic_context(
                 index=position,
                 kind="service",
                 canonical_id=canonical_id,
+                metadata={
+                    "requires_laser_device": row.get("requires_laser_device") is True,
+                },
             )
             if ref is None:
                 continue
@@ -149,9 +152,8 @@ def build_semantic_context(
                 "ref": ref,
                 "name": row.get("name") or row.get("service_name"),
             }
-            for key in ("category", "requires_laser_device"):
-                if row.get(key) not in (None, ""):
-                    item[key] = row.get(key)
+            if row.get("category") not in (None, ""):
+                item["category"] = row.get("category")
 
             raw_devices = row.get("laser_devices")
             if isinstance(raw_devices, list):
@@ -208,15 +210,6 @@ def build_semantic_context(
             }
             if row.get("specialization") not in (None, ""):
                 item["specialization"] = row.get("specialization")
-            service_ids = row.get("service_ids")
-            if isinstance(service_ids, list):
-                service_refs = [
-                    service_ref_by_id[str(service_id)]
-                    for service_id in service_ids
-                    if str(service_id) in service_ref_by_id
-                ]
-                if service_refs:
-                    item["service_refs"] = service_refs
             model_doctors.append(item)
 
     appointments = clinic_catalog.get("appointments")
