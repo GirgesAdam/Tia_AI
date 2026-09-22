@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_only
@@ -11,7 +12,6 @@ from tools.agent_eval.run_token_attribution_baseline import (
     selected_cases,
     summarize_attribution,
 )
-from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from tools.agent_eval.token_attribution import (
     attach_actual_usage,
     estimate_text_tokens,
