@@ -339,10 +339,23 @@ function DailySchedule({
                     return (
                       <div key={column.id} className="w-[260px] border-l border-slate-200 first:border-l-0 lg:w-auto">
                         <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-3 py-3 text-center text-sm font-black text-slate-900">
-                          {column.label}
-                          <span className="mr-2 text-[11px] font-bold text-slate-400">
-                            {columnAppointments.length.toLocaleString("ar-EG")}
-                          </span>
+                          <div className="flex items-center justify-center gap-2">
+                            <span>
+                              {column.label}
+                              <span className="mr-2 text-[11px] font-bold text-slate-400">
+                                {columnAppointments.length.toLocaleString("ar-EG")}
+                              </span>
+                            </span>
+                            {allowQuickBooking && column.id === "quick" && (
+                              <Link
+                                href={quickBookingHref(currentParams, selectedDate, branchId, "quick", start, end)}
+                                className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-black text-teal-800 transition hover:bg-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-300"
+                              >
+                                <Plus size={13} />
+                                حجز سريع
+                              </Link>
+                            )}
+                          </div>
                         </div>
                         <div className="divide-y divide-slate-100">
                           {periods.map((period, periodIndex) => {
@@ -357,8 +370,19 @@ function DailySchedule({
                                   <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
                                     {allowQuickBooking && (
                                       <Link
-                                        href={quickBookingHref(currentParams, selectedDate, branchId, column.id, period.start, period.end)}
-                                        aria-label={`إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`}
+                                        href={quickBookingHref(
+                                          currentParams,
+                                          selectedDate,
+                                          branchId,
+                                          column.id,
+                                          column.id === "quick" ? start : period.start,
+                                          column.id === "quick" ? end : period.end,
+                                        )}
+                                        aria-label={
+                                          column.id === "quick"
+                                            ? `إضافة حجز سريع في فترة العمل من ${minuteLabel(start)} إلى ${minuteLabel(end)}`
+                                            : `إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`
+                                        }
                                         className="absolute inset-0 grid place-items-center rounded-xl text-teal-700 outline-none transition hover:bg-teal-50/80 focus:bg-teal-50 focus:ring-2 focus:ring-teal-300"
                                       >
                                         <span className="grid size-8 place-items-center rounded-full border border-teal-200 bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">

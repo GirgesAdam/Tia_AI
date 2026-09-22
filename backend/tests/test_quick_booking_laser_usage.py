@@ -48,12 +48,18 @@ def test_quick_booking_backend_is_an_audited_override() -> None:
     route = (root / "backend/app/api/routes/booking.py").read_text(encoding="utf-8")
     model = (root / "backend/app/models/appointment.py").read_text(encoding="utf-8")
     migration = (root / "backend/alembic/versions/0079_quick_booking_laser_usage.py").read_text(encoding="utf-8")
+    device_override = (
+        root / "backend/alembic/versions/0080_quick_booking_device_override.py"
+    ).read_text(encoding="utf-8")
     assert '@router.post(\n    "/appointments/quick"' in route
     assert "is_quick_booking=True" in route
     assert "doctor_assignment_known=True" in route
     assert 'action="appointment.quick_created"' in route
-    assert "NOT is_quick_booking" in model
+    assert "excl_appointments_doctor_busy_time" in model
+    assert "excl_appointments_laser_device_busy_time" in model
+    assert model.count("NOT is_quick_booking") >= 2
     assert "NOT is_quick_booking" in migration
+    assert "NOT is_quick_booking" in device_override
 
 
 def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
@@ -66,6 +72,11 @@ def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
     assert 'type="time"' in form
     assert 'step="60"' in form
     assert '"/booking/appointments/quick"' in actions
+    page = (
+        root / "frontend/src/app/(dashboard)/appointments/page.tsx"
+    ).read_text(encoding="utf-8")
+    assert 'column.id === "quick" ? start : period.start' in page
+    assert "حجز سريع" in page
 
 
 def test_laser_pulses_are_tracking_only_on_appointment_detail() -> None:
