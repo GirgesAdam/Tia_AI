@@ -34,6 +34,7 @@ _LOCAL_ONLY_SCHEMA_KEYS = frozenset(
         "exclusiveMaximum",
         "multipleOf",
         "const",
+        "title",
     }
 )
 
