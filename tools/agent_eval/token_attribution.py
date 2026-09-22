@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import tiktoken
+from app.agents.structured_output import canonicalize_provider_json_schema
 from app.agents.v2.responder import ResponderDraft
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from langchain_core.messages import BaseMessage
@@ -34,6 +35,12 @@ def _message_content_tokens(messages: list[BaseMessage]) -> int:
     return sum(estimate_text_tokens(message.content) for message in messages)
 
 
+def provider_schema_tokens(schema: type) -> int:
+    return estimate_json_tokens(
+        canonicalize_provider_json_schema(schema.model_json_schema())
+    )
+
+
 def interpreter_attribution(
     *,
     messages: list[BaseMessage],
@@ -49,7 +56,7 @@ def interpreter_attribution(
         for key, value in model_input.items()
         if key not in _STATE_KEYS
     }
-    schema_tokens = estimate_json_tokens(TiaTurnUnderstanding.model_json_schema())
+    schema_tokens = provider_schema_tokens(TiaTurnUnderstanding)
     message_tokens = _message_content_tokens(messages)
 
     return {
@@ -86,7 +93,7 @@ def responder_attribution(
 
     history_messages = messages[1:-2]
     outcome_message = messages[-2]
-    schema_tokens = estimate_json_tokens(ResponderDraft.model_json_schema())
+    schema_tokens = provider_schema_tokens(ResponderDraft)
     message_tokens = _message_content_tokens(messages)
 
     return {
