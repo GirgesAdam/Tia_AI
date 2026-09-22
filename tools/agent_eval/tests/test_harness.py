@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from tools.agent_eval.harness import ScenarioResult, TokenUsage, assert_demo_only
 from tools.agent_eval.run_batch_01 import _reschedule_relationships_moved
+from tools.agent_eval.run_pricing_fix_targeted import summarize_pricing
 from tools.agent_eval.run_token_attribution_baseline import CASES as ATTRIBUTION_CASES
 from tools.agent_eval.run_token_attribution_baseline import (
     selected_cases,
@@ -215,3 +216,33 @@ def test_token_attribution_full_booking_mode_uses_dynamic_fixture(monkeypatch):
     cases = selected_cases()
 
     assert [case.__name__ for case in cases] == ["case_full_booking_dynamic"]
+
+
+def test_pricing_summary_does_not_depend_on_batch_one_evaluation_shape():
+    row = ScenarioResult(
+        id="price_lookup",
+        category="pricing",
+        purpose="pricing",
+        turns=[],
+        state_before={},
+        state_after={},
+        db_verification={},
+        evaluation={"status": "CORRECT"},
+        issues=[],
+        token_usage={
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cached_tokens": 0,
+            "total_tokens": 120,
+            "calls": 1,
+            "metadata_missing_calls": 0,
+        },
+    )
+
+    summary = summarize_pricing([row])
+
+    assert summary["scenarios_run"] == 1
+    assert summary["P0"] == 0
+    assert summary["P1"] == 0
+    assert summary["eval_infra_errors"] == 0
+    assert summary["tokens"]["total_tokens"] == 120
