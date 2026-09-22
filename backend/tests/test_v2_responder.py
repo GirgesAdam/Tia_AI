@@ -216,8 +216,21 @@ def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
             clinic_name="Tia Clinic",
             timezone_name="Africa/Cairo",
             local_now=NOW,
-            history=[HumanMessage(content="السعر كام؟")],
-            outcomes=[_price_outcome()],
+            history=[HumanMessage(content="قولي تفاصيل الخدمة")],
+            outcomes=[
+                TurnOutcome(
+                    status="answered",
+                    response_goal="answer_service",
+                    facts={
+                        "service_catalog": {
+                            "service": {
+                                "name": "ليزر إبط",
+                                "description": "تفاصيل موثقة",
+                            }
+                        }
+                    },
+                )
+            ],
         )
 
 
