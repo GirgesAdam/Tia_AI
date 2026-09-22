@@ -39,7 +39,7 @@ class DoctorAdminCreate(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
     service_categories: list[Literal["laser", "dermatology", "slimming"]] | None = None
-    service_ids: list[UUID] | None = Field(default=None, max_length=200)
+    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
     working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
     booking_enabled: bool = True
 
@@ -52,7 +52,7 @@ class DoctorAdminUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     specialization: str | None = Field(default=None, max_length=200)
     service_categories: list[Literal["laser", "dermatology", "slimming"]] | None = None
-    service_ids: list[UUID] | None = Field(default=None, max_length=200)
+    service_ids: list[UUID] = Field(default_factory=list, max_length=200)
     booking_enabled: bool = True
 
 
@@ -220,7 +220,11 @@ def create_doctor_from_admin(
         db,
         workspace_id=workspace.id,
         service_categories=payload.service_categories,
-        service_ids=payload.service_ids,
+        service_ids=(
+            payload.service_ids
+            if "service_ids" in payload.model_fields_set
+            else None
+        ),
         current=[],
     )
     first_name, last_name = _stored_doctor_name(
@@ -309,7 +313,11 @@ def update_doctor_from_admin(
         db,
         workspace_id=workspace_id,
         service_categories=payload.service_categories,
-        service_ids=payload.service_ids,
+        service_ids=(
+            payload.service_ids
+            if "service_ids" in payload.model_fields_set
+            else None
+        ),
         current=list(doctor.service_categories or []),
     )
     first_name, last_name = _stored_doctor_name(
