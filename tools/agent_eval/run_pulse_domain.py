@@ -4,9 +4,14 @@ import argparse
 import json
 import os
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+from app.agents.clinic_grounding import build_clinic_catalog
+from app.integrations.clinic.base import AvailabilityRequest, ClinicCapability
+from app.integrations.clinic.registry import get_clinic_adapter
+from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
 from app.models.pulse_billing import PatientPulsePack, PulsePackOffer
@@ -20,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from tools.agent_eval.harness import (
     ScenarioResult,
+    active_branch_id,
     aggregate_tokens,
     assert_demo_only,
     batch_token_summary,
@@ -103,6 +109,170 @@ def _active_patient(db: Session, workspace: Workspace) -> Patient:
     if row is None:
         raise RuntimeError("EVAL_INFRA_ERROR: demo has no active patient")
     return row
+
+
+def _patient_without_device_balance(
+    db: Session,
+    workspace: Workspace,
+    *,
+    device_key: str,
+) -> Patient:
+    patients = list(
+        db.scalars(
+            select(Patient)
+            .where(
+                Patient.workspace_id == workspace.id,
+                Patient.status != "blocked",
+            )
+            .order_by(Patient.created_at)
+            .limit(100)
+        )
+    )
+    for patient in patients:
+        balances = list_patient_pulse_balances(
+            db,
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+        )
+        matching = [
+            row for row in balances
+            if row.device_key == device_key and row.pulses_remaining > 0
+        ]
+        if not matching:
+            return patient
+    raise RuntimeError(
+        f"EVAL_INFRA_ERROR: every demo patient already has Pulse balance for {device_key}"
+    )
+
+
+def _laser_booking_fixture(
+    db: Session,
+    workspace: Workspace,
+    *,
+    offer: PulsePackOffer,
+):
+    catalog = build_clinic_catalog(db, workspace)
+    branch_id = active_branch_id(catalog)
+    services = [
+        row
+        for row in catalog.get("services", [])
+        if isinstance(row, dict)
+        and row.get("id")
+        and any(
+            isinstance(device, dict)
+            and device.get("device_key") == offer.device_key
+            and device.get("configured") is True
+            for device in (row.get("laser_devices") or [])
+        )
+    ]
+    doctors = [
+        row
+        for row in catalog.get("doctors", [])
+        if isinstance(row, dict) and row.get("id")
+    ]
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
+    today = datetime.now(UTC).date()
+
+    for service in services:
+        service_id = str(service["id"])
+        for doctor in doctors:
+            if service_id not in {
+                str(value) for value in (doctor.get("service_ids") or [])
+            }:
+                continue
+            branch_ids = {
+                str(value) for value in (doctor.get("branch_ids") or []) if value
+            }
+            if branch_ids and branch_id not in branch_ids:
+                continue
+            scheduled = {
+                str(value)
+                for value in (
+                    doctor.get("scheduled_branch_ids")
+                    or doctor.get("branch_ids")
+                    or []
+                )
+                if value
+            }
+            if scheduled and branch_id not in scheduled:
+                continue
+            for offset in range(1, 36):
+                booking_date = today + timedelta(days=offset)
+                available = adapter.get_availability(
+                    AvailabilityRequest(
+                        branch_id=branch_id,
+                        service_id=service_id,
+                        booking_date=booking_date,
+                        doctor_id=str(doctor["id"]),
+                        laser_device_key=offer.device_key,
+                    )
+                )
+                if available.slots:
+                    return catalog, service, doctor, available, available.slots[0]
+    raise RuntimeError(
+        "EVAL_INFRA_ERROR: no bookable laser slot matches an active Pulse-pack device"
+    )
+
+
+def _created_appointments(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    *,
+    before_ids: set[str],
+) -> list[Appointment]:
+    rows = list(
+        db.scalars(
+            select(Appointment)
+            .where(
+                Appointment.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+            )
+            .order_by(Appointment.created_at)
+        )
+    )
+    return [row for row in rows if str(row.id) not in before_ids]
+
+
+def _appointment_ids(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+) -> set[str]:
+    return {
+        str(value)
+        for value in db.scalars(
+            select(Appointment.id).where(
+                Appointment.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+            )
+        )
+    }
+
+
+def _pulse_pack_count(db: Session, workspace: Workspace, patient: Patient) -> int:
+    return int(
+        db.scalar(
+            select(func.count(PatientPulsePack.id)).where(
+                PatientPulsePack.workspace_id == workspace.id,
+                PatientPulsePack.patient_id == patient.id,
+            )
+        )
+        or 0
+    )
+
+
+def _payment_count(db: Session, workspace: Workspace, patient: Patient) -> int:
+    return int(
+        db.scalar(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_id == patient.id,
+            )
+        )
+        or 0
+    )
 
 
 def _result(
@@ -351,11 +521,306 @@ def case_purchase_without_payment(db: Session, workspace: Workspace) -> Scenario
     )
 
 
+def case_purchase_and_book_standard(db: Session, workspace: Workspace) -> ScenarioResult:
+    offer = _active_offer(db, workspace)
+    patient = _patient_without_device_balance(
+        db,
+        workspace,
+        device_key=offer.device_key,
+    )
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db,
+        workspace,
+        offer=offer,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_packs = _pulse_pack_count(db, workspace, patient)
+    before_payments = _payment_count(db, workspace, patient)
+
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_purchase_and_booking_standard",
+        1,
+        (
+            f"اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name} "
+            f"واحجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')}. "
+            "الجلسة نفسها عايزها عادية من غير استخدام باكيدج جلسات ولا pulse balance."
+        ),
+        None,
+    )
+
+    created = _created_appointments(
+        db,
+        workspace,
+        patient,
+        before_ids=before_appointments,
+    )
+    after_packs = _pulse_pack_count(db, workspace, patient)
+    after_payments = _payment_count(db, workspace, patient)
+    appointment = created[0] if len(created) == 1 else None
+    ok = (
+        "pulse_pack_offers" in turn.verified_reads
+        and "availability" in turn.verified_reads
+        and turn.write_attempted
+        and after_packs == before_packs + 1
+        and after_payments == before_payments
+        and appointment is not None
+        and appointment.service_id == slot.service_id
+        and appointment.doctor_id == slot.doctor_id
+        and appointment.laser_device_key == offer.device_key
+        and appointment.billing_context == "standard"
+    )
+    return _result(
+        scenario_id="pulse_purchase_and_booking_standard",
+        purpose=(
+            "Buy a Pulse pack and book a laser appointment in one turn while explicitly "
+            "paying the appointment normally instead of consuming Pulse balance."
+        ),
+        turns=[turn],
+        verification={
+            "offer_id": str(offer.id),
+            "appointment_count_created": len(created),
+            "appointment_id": str(appointment.id) if appointment is not None else None,
+            "billing_context": (
+                appointment.billing_context if appointment is not None else None
+            ),
+            "laser_device_key": (
+                appointment.laser_device_key if appointment is not None else None
+            ),
+            "pack_count_delta": after_packs - before_packs,
+            "payment_count_delta": after_payments - before_payments,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Compound Pulse purchase + standard booking was not executed correctly",
+        issue_detail=(
+            "Expected one verified Pulse-pack purchase, one exact laser booking with "
+            "billing_context=standard, and no fictional payment transaction."
+        ),
+        action=True,
+    )
+
+
+def case_purchase_and_book_with_new_pulses(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    offer = _active_offer(db, workspace)
+    patient = _patient_without_device_balance(
+        db,
+        workspace,
+        device_key=offer.device_key,
+    )
+    before_balance = [
+        row
+        for row in list_patient_pulse_balances(
+            db,
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+        )
+        if row.device_key == offer.device_key and row.pulses_remaining > 0
+    ]
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db,
+        workspace,
+        offer=offer,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_packs = _pulse_pack_count(db, workspace, patient)
+    before_payments = _payment_count(db, workspace, patient)
+
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_purchase_and_booking_use_new_balance",
+        1,
+        (
+            f"اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name} "
+            f"واحجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
+            "واستخدمي الـ pulse balance الجديدة للجلسة دي، من غير باكيدج جلسات."
+        ),
+        None,
+    )
+
+    created = _created_appointments(
+        db,
+        workspace,
+        patient,
+        before_ids=before_appointments,
+    )
+    after_packs = _pulse_pack_count(db, workspace, patient)
+    after_payments = _payment_count(db, workspace, patient)
+    after_balance = [
+        row
+        for row in list_patient_pulse_balances(
+            db,
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+        )
+        if row.device_key == offer.device_key and row.pulses_remaining > 0
+    ]
+    appointment = created[0] if len(created) == 1 else None
+    ok = (
+        not before_balance
+        and "pulse_pack_offers" in turn.verified_reads
+        and "availability" in turn.verified_reads
+        and turn.write_attempted
+        and after_packs == before_packs + 1
+        and after_payments == before_payments
+        and bool(after_balance)
+        and appointment is not None
+        and appointment.service_id == slot.service_id
+        and appointment.doctor_id == slot.doctor_id
+        and appointment.laser_device_key == offer.device_key
+        and appointment.billing_context == "pulse_prepaid"
+        and appointment.patient_package_id is None
+    )
+    return _result(
+        scenario_id="pulse_purchase_and_booking_use_new_balance",
+        purpose=(
+            "Buy a Pulse pack and immediately use the newly created balance for the "
+            "laser appointment in the same customer turn."
+        ),
+        turns=[turn],
+        verification={
+            "preexisting_device_balance": bool(before_balance),
+            "new_device_balance": [
+                row.model_dump(mode="json") for row in after_balance
+            ],
+            "appointment_count_created": len(created),
+            "appointment_id": str(appointment.id) if appointment is not None else None,
+            "billing_context": (
+                appointment.billing_context if appointment is not None else None
+            ),
+            "patient_package_id": (
+                str(appointment.patient_package_id)
+                if appointment is not None and appointment.patient_package_id
+                else None
+            ),
+            "pack_count_delta": after_packs - before_packs,
+            "payment_count_delta": after_payments - before_payments,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="New Pulse balance was not correctly used for same-turn booking",
+        issue_detail=(
+            "Fixture starts with no Pulse balance for the device. Expected the verified "
+            "purchase to create balance first, then one pulse_prepaid booking, with no "
+            "session package and no fictional PaymentTransaction."
+        ),
+        action=True,
+    )
+
+
+def case_purchase_then_book_with_pulses(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    offer = _active_offer(db, workspace)
+    patient = _patient_without_device_balance(
+        db,
+        workspace,
+        device_key=offer.device_key,
+    )
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db,
+        workspace,
+        offer=offer,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_packs = _pulse_pack_count(db, workspace, patient)
+    before_payments = _payment_count(db, workspace, patient)
+
+    first_response, first_turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_purchase_then_booking",
+        1,
+        f"اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name}",
+        None,
+    )
+    _, second_turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_purchase_then_booking",
+        2,
+        (
+            f"دلوقتي احجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
+            "واستخدمي الـPulses اللي لسه اشتريتها، من غير باكيدج جلسات."
+        ),
+        first_response.conversation_id,
+    )
+
+    created = _created_appointments(
+        db,
+        workspace,
+        patient,
+        before_ids=before_appointments,
+    )
+    after_packs = _pulse_pack_count(db, workspace, patient)
+    after_payments = _payment_count(db, workspace, patient)
+    appointment = created[0] if len(created) == 1 else None
+    ok = (
+        "pulse_pack_offers" in first_turn.verified_reads
+        and first_turn.write_attempted
+        and "availability" in second_turn.verified_reads
+        and second_turn.write_attempted
+        and after_packs == before_packs + 1
+        and after_payments == before_payments
+        and appointment is not None
+        and appointment.service_id == slot.service_id
+        and appointment.doctor_id == slot.doctor_id
+        and appointment.laser_device_key == offer.device_key
+        and appointment.billing_context == "pulse_prepaid"
+        and appointment.patient_package_id is None
+    )
+    return _result(
+        scenario_id="pulse_purchase_then_booking",
+        purpose=(
+            "Validate multi-turn continuity: purchase Pulses first, then book a laser "
+            "appointment and explicitly consume that Pulse balance."
+        ),
+        turns=[first_turn, second_turn],
+        verification={
+            "appointment_count_created": len(created),
+            "appointment_id": str(appointment.id) if appointment is not None else None,
+            "billing_context": (
+                appointment.billing_context if appointment is not None else None
+            ),
+            "pack_count_delta": after_packs - before_packs,
+            "payment_count_delta": after_payments - before_payments,
+            "first_turn_reads": first_turn.verified_reads,
+            "second_turn_reads": second_turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Pulse purchase → booking continuity failed",
+        issue_detail=(
+            "Expected a verified Pulse purchase on turn 1 and a separate verified "
+            "pulse_prepaid laser booking on turn 2 without creating payment records."
+        ),
+        action=True,
+    )
+
+
 CASES = [
     case_balance,
     case_offer_price,
     case_overage_price,
     case_purchase_without_payment,
+    case_purchase_and_book_standard,
+    case_purchase_and_book_with_new_pulses,
+    case_purchase_then_book_with_pulses,
 ]
 
 
