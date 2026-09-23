@@ -41,6 +41,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace-slug", default="tia")
     parser.add_argument("--output-dir", default="backend/eval_results")
     parser.add_argument("--git-sha", default=os.getenv("GITHUB_SHA") or "unknown")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="Run only the named case function suffix; may be repeated.",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Print a compact qualitative result instead of the full eval payload.",
+    )
     return parser.parse_args()
 
 
@@ -1098,7 +1109,24 @@ def main() -> None:
     from app.core.config import settings
 
     engine = create_engine(settings.database_url, pool_pre_ping=True)
-    results = [run_case(engine, args.workspace_slug, case) for case in CASES]
+    selected_case_names = set(args.case)
+    cases = (
+        [
+            case
+            for case in CASES
+            if case.__name__.removeprefix("case_") in selected_case_names
+        ]
+        if selected_case_names
+        else CASES
+    )
+    missing_case_names = selected_case_names - {
+        case.__name__.removeprefix("case_") for case in cases
+    }
+    if missing_case_names:
+        raise RuntimeError(
+            "Unknown Pulse eval case(s): " + ", ".join(sorted(missing_case_names))
+        )
+    results = [run_case(engine, args.workspace_slug, case) for case in cases]
     summary = {
         "scenarios_run": len(results),
         "fully_correct": sum(not row.issues and row.execution_error is None for row in results),
@@ -1126,14 +1154,41 @@ def main() -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    printable = {
+        "batch_summary": summary,
+        "scenario_results": [jsonable(asdict(row)) for row in results],
+    }
+    if args.compact:
+        printable = {
+            "batch_summary": summary,
+            "scenario_results": [
+                {
+                    "id": row.id,
+                    "issues": row.issues,
+                    "execution_error": row.execution_error,
+                    "db_verification": row.db_verification,
+                    "turns": [
+                        {
+                            "user_message": turn.user_message,
+                            "agent_response": turn.agent_response,
+                            "latency_ms": turn.latency_ms,
+                            "verified_reads": turn.verified_reads,
+                            "write_attempted": turn.write_attempted,
+                            "write_result": turn.write_result,
+                            "token_usage": turn.token_usage,
+                        }
+                        for turn in row.turns
+                    ],
+                }
+                for row in results
+            ],
+        }
     print(
         json.dumps(
-            {
-                "batch_summary": summary,
-                "scenario_results": [jsonable(asdict(row)) for row in results],
-            },
+            printable,
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":") if args.compact else None,
+            indent=None if args.compact else 2,
         ),
         flush=True,
     )
