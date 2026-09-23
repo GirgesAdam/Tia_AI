@@ -25,7 +25,9 @@ _INTERNAL_KEYS = frozenset(
         "branch_id",
         "package_id",
         "package_offer_id",
+        "pulse_pack_offer_id",
         "patient_package_id",
+        "patient_pulse_pack_id",
         "purchase_transaction_id",
         "reference_transaction_id",
         "transaction_id",
@@ -46,6 +48,7 @@ _COMPLETED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "cancel_appointment": "cancellation_completed",
     "reschedule": "reschedule_completed",
     "buy_package": "package_purchased",
+    "buy_pulse_pack": "pulse_pack_purchased",
     "follow_up": "follow_up_created",
     "marketing_update": "marketing_updated",
 }
@@ -56,6 +59,7 @@ _FAILED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "cancel_appointment": "clarification",
     "reschedule": "clarification",
     "buy_package": "package_information",
+    "buy_pulse_pack": "pulse_information",
     "follow_up": "clarification",
     "marketing_update": "clarification",
 }
