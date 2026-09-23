@@ -38,6 +38,38 @@ def _planner_context() -> PlannerContext:
     )
 
 
+def test_pulse_purchase_and_booking_remain_independent_ordered_steps() -> None:
+    purchase = TurnOperation(
+        type="buy_pulse_pack",
+        entities=TurnEntities(pulse_count=2000),
+        execution_intent="execute",
+    )
+    booking = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=None,
+        ),
+        pulse_usage="use_existing",
+        execution_intent="execute",
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[purchase, booking],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _planner_context())
+
+    assert [step.operation_type for step in plan.steps] == [
+        "buy_pulse_pack",
+        "book",
+    ]
+    assert plan.steps[0].write_intent is not None
+    assert plan.steps[0].write_intent.kind == "buy_pulse_pack"
+    assert plan.steps[1].write_intent is None
+    assert plan.steps[1].disposition == "clarify"
+    assert plan.steps[1].clarification_field == "service"
+
+
 def test_pulse_balance_question_is_read_only() -> None:
     operation = TurnOperation(
         type="pulse_info",
