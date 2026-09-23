@@ -16,7 +16,7 @@ from app.services.pulse_billing import (
     list_pulse_billing_settings,
 )
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 
 from tools.agent_eval.harness import (
