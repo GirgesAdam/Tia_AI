@@ -142,6 +142,7 @@ def _appointment_charge_breakdown(
                 AppointmentAdditionalService.workspace_id == workspace_id,
                 AppointmentAdditionalService.appointment_id == appointment.id,
                 AppointmentAdditionalService.patient_package_id.is_(None),
+                AppointmentAdditionalService.billing_context != "pulse_prepaid",
             )
         )
         or 0
@@ -166,7 +167,7 @@ def _appointment_charge_breakdown(
         )
         or 0
     )
-    pulse_overage_total = int(
+    primary_pulse_overage_total = int(
         db.scalar(
             select(
                 func.coalesce(
@@ -181,6 +182,23 @@ def _appointment_charge_breakdown(
         )
         or 0
     )
+    additional_pulse_overage_total = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(AppointmentAdditionalService.pulse_overage_charge_minor),
+                    0,
+                )
+            ).where(
+                AppointmentAdditionalService.workspace_id == workspace_id,
+                AppointmentAdditionalService.appointment_id == appointment.id,
+                AppointmentAdditionalService.billing_context == "pulse_prepaid",
+                AppointmentAdditionalService.pulse_resolution == "overage",
+            )
+        )
+        or 0
+    )
+    pulse_overage_total = primary_pulse_overage_total + additional_pulse_overage_total
     service_price = int(appointment.price_minor)
     service_due = (
         0

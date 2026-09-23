@@ -447,6 +447,11 @@ def test_no_show_releases_package_reservation_like_cancellation(monkeypatch) -> 
     )
     monkeypatch.setattr(
         appointment_ops,
+        "release_appointment_pulse_usage",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        appointment_ops,
         "consume_visit_package_usages",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no-show must not consume")),
     )

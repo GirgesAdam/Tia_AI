@@ -207,6 +207,12 @@ class PulseUsage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
             name="fk_pulse_usages_appointment",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "appointment_additional_service_id"],
+            ["appointment_additional_services.workspace_id", "appointment_additional_services.id"],
+            ondelete="RESTRICT",
+            name="fk_pulse_usages_additional_service",
+        ),
         Index(
             "ix_pulse_usages_workspace_pack_status",
             "workspace_id",
@@ -218,10 +224,16 @@ class PulseUsage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "workspace_id",
             "appointment_id",
         ),
+        Index(
+            "ix_pulse_usages_workspace_additional_service",
+            "workspace_id",
+            "appointment_additional_service_id",
+        ),
     )
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     patient_pulse_pack_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     appointment_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    appointment_additional_service_id: Mapped[UUID | None] = mapped_column(nullable=True)
     pulses_used: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="consumed", server_default="consumed"

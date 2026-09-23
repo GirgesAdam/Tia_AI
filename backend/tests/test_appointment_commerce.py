@@ -133,6 +133,7 @@ def test_additional_service_package_is_added_unpaid_and_consumed_when_visit_comp
         service_id=uuid4(),
         laser_device_key="candela_gentle",
         patient_package_id=None,
+        billing_context="standard",
         unit_price_minor=100000,
     )
     offer = SimpleNamespace(
@@ -262,6 +263,7 @@ def test_additional_service_package_allows_original_appointment_to_be_paid(
         service_id=uuid4(),
         laser_device_key="candela_gentle",
         patient_package_id=None,
+        billing_context="standard",
         unit_price_minor=100000,
     )
     offer = SimpleNamespace(
@@ -327,6 +329,7 @@ def test_additional_service_package_rejects_when_that_line_was_already_paid(
         service_id=uuid4(),
         laser_device_key="candela_gentle",
         patient_package_id=None,
+        billing_context="standard",
         unit_price_minor=100000,
     )
     offer = SimpleNamespace(
@@ -385,7 +388,7 @@ def test_package_bought_from_visit_replaces_session_price_and_becomes_due() -> N
         billing_context="package_prepaid",
     )
     breakdown = payment_service._appointment_charge_breakdown(
-        _ChargeDb([0, 0, 480000, 0, 0]),
+        _ChargeDb([0, 0, 480000, 0, 0, 0]),
         workspace_id=uuid4(),
         appointment=appointment,
     )
@@ -400,9 +403,24 @@ def test_additional_service_package_replaces_extra_service_price_but_keeps_prima
         billing_context="standard",
     )
     breakdown = payment_service._appointment_charge_breakdown(
-        _ChargeDb([0, 0, 350000, 0, 0]),
+        _ChargeDb([0, 0, 350000, 0, 0, 0]),
         workspace_id=uuid4(),
         appointment=appointment,
     )
 
     assert breakdown == (100000, 0, 0, 350000, 0, 0, 450000)
+
+
+def test_pulse_billed_additional_service_excludes_line_price_and_keeps_overage() -> None:
+    appointment = SimpleNamespace(
+        id=uuid4(),
+        price_minor=100000,
+        billing_context="standard",
+    )
+    breakdown = payment_service._appointment_charge_breakdown(
+        _ChargeDb([0, 0, 0, 0, 0, 90000]),
+        workspace_id=uuid4(),
+        appointment=appointment,
+    )
+
+    assert breakdown == (100000, 0, 0, 0, 0, 90000, 190000)

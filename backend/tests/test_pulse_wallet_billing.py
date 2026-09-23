@@ -289,7 +289,7 @@ def test_pulse_prepaid_visit_charges_only_pack_sales_and_overage() -> None:
 
     class ChargeDb:
         def __init__(self):
-            self.values = iter([0, 0, 0, 250_000, 45_000])
+            self.values = iter([0, 0, 0, 250_000, 45_000, 0])
 
         def scalar(self, _statement):
             return next(self.values)

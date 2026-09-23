@@ -135,7 +135,11 @@ def _create_sqlite_schema(engine) -> None:
             service_name VARCHAR(200) NOT NULL, unit_price_minor INTEGER NOT NULL,
             currency VARCHAR(3) NOT NULL DEFAULT 'EGP',
             laser_device_key VARCHAR(40), laser_device_name VARCHAR(120),
-            patient_package_id CHAR(32),
+            patient_package_id CHAR(32), billing_context VARCHAR(24) DEFAULT 'standard',
+            laser_pulses_used INTEGER, pulse_resolution VARCHAR(16),
+            pulse_resolution_pulse_pack_id CHAR(32),
+            pulse_overage_unit_price_minor INTEGER,
+            pulse_overage_charge_minor INTEGER NOT NULL DEFAULT 0,
             created_by_user_id CHAR(32), created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )

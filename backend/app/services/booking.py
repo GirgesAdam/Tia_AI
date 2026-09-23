@@ -183,6 +183,7 @@ def calculate_availability(
     preloaded_service: Service | None = None,
     laser_device_key: str | None = None,
     exclude_appointment_ids: Collection[UUID] = (),
+    minimum_notice_minutes_override: int | None = None,
 ) -> tuple[str, list[SlotCandidate]]:
     if preloaded_branch is not None:
         if (
@@ -350,7 +351,12 @@ def calculate_availability(
             )
         device_existing = list(db.scalars(device_stmt))
 
-    minimum_start_utc = now_utc + timedelta(minutes=settings.minimum_notice_minutes)
+    minimum_notice_minutes = (
+        settings.minimum_notice_minutes
+        if minimum_notice_minutes_override is None
+        else max(int(minimum_notice_minutes_override), 0)
+    )
+    minimum_start_utc = now_utc + timedelta(minutes=minimum_notice_minutes)
     slots: list[SlotCandidate] = []
 
     doctor_hour_rows = list(
@@ -487,6 +493,7 @@ def find_exact_slot(
     exclude_appointment_id: UUID | None = None,
     laser_device_key: str | None = None,
     exclude_appointment_ids: Collection[UUID] = (),
+    minimum_notice_minutes_override: int | None = None,
 ) -> SlotCandidate:
     requested_utc = requested_start_at.astimezone(UTC)
 
@@ -512,6 +519,7 @@ def find_exact_slot(
         exclude_appointment_id=exclude_appointment_id,
         laser_device_key=laser_device_key,
         exclude_appointment_ids=exclude_appointment_ids,
+        minimum_notice_minutes_override=minimum_notice_minutes_override,
     )
     for slot in slots:
         if slot.start_at == requested_utc:

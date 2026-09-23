@@ -58,6 +58,7 @@ export async function getManualAppointmentAvailability(input: {
       branch_id: branchId,
       service_id: serviceId,
       date,
+      allow_immediate: "true",
     });
     if (input.laserDeviceKey) query.set("laser_device_key", input.laserDeviceKey);
     const response = await tiaRequest<AvailabilityResponse>(`/booking/availability?${query.toString()}`);

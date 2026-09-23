@@ -7,7 +7,6 @@ import {
   CircleX,
   History,
   PackagePlus,
-  Plus,
   ReceiptText,
   Stethoscope,
   Trash2,
@@ -32,10 +31,10 @@ import type {
   PulseBalance,
   PulseBillingSettings,
   PulsePackOffer,
+  PatientPackage,
   Staff,
 } from "@/lib/types";
 import {
-  addAppointmentAdditionalService,
   addAppointmentProduct,
   cancelAppointment,
   confirmAppointment,
@@ -47,6 +46,7 @@ import {
   updateAppointmentStatus,
   updateLaserPulses,
 } from "./actions";
+import { AdditionalServiceForm } from "./additional-service-form";
 import { AppointmentPaymentForm } from "./appointment-payment-form";
 import {
   AppointmentServiceEditor,
@@ -105,6 +105,12 @@ type AppointmentAdditionalService = {
   laser_device_key: string | null;
   laser_device_name: string | null;
   patient_package_id: string | null;
+  billing_context: string;
+  laser_pulses_used: number | null;
+  pulse_resolution: string | null;
+  pulse_resolution_pulse_pack_id: string | null;
+  pulse_overage_unit_price_minor: number | null;
+  pulse_overage_charge_minor: number;
 };
 
 type PackageOffer = {
@@ -161,11 +167,14 @@ export default async function AppointmentOperationsPage({
     tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices").catch(() => []),
   ]);
   const { appointment } = detail;
-  const pulseBalances = appointment.laser_device_key
-    ? await tiaRequest<PulseBalance[]>(
-        `/booking/patients/${appointment.patient_id}/pulse-balance`,
-      ).catch(() => [])
-    : [];
+  const [pulseBalances, patientPackages] = await Promise.all([
+    tiaRequest<PulseBalance[]>(
+      `/booking/patients/${appointment.patient_id}/pulse-balance`,
+    ).catch(() => []),
+    tiaRequest<PatientPackage[]>(
+      `/booking/patients/${appointment.patient_id}/packages`,
+    ).catch(() => []),
+  ]);
   const allowed = new Set(detail.allowed_actions);
   const laserAppointment = appointment as typeof appointment & {
     laser_device_key?: string | null;
@@ -177,6 +186,12 @@ export default async function AppointmentOperationsPage({
   const packageBacked = Boolean(
     appointment.patient_package_id || appointment.billing_context === "package_prepaid" || appointment.package_external_id,
   );
+  const patientPackageMap = new Map(patientPackages.map((item) => [item.id, item]));
+  const primaryPackage = appointment.patient_package_id
+    ? patientPackageMap.get(appointment.patient_package_id) ?? null
+    : appointment.package_external_id
+      ? patientPackages.find((item) => item.external_id === appointment.package_external_id) ?? null
+      : null;
   const pulseBacked = appointment.billing_context === "pulse_prepaid";
   const prepaidBacked = packageBacked || pulseBacked;
   const pulseSettlementPending =
@@ -187,6 +202,22 @@ export default async function AppointmentOperationsPage({
   const patientPulseBalance =
     pulseBalances.find((balance) => balance.device_key === laserAppointment.laser_device_key)
       ?.pulses_remaining ?? 0;
+  const visiblePulseBalances = [...pulseBalances];
+  if (
+    laserAppointment.laser_device_key &&
+    !visiblePulseBalances.some(
+      (balance) => balance.device_key === laserAppointment.laser_device_key,
+    )
+  ) {
+    visiblePulseBalances.unshift({
+      device_key: laserAppointment.laser_device_key as "prime_lase" | "candela_gentle",
+      device_name: laserAppointment.laser_device_name || laserAppointment.laser_device_key,
+      pulses_purchased: 0,
+      pulses_consumed: 0,
+      pulses_remaining: 0,
+      active_pack_count: 0,
+    });
+  }
   const checkoutPulseDeficit = pulseSettlement
     ? pulseSettlement.deficit_pulses
     : Math.max((laserAppointment.laser_pulses_used ?? 0) - patientPulseBalance, 0);
@@ -428,6 +459,38 @@ export default async function AppointmentOperationsPage({
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {(visiblePulseBalances.length > 0 || primaryPackage) && (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/50 p-4">
+                  <div className="text-sm font-black text-teal-950">رصيد العميل وقت الحساب</div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {visiblePulseBalances.map((balance) => (
+                      <div key={balance.device_key} className="rounded-lg bg-white p-3">
+                        <div className="text-xs text-[var(--muted)]">{balance.device_name}</div>
+                        <b className="mt-1 block text-teal-950">
+                          {balance.pulses_remaining.toLocaleString("ar-EG")} Pulse متبقية
+                        </b>
+                        {balance.active_pack_count > 0 && (
+                          <div className="mt-1 text-[11px] text-[var(--muted)]">
+                            من {balance.active_pack_count.toLocaleString("ar-EG")} باقة نشطة
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {primaryPackage && (
+                      <div className="rounded-lg bg-white p-3">
+                        <div className="text-xs text-[var(--muted)]">{primaryPackage.name}</div>
+                        <b className="mt-1 block text-teal-950">
+                          {primaryPackage.sessions_remaining.toLocaleString("ar-EG")} جلسة متبقية
+                        </b>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">
+                          بعد احتساب الحجوزات الحالية من أصل {primaryPackage.sessions_purchased.toLocaleString("ar-EG")} جلسة
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <div className="rounded-xl bg-[var(--surface-2)] p-3">
                   <div className="text-xs text-[var(--muted)]">الخدمة الأساسية</div>
@@ -460,6 +523,9 @@ export default async function AppointmentOperationsPage({
                             offer.service_id === line.service_id &&
                             (!line.laser_device_key || offer.device_key === line.laser_device_key),
                         );
+                        const linePackage = line.patient_package_id
+                          ? patientPackageMap.get(line.patient_package_id) ?? null
+                          : null;
                         return (
                           <div key={line.id} className="rounded-xl bg-slate-50 p-3">
                             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -467,13 +533,18 @@ export default async function AppointmentOperationsPage({
                                 <div className="flex flex-wrap items-center gap-2">
                                   <div className="text-sm font-black">{line.service_name}</div>
                                   {line.patient_package_id && <Badge tone="green">ضمن باكيدج</Badge>}
+                                  {line.billing_context === "pulse_prepaid" && <Badge tone="green">من Pulses</Badge>}
                                 </div>
                                 <div className="mt-1 text-xs text-[var(--muted)]">
                                   {line.laser_device_name ? `${line.laser_device_name} · ` : ""}
-                                  {line.patient_package_id ? "سعر الجلسة الفردية غير محسوب" : formatMoney(line.unit_price_minor, line.currency)}
+                                  {line.patient_package_id
+                                    ? `من الباكيدج · ${(linePackage?.sessions_remaining ?? 0).toLocaleString("ar-EG")} جلسة متبقية`
+                                    : line.billing_context === "pulse_prepaid"
+                                      ? `${(line.laser_pulses_used ?? 0).toLocaleString("ar-EG")} Pulse · سعر الخدمة الفردية غير محسوب`
+                                      : formatMoney(line.unit_price_minor, line.currency)}
                                 </div>
                               </div>
-                              {canEditVisitCharges && !line.patient_package_id && (
+                              {canEditVisitCharges && !line.patient_package_id && line.billing_context !== "pulse_prepaid" && (
                                 <form action={removeAppointmentAdditionalService}>
                                   <input type="hidden" name="appointment_id" value={appointment.id} />
                                   <input type="hidden" name="patient_id" value={appointment.patient_id} />
@@ -483,7 +554,7 @@ export default async function AppointmentOperationsPage({
                               )}
                             </div>
 
-                            {!line.patient_package_id && canEditVisitCharges && linePackageOffers.length > 0 && (
+                            {!line.patient_package_id && line.billing_context === "standard" && canEditVisitCharges && linePackageOffers.length > 0 && (
                               <details className="mt-3 rounded-lg border border-teal-200 bg-white p-3">
                                 <summary className="cursor-pointer text-xs font-black text-teal-800">تحويل الخدمة دي لباكيدج</summary>
                                 <form action={purchasePackageForAdditionalService} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -511,35 +582,19 @@ export default async function AppointmentOperationsPage({
                     </div>
                   )}
                   {canEditVisitCharges ? (
-                    <form action={addAppointmentAdditionalService} className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(150px,220px)_auto] md:items-end">
-                      <input type="hidden" name="appointment_id" value={appointment.id} />
-                      <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                      <label className="text-xs font-bold">
-                        الخدمة
-                        <select name="service_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
-                          <option value="" disabled>اختار خدمة إضافية</option>
-                          {services.filter((item) => item.is_active && item.id !== appointment.service_id).map((item) => (
-                            <option key={item.id} value={item.id}>{item.name}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-xs font-bold">
-                        جهاز الليزر - عند الحاجة
-                        <select name="laser_device_key" defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
-                          <option value="">غير مطلوب</option>
-                          {[...new Map(devicePrices.filter((item) => item.configured).map((item) => [item.device_key, item.device_name])).entries()].map(([key, name]) => (
-                            <option key={key} value={key}>{name}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <Button><Plus size={14} /> إضافة للخدمة والحساب</Button>
-                    </form>
+                    <AdditionalServiceForm
+                      appointmentId={appointment.id}
+                      patientId={appointment.patient_id}
+                      primaryServiceId={appointment.service_id}
+                      services={services}
+                      devicePrices={devicePrices}
+                      pulseBalances={pulseBalances}
+                      pulsePackOffers={pulsePackOffers}
+                      pulseSettings={pulseSettings}
+                    />
                   ) : (
                     <div className="text-xs text-[var(--muted)]">لا يمكن تعديل خدمات زيارة ملغاة أو عدم حضور أو موعد تم تغييره.</div>
                   )}
-                  <div className="text-xs leading-5 text-[var(--muted)]">
-                    الخدمة الإضافية تُضاف للحساب فقط ولا تغيّر وقت الموعد المحجوز أو مدته في الجدول.
-                  </div>
                 </div>
               </details>
 
@@ -645,10 +700,6 @@ export default async function AppointmentOperationsPage({
                           overageCurrency: pulseDeviceSetting?.currency ?? payments.currency,
                           offers: compatiblePulsePackOffers,
                           canSwitchToPulse: pulseBacked || payments.net_paid_minor === 0,
-                          autoUsePulse:
-                            !pulseBacked &&
-                            payments.net_paid_minor === 0 &&
-                            patientPulseBalance > 0,
                         }
                       : null
                   }

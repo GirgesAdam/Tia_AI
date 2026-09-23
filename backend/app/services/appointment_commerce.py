@@ -28,6 +28,10 @@ from app.services.payments import (
     get_appointment_payment_summary,
     refresh_appointment_payment_snapshots,
 )
+from app.services.pulse_billing import (
+    PulseBillingError,
+    apply_additional_service_pulse_billing,
+)
 
 _EDITABLE_VISIT_STATUSES = frozenset(
     {"pending", "confirmed", "checked_in", "in_progress", "completed"}
@@ -100,6 +104,10 @@ def add_additional_service(
     service_id: UUID,
     laser_device_key: str | None,
     created_by_user_id: UUID | None,
+    pulse_mode: str = "none",
+    pulses_used: int | None = None,
+    pulse_pack_offer_id: UUID | None = None,
+    idempotency_key: str | None = None,
 ) -> AppointmentAdditionalService:
     appointment = _locked_appointment(
         db, workspace_id=workspace_id, appointment_id=appointment_id
@@ -190,6 +198,22 @@ def add_additional_service(
     )
     db.add(line)
     db.flush()
+
+    if pulse_mode != "none":
+        try:
+            apply_additional_service_pulse_billing(
+                db,
+                appointment=appointment,
+                line=line,
+                pulses_used=int(pulses_used or 0),
+                mode=pulse_mode,
+                offer_id=pulse_pack_offer_id,
+                changed_by_user_id=created_by_user_id,
+                idempotency_key=idempotency_key,
+            )
+        except PulseBillingError as exc:
+            raise AppointmentCommerceError(str(exc)) from exc
+
     refresh_appointment_payment_snapshots(
         db, workspace_id=workspace_id, appointment_ids={appointment.id}
     )
@@ -237,6 +261,10 @@ def remove_additional_service(
     if line.patient_package_id is not None:
         raise AppointmentCommerceError(
             "A package-backed additional service cannot be removed from the visit."
+        )
+    if line.billing_context == "pulse_prepaid":
+        raise AppointmentCommerceError(
+            "A pulse-billed additional service cannot be removed until its billing is corrected."
         )
     service_id = line.service_id
     db.delete(line)
@@ -388,6 +416,10 @@ def purchase_package_for_additional_service(
     if line is None:
         raise AppointmentCommerceNotFound("Additional service not found.")
 
+    if line.billing_context == "pulse_prepaid":
+        raise AppointmentCommerceError(
+            "A pulse-billed additional service cannot be converted to a package."
+        )
     if line.patient_package_id is not None:
         if idempotency_key:
             existing = db.scalar(

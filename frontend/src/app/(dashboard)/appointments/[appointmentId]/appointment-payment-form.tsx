@@ -33,7 +33,6 @@ type PulseCheckout = {
   overageCurrency: string;
   offers: PulsePackOffer[];
   canSwitchToPulse: boolean;
-  autoUsePulse: boolean;
 };
 
 export function AppointmentPaymentForm({
@@ -57,19 +56,11 @@ export function AppointmentPaymentForm({
   balanceMinor: number;
   pulseCheckout?: PulseCheckout | null;
 }) {
-  const initialPulseBalanceMinor =
-    pulseCheckout?.autoUsePulse && pulseCheckout.deficitPulses === 0
-      ? Math.max(subtotalMinor - servicePriceMinor - discountMinor - netPaidMinor, 0)
-      : balanceMinor;
   const [discount, setDiscount] = useState(major(discountMinor));
-  const [amount, setAmount] = useState(major(initialPulseBalanceMinor));
-  const [billingChoice, setBillingChoice] = useState<BillingChoice>(() => {
-    if (pulseCheckout?.lockedToPulse) return "pulse_pending";
-    if (pulseCheckout?.autoUsePulse) {
-      return pulseCheckout.deficitPulses === 0 ? "pulse_balance" : "pulse_pending";
-    }
-    return "standard";
-  });
+  const [amount, setAmount] = useState(major(balanceMinor));
+  const [billingChoice, setBillingChoice] = useState<BillingChoice>(
+    pulseCheckout?.lockedToPulse ? "pulse_pending" : "standard",
+  );
   const [selectedOfferId, setSelectedOfferId] = useState("");
 
   function subtotalFor(choice: BillingChoice, offerId = selectedOfferId) {
@@ -122,8 +113,7 @@ export function AppointmentPaymentForm({
           ? "overage"
           : "none";
   const pulseSelectionRequired =
-    Boolean(pulseCheckout?.lockedToPulse || pulseCheckout?.autoUsePulse) &&
-    billingChoice === "pulse_pending";
+    Boolean(pulseCheckout?.lockedToPulse) && billingChoice === "pulse_pending";
   const packSelectionRequired =
     billingChoice === "pulse_pack" && !selectedOfferId;
   const coveredFromBalance = pulseCheckout
@@ -157,7 +147,7 @@ export function AppointmentPaymentForm({
             </div>
           </div>
 
-          {!pulseCheckout.lockedToPulse && !pulseCheckout.autoUsePulse && (
+          {!pulseCheckout.lockedToPulse && (
             <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
               <input
                 type="radio"
