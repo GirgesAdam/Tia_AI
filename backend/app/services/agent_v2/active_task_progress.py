@@ -44,8 +44,6 @@ def resolved_operation_parameters(
         params["package_sessions"] = operation.entities.package_sessions
     if operation.package_usage != "unspecified":
         params["package_usage"] = operation.package_usage
-    if operation.pulse_usage != "unspecified":
-        params["pulse_usage"] = operation.pulse_usage
     return params
 
 
@@ -111,6 +109,7 @@ def persist_initial_task_intent(
 def _constraint_parameters(state: BookingTaskState | RescheduleTaskState) -> dict[str, object]:
     constraints = state.constraints if state.task_type == "booking" else state.replacement
     dumped = constraints.model_dump(mode="json")
+    dumped.pop("pulse_usage", None)
     return {
         key: value
         for key, value in dumped.items()
