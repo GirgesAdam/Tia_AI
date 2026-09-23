@@ -120,7 +120,7 @@ def test_pulse_dedupe_identity_preserves_distinct_counts_and_details() -> None:
     assert normalized.operations == [first, second, third]
 
 
-def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) -> None:
+def test_agent_booking_ignores_legacy_pulse_billing_parameter(monkeypatch) -> None:
     workspace = SimpleNamespace(id=uuid4())
     patient = SimpleNamespace(id=uuid4(), status="active")
     captured = {}
@@ -182,11 +182,11 @@ def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) ->
     )
 
     assert result["ok"] is True
-    assert result["pulse_billing_selected"] is True
-    assert result["pulse_consumption_recorded"] is False
-    assert result["billing_context"] == "pulse_prepaid"
+    assert "pulse_billing_selected" not in result
+    assert "pulse_consumption_recorded" not in result
+    assert "billing_context" not in result
     assert "pulse_balance_used" not in result
-    assert captured["use_pulse_balance"] is True
+    assert captured["use_pulse_balance"] is False
 
 
 def test_explicit_pulse_purchase_continuation_inherits_verified_device() -> None:
@@ -220,7 +220,6 @@ def test_explicit_pulse_purchase_continuation_inherits_verified_device() -> None
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(),
-        pulse_usage="use_existing",
         continues_previous=True,
         execution_intent="execute",
     )
@@ -265,7 +264,6 @@ def test_unrelated_pulse_booking_does_not_inherit_previous_purchase_device() -> 
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(),
-        pulse_usage="use_existing",
         continues_previous=False,
         execution_intent="execute",
     )
@@ -289,7 +287,6 @@ def test_pulse_purchase_and_booking_remain_independent_ordered_steps() -> None:
         entities=TurnEntities(
             service=None,
         ),
-        pulse_usage="use_existing",
         execution_intent="execute",
     )
     turn = TiaTurnUnderstanding(
