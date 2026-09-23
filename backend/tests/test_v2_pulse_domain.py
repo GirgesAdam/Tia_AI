@@ -376,6 +376,33 @@ def test_pulse_info_reads_only_requested_facts() -> None:
     ]
 
 
+def test_compound_pack_and_overage_info_plans_both_verified_reads() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=1000,
+        ),
+        requested_pulse_details=["offers", "overage_price"],
+        execution_intent="informational",
+    )
+
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == [
+        "pulse_pack_offers",
+        "pulse_billing_settings",
+    ]
+
+
 def test_buy_pulse_pack_requires_verified_unique_offer() -> None:
     operation = TurnOperation(
         type="buy_pulse_pack",
