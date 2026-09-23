@@ -56,10 +56,8 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
     pulse_count = value.get("pulse_count")
     if isinstance(pulse_count, int) and not isinstance(pulse_count, bool) and pulse_count > 0:
         safe["pulse_count"] = pulse_count
-    for key in ("date", "time", "package_usage", "pulse_usage"):
+    for key in ("date", "time", "package_usage"):
         item = value.get(key)
-        if key == "pulse_usage" and item == "unspecified":
-            continue
         if item not in (None, "", {}, []):
             safe[key] = item
     return safe
