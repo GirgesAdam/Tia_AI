@@ -1183,13 +1183,14 @@ def main() -> None:
                 for row in results
             ],
         }
+    rendered = json.dumps(
+        printable,
+        ensure_ascii=False,
+        separators=(",", ":") if args.compact else None,
+        indent=None if args.compact else 2,
+    )
     print(
-        json.dumps(
-            printable,
-            ensure_ascii=False,
-            separators=(",", ":") if args.compact else None,
-            indent=None if args.compact else 2,
-        ),
+        ("PULSE_DOMAIN_COMPACT=" + rendered) if args.compact else rendered,
         flush=True,
     )
 
