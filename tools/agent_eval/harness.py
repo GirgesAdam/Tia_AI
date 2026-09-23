@@ -235,6 +235,7 @@ class RuntimeProbe:
                     "active_task_tokens_estimated": 0,
                     "pending_choice_tokens_estimated": 0,
                     "recent_verified_read_tokens_estimated": 0,
+                    "recent_verified_action_tokens_estimated": 0,
                     "grounded_outcome_tokens_estimated": 0,
                     "structured_schema_tokens_estimated": 0,
                     "message_tokens_estimated": 0,
