@@ -37,6 +37,10 @@ from app.services.appointment_operations import (
 from app.services.crm_tasks import CRMTaskError, create_crm_task
 from app.services.package_offers import PackageOfferError, purchase_package_offer
 from app.services.patient_packages import PackageOperationError
+from app.services.pulse_billing import (
+    PulseBillingError,
+    purchase_pulse_pack_offer,
+)
 
 
 class WriteExecutionError(ValueError):
@@ -357,6 +361,25 @@ def execute_write_ready_step(
                     "status": package.status,
                     "amount_paid_minor": 0,
                 }
+            elif intent.kind == "buy_pulse_pack":
+                pack = purchase_pulse_pack_offer(
+                    db,
+                    workspace_id=workspace.id,
+                    patient_id=patient.id,
+                    offer_id=_uuid(parameters, "pulse_pack_offer_id"),
+                    amount_paid_minor=0,
+                    payment_method="unknown",
+                    created_by_user_id=None,
+                    idempotency_key=idempotency_key,
+                    actor_type="ai",
+                )
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "patient_pulse_pack_id": str(pack.id),
+                    "status": pack.status,
+                    "amount_paid_minor": 0,
+                }
             elif intent.kind == "follow_up":
                 due_at = _datetime(parameters, "follow_up_at_local")
                 task = create_crm_task(
@@ -453,6 +476,7 @@ def execute_write_ready_step(
         CRMTaskError,
         PackageOfferError,
         PackageOperationError,
+        PulseBillingError,
         WriteExecutionError,
         IntegrityError,
     ) as exc:
