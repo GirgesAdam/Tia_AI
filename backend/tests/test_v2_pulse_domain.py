@@ -13,7 +13,9 @@ from app.agents.v2.turn_contract import (
 )
 from app.services.agent_v2.planner import (
     PlannerContext,
+    PlanStep,
     VerificationFacts,
+    WriteIntent,
     advance_step_after_verification,
     plan_turn,
 )
@@ -191,8 +193,6 @@ def test_agent_pulse_purchase_never_assumes_payment(monkeypatch) -> None:
         "app.services.agent_v2.write_executor.purchase_pulse_pack_offer",
         fake_purchase,
     )
-
-    from app.services.agent_v2.planner import PlanStep, WriteIntent
 
     step = PlanStep(
         operation_index=0,
