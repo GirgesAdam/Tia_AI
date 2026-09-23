@@ -210,12 +210,26 @@ export async function addAppointmentAdditionalService(formData: FormData) {
   const patientId = String(formData.get("patient_id") || "");
   const serviceId = String(formData.get("service_id") || "");
   const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
+  const pulseMode = String(formData.get("pulse_mode") || "none");
+  const pulsesUsedRaw = String(formData.get("pulses_used") || "").trim();
+  const pulsePackOfferId = String(formData.get("pulse_pack_offer_id") || "").trim();
   if (!appointmentId || !serviceId) return;
+  const pulsesUsed = pulsesUsedRaw ? Number(pulsesUsedRaw) : null;
+  if (pulsesUsed !== null && (!Number.isInteger(pulsesUsed) || pulsesUsed <= 0)) {
+    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent("عدد الـPulses لازم يكون رقم صحيح أكبر من صفر.")}`);
+  }
   let errorMessage: string | null = null;
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/additional-services`, {
       method: "POST",
-      body: JSON.stringify({ service_id: serviceId, laser_device_key: laserDeviceKey || null }),
+      headers: { "Idempotency-Key": `appointment-extra-service:${randomUUID()}` },
+      body: JSON.stringify({
+        service_id: serviceId,
+        laser_device_key: laserDeviceKey || null,
+        pulse_mode: pulseMode,
+        pulses_used: pulsesUsed,
+        pulse_pack_offer_id: pulsePackOfferId || null,
+      }),
     });
   } catch (error) {
     errorMessage = appointmentCommerceError(error);

@@ -285,6 +285,7 @@ def get_availability(
     doctor_id: UUID | None = None,
     laser_device_key: str | None = None,
     exclude_appointment_id: UUID | None = None,
+    allow_immediate: bool = False,
 ) -> AvailabilityResponse:
     try:
         timezone_name, slots = calculate_availability(
@@ -296,6 +297,7 @@ def get_availability(
             doctor_id=doctor_id,
             laser_device_key=laser_device_key,
             exclude_appointment_id=exclude_appointment_id,
+            minimum_notice_minutes_override=0 if allow_immediate else None,
         )
     except BookingRuleError as exc:
         raise HTTPException(
@@ -359,6 +361,7 @@ def create_appointment(
             doctor_id=payload.doctor_id,
             requested_start_at=payload.start_at,
             laser_device_key=payload.laser_device_key,
+            minimum_notice_minutes_override=0 if payload.source == "staff" else None,
         )
     except (BookingRuleError, InventoryOperationError) as exc:
         raise booking_conflict(str(exc)) from exc

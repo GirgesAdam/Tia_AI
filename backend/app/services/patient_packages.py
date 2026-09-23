@@ -909,6 +909,7 @@ def reserve_additional_service_package_usage(
         used_at=None,
     )
     line.patient_package_id = package.id
+    line.billing_context = "package_prepaid"
     db.add(usage)
     db.flush()
     record_activity_event(

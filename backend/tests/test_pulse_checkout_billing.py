@@ -318,3 +318,208 @@ def test_device_pricing_migration_contract() -> None:
     assert "uq_pulse_billing_settings_workspace_device" in migration
     assert "device_key" in migration
     assert "uq_pulse_billing_settings_workspace_device" in model
+
+
+def _additional_line(*, device_key: str = "candela_gentle"):
+    return SimpleNamespace(
+        id=uuid4(),
+        patient_package_id=None,
+        billing_context="standard",
+        laser_device_key=device_key,
+        laser_pulses_used=None,
+        pulse_resolution=None,
+        pulse_resolution_pulse_pack_id=None,
+        pulse_overage_unit_price_minor=None,
+        pulse_overage_charge_minor=0,
+    )
+
+
+def test_additional_service_can_use_existing_pulse_balance(monkeypatch) -> None:
+    appointment = _appointment(pulses_used=0)
+    line = _additional_line()
+    db = FakeDb()
+    monkeypatch.setattr(
+        pulse_service,
+        "_consume_from_available_packs",
+        lambda *args, **kwargs: 450,
+    )
+    monkeypatch.setattr(
+        pulse_service,
+        "record_activity_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = pulse_service.apply_additional_service_pulse_billing(
+        db,
+        appointment=appointment,
+        line=line,
+        pulses_used=450,
+        mode="use_balance",
+        offer_id=None,
+        changed_by_user_id=None,
+        idempotency_key="extra-balance",
+    )
+
+    assert result.billing_context == "pulse_prepaid"
+    assert result.laser_pulses_used == 450
+    assert result.pulse_resolution == "balance"
+    assert result.pulse_overage_charge_minor == 0
+
+
+def test_additional_service_overage_uses_its_own_device_price(monkeypatch) -> None:
+    appointment = _appointment(pulses_used=0)
+    appointment.laser_device_key = "prime_lase"
+    line = _additional_line(device_key="candela_gentle")
+    db = FakeDb()
+    monkeypatch.setattr(
+        pulse_service,
+        "_consume_from_available_packs",
+        lambda *args, **kwargs: 200,
+    )
+    captured = {}
+
+    def fake_price(*args, **kwargs):
+        captured.update(kwargs)
+        return 300, "EGP"
+
+    monkeypatch.setattr(pulse_service, "_device_overage_price", fake_price)
+    monkeypatch.setattr(
+        pulse_service,
+        "record_activity_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = pulse_service.apply_additional_service_pulse_billing(
+        db,
+        appointment=appointment,
+        line=line,
+        pulses_used=500,
+        mode="overage",
+        offer_id=None,
+        changed_by_user_id=None,
+        idempotency_key="extra-overage",
+    )
+
+    assert captured["device_key"] == "candela_gentle"
+    assert result.billing_context == "pulse_prepaid"
+    assert result.pulse_resolution == "overage"
+    assert result.pulse_overage_unit_price_minor == 300
+    assert result.pulse_overage_charge_minor == 90_000
+
+
+def test_release_visit_pulses_reverses_additional_service_usage_when_primary_is_standard(
+    monkeypatch,
+) -> None:
+    appointment = _appointment(pulses_used=0, billing_context="standard")
+    line = _additional_line()
+    line.billing_context = "pulse_prepaid"
+    line.laser_pulses_used = 500
+    line.pulse_resolution = "overage"
+    line.pulse_overage_unit_price_minor = 300
+    line.pulse_overage_charge_minor = 90_000
+    usage = SimpleNamespace(status="consumed")
+
+    class Rows:
+        def __init__(self, values):
+            self.values = values
+
+        def all(self):
+            return list(self.values)
+
+    class ReleaseDb:
+        def __init__(self):
+            self.batches = [[line], [usage]]
+            self.flush_count = 0
+
+        def scalars(self, _statement):
+            return Rows(self.batches.pop(0))
+
+        def flush(self):
+            self.flush_count += 1
+
+    db = ReleaseDb()
+    monkeypatch.setattr(
+        pulse_service,
+        "refresh_appointment_payment_snapshots",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        pulse_service,
+        "record_activity_event",
+        lambda *args, **kwargs: None,
+    )
+
+    pulse_service.release_appointment_pulse_usage(
+        db,
+        appointment=appointment,
+        changed_by_user_id=None,
+        reason="appointment_cancelled",
+    )
+
+    assert usage.status == "reversed"
+    assert appointment.laser_pulses_used == 0
+    assert line.billing_context == "pulse_prepaid"
+    assert line.laser_pulses_used == 0
+    assert line.pulse_resolution == "balance"
+    assert line.pulse_overage_unit_price_minor is None
+    assert line.pulse_overage_charge_minor == 0
+
+
+def test_additional_service_pulse_migration_contract() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    migration = (
+        root / "alembic/versions/0084_additional_service_pulses.py"
+    ).read_text(encoding="utf-8")
+    model = (
+        root / "app/models/appointment_additional_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision: str = "0084_extra_service_pulses"' in migration
+    assert 'down_revision: str | Sequence[str] | None = "0083_pulse_device_pricing"' in migration
+    assert "appointment_additional_service_id" in migration
+    assert "pulse_prepaid" in model
+
+
+def test_appointment_ui_keeps_standard_payment_optional_and_shows_balances() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    payment_form = (
+        root
+        / "frontend/src/app/(dashboard)/appointments/[appointmentId]/appointment-payment-form.tsx"
+    ).read_text(encoding="utf-8")
+    page = (
+        root
+        / "frontend/src/app/(dashboard)/appointments/[appointmentId]/page.tsx"
+    ).read_text(encoding="utf-8")
+    additional_form = (
+        root
+        / "frontend/src/app/(dashboard)/appointments/[appointmentId]/additional-service-form.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert 'pulseCheckout?.lockedToPulse ? "pulse_pending" : "standard"' in payment_form
+    assert 'checked={billingChoice === "standard"}' in payment_form
+    assert 'onChange={() => chooseBilling("standard")}' in payment_form
+    assert "visiblePulseBalances" in page
+    assert "primaryPackage.sessions_remaining" in page
+    assert "pulseBalances={pulseBalances}" in page
+    assert "pulsePackOffers={pulsePackOffers}" in page
+    assert 'useState<"standard" | "pulse">("standard")' in additional_form
+    assert 'name="pulses_used"' in additional_form
+    assert '"use_balance"' in additional_form
+
+
+def test_manual_booking_ui_requests_immediate_staff_availability() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    actions = (
+        root / "frontend/src/app/(dashboard)/appointments/actions.ts"
+    ).read_text(encoding="utf-8")
+    booking_route = (root / "backend/app/api/routes/booking.py").read_text(encoding="utf-8")
+
+    assert 'allow_immediate: "true"' in actions
+    assert 'minimum_notice_minutes_override=0 if allow_immediate else None' in booking_route
+    assert 'minimum_notice_minutes_override=0 if payload.source == "staff" else None' in booking_route

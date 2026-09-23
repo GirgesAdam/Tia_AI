@@ -33,6 +33,26 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
             name="appointment_additional_service_device_valid",
         ),
+        CheckConstraint(
+            "billing_context IN ('standard', 'package_prepaid', 'pulse_prepaid')",
+            name="appointment_additional_service_billing_context_valid",
+        ),
+        CheckConstraint(
+            "laser_pulses_used IS NULL OR laser_pulses_used >= 0",
+            name="appointment_additional_service_pulses_non_negative",
+        ),
+        CheckConstraint(
+            "pulse_resolution IS NULL OR pulse_resolution IN ('balance', 'new_pack', 'overage')",
+            name="appointment_additional_service_pulse_resolution_valid",
+        ),
+        CheckConstraint(
+            "pulse_overage_unit_price_minor IS NULL OR pulse_overage_unit_price_minor > 0",
+            name="appointment_additional_service_pulse_overage_price_positive",
+        ),
+        CheckConstraint(
+            "pulse_overage_charge_minor >= 0",
+            name="appointment_additional_service_pulse_overage_non_negative",
+        ),
         ForeignKeyConstraint(
             ["workspace_id", "appointment_id"],
             ["appointments.workspace_id", "appointments.id"],
@@ -51,10 +71,20 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
             name="fk_appointment_additional_services_patient_package",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "pulse_resolution_pulse_pack_id"],
+            ["patient_pulse_packs.workspace_id", "patient_pulse_packs.id"],
+            ondelete="RESTRICT",
+            name="fk_additional_service_pulse_resolution_pack",
+        ),
         Index(
             "ix_appointment_additional_services_workspace_appointment",
             "workspace_id",
             "appointment_id",
+        ),
+        Index(
+            "ix_additional_service_pulse_resolution_pack",
+            "pulse_resolution_pulse_pack_id",
         ),
     )
 
@@ -69,6 +99,16 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     laser_device_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
     laser_device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    billing_context: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="standard", server_default="standard"
+    )
+    laser_pulses_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pulse_resolution: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pulse_resolution_pulse_pack_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    pulse_overage_unit_price_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pulse_overage_charge_minor: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

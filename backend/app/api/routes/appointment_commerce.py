@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
@@ -32,6 +32,23 @@ router = APIRouter()
 class AdditionalServiceCreate(BaseModel):
     service_id: UUID
     laser_device_key: Literal["prime_lase", "candela_gentle"] | None = None
+    pulse_mode: Literal["none", "use_balance", "purchase_pack", "overage"] = "none"
+    pulses_used: int | None = Field(default=None, gt=0, le=10_000_000)
+    pulse_pack_offer_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_pulse_billing(self) -> AdditionalServiceCreate:
+        if self.pulse_mode == "none":
+            if self.pulse_pack_offer_id is not None:
+                raise ValueError("pulse_pack_offer_id requires pulse billing.")
+            return self
+        if self.pulses_used is None:
+            raise ValueError("pulses_used is required when using pulse billing.")
+        if self.pulse_mode == "purchase_pack" and self.pulse_pack_offer_id is None:
+            raise ValueError("Select a pulse pack for purchase_pack billing.")
+        if self.pulse_mode != "purchase_pack" and self.pulse_pack_offer_id is not None:
+            raise ValueError("pulse_pack_offer_id is only valid with purchase_pack billing.")
+        return self
 
 
 class AdditionalServiceRead(BaseModel):
@@ -44,6 +61,12 @@ class AdditionalServiceRead(BaseModel):
     laser_device_key: str | None
     laser_device_name: str | None
     patient_package_id: UUID | None
+    billing_context: str
+    laser_pulses_used: int | None
+    pulse_resolution: str | None
+    pulse_resolution_pulse_pack_id: UUID | None
+    pulse_overage_unit_price_minor: int | None
+    pulse_overage_charge_minor: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -99,6 +122,9 @@ def create_additional_service(
     payload: AdditionalServiceCreate,
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None, Header(alias="Idempotency-Key", max_length=128)
+    ] = None,
 ) -> AppointmentAdditionalService:
     _require_local_write(db, access.workspace.id)
     try:
@@ -109,6 +135,10 @@ def create_additional_service(
             service_id=payload.service_id,
             laser_device_key=payload.laser_device_key,
             created_by_user_id=access.user.id,
+            pulse_mode=payload.pulse_mode,
+            pulses_used=payload.pulses_used,
+            pulse_pack_offer_id=payload.pulse_pack_offer_id,
+            idempotency_key=idempotency_key,
         )
         db.commit()
         db.refresh(line)
