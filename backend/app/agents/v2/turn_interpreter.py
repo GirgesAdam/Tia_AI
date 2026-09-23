@@ -371,6 +371,35 @@ def merge_verified_read_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_verified_action_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Inherit only facts the model explicitly links to the previous verified action."""
+    raw = semantic_context.model_input.get("recent_verified_action")
+    if not isinstance(raw, dict) or raw.get("operation_type") != "buy_pulse_pack":
+        return turn
+
+    device = _reference_from_verified(raw, single_key="device_ref")
+    operations = []
+    for operation in turn.operations:
+        entities = operation.entities
+        if (
+            operation.continues_previous
+            and operation.type == "book"
+            and operation.pulse_usage == "use_existing"
+            and entities.device is None
+            and device is not None
+        ):
+            entities = entities.model_copy(update={"device": device})
+            operation = operation.model_copy(update={"entities": entities})
+        operations.append(operation)
+
+    if operations == turn.operations:
+        return turn
+    return turn.model_copy(update={"operations": operations})
+
+
 def interpret_customer_turn_v2(
     *,
     history: list[BaseMessage],
@@ -423,6 +452,7 @@ def interpret_customer_turn_v2(
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
     continued = merge_verified_read_context(invocation.value, semantic_context)
+    continued = merge_verified_action_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
     normalized = normalize_semantic_invariants(grounded)
     resolved = resolve_turn_times_by_clinic_hours(normalized, semantic_context)
