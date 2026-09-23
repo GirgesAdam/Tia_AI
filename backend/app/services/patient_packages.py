@@ -1,5 +1,3 @@
-[Reading 1134 lines from start (total: 1134 lines, 0 remaining)]
-
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
@@ -1134,5 +1132,3 @@ def transfer_package_usage(
     to_appointment.amount_paid_minor = None
     to_appointment.payment_method = "unknown"
     return usage
-
-[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
