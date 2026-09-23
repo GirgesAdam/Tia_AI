@@ -6,7 +6,12 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.turn_normalization import (
+    dedupe_exact_operations,
+    normalize_semantic_invariants,
+)
 from app.agents.v2.turn_contract import (
+    EntityReference,
     TiaTurnUnderstanding,
     TurnEntities,
     TurnOperation,
@@ -36,6 +41,150 @@ def _planner_context() -> PlannerContext:
         active_task=None,
         now=NOW,
     )
+
+
+def test_pulse_pack_pricing_normalizes_from_structured_semantics() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=1000,
+        ),
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+    result = normalized.operations[0]
+
+    assert result.type == "pulse_info"
+    assert result.entities.pulse_count == 1000
+    assert result.entities.device == operation.entities.device
+    assert result.requested_service_details == []
+    assert result.requested_pulse_details == ["offers"]
+    assert result.execution_intent == "informational"
+
+
+def test_pulse_pricing_normalizer_does_not_override_service_pricing() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text="Full Body"),
+            pulse_count=1000,
+        ),
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+
+    assert normalized.operations[0] == operation
+
+
+def test_pulse_dedupe_identity_preserves_distinct_counts_and_details() -> None:
+    first = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=1000),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    second = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=2000),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    third = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=1000),
+        requested_pulse_details=["balance"],
+        execution_intent="informational",
+    )
+
+    normalized = dedupe_exact_operations(
+        TiaTurnUnderstanding(
+            operations=[first, second, third],
+            safety_signals=[],
+        )
+    )
+
+    assert normalized.operations == [first, second, third]
+
+
+def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) -> None:
+    workspace = SimpleNamespace(id=uuid4())
+    patient = SimpleNamespace(id=uuid4(), status="active")
+    captured = {}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.require_tia_workspace_domain_write",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None,
+            package_used=False,
+            package_name=None,
+        ),
+    )
+
+    def fake_create(_db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=uuid4(), status="pending")
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.create_appointment_operation",
+        fake_create,
+    )
+
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters={
+                "branch_id": str(uuid4()),
+                "doctor_id": str(uuid4()),
+                "service_id": str(uuid4()),
+                "start_at": "2026-09-25T14:00:00+03:00",
+                "device_key": "candela_gentle",
+                "package_usage": "unspecified",
+                "pulse_usage": "use_existing",
+            },
+        ),
+        response_goal="booking_completed",
+    )
+    db = SimpleNamespace(
+        begin_nested=lambda: nullcontext(),
+        commit=lambda: None,
+        rollback=lambda: None,
+    )
+
+    result = execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=step,
+        idempotency_key="pulse-booking-test",
+        commit=False,
+    )
+
+    assert result["ok"] is True
+    assert result["pulse_billing_selected"] is True
+    assert result["pulse_consumption_recorded"] is False
+    assert result["billing_context"] == "pulse_prepaid"
+    assert "pulse_balance_used" not in result
+    assert captured["use_pulse_balance"] is True
 
 
 def test_pulse_purchase_and_booking_remain_independent_ordered_steps() -> None:
