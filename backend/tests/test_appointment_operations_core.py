@@ -106,6 +106,7 @@ def test_reschedule_preserves_existing_payment_state() -> None:
     assert "payment_status=current.payment_status" in source
     assert "amount_paid_minor=current.amount_paid_minor" in source
     assert "payment_method=current.payment_method" in source
+    assert "billing_context=current.billing_context" in source
 
 
 def test_appointment_operations_ui_uses_verified_slots_and_backend_actions() -> None:
@@ -167,6 +168,8 @@ def test_reschedule_canonical_contract_preserves_lineage_and_relationship_transf
     assert "transfer_package_usage(" in source
     assert "from_appointment=current" in source
     assert "to_appointment=replacement" in source
+    assert "release_appointment_pulse_usage(" in source
+    assert 'reason="appointment_rescheduled"' in source
 
 
 def test_ai_cancellation_inside_notice_maps_to_human_handoff_contract() -> None:
