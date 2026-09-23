@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
         "--case",
         action="append",
         default=[],
-        help="Run only the named case function suffix; may be repeated.",
+        help="Run only an exact case function suffix (the text after case_); may be repeated.",
     )
     parser.add_argument(
         "--compact",
