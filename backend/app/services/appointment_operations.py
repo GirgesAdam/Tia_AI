@@ -23,6 +23,11 @@ from app.services.patient_packages import (
     transfer_package_usage,
 )
 from app.services.payments import reallocate_appointment_payments_on_reschedule
+from app.services.pulse_billing import (
+    PulseBillingError,
+    release_appointment_pulse_usage,
+    require_pulse_settlement_before_completion,
+)
 
 AppointmentOperationAction = Literal[
     "confirm",
@@ -65,7 +70,7 @@ def service_change_requires_human(
     """Fail closed when changing service could alter money or package entitlement."""
     return bool(
         patient_package_id is not None
-        or billing_context == "package_prepaid"
+        or billing_context in {"package_prepaid", "pulse_prepaid"}
         or package_external_id
         or payment_status not in {"unknown", "unpaid"}
         or int(amount_paid_minor or 0) > 0
@@ -314,6 +319,12 @@ def cancel_appointment_operation(
         )
     except PackageOperationError as exc:
         raise AppointmentOperationError(str(exc)) from exc
+    release_appointment_pulse_usage(
+        db,
+        appointment=appointment,
+        changed_by_user_id=changed_by_user_id,
+        reason="appointment_cancelled",
+    )
     record_activity_event(
         db,
         workspace_id=appointment.workspace_id,
@@ -496,6 +507,12 @@ def reschedule_appointment_operation(
         )
     except PackageOperationError as exc:
         raise AppointmentOperationError(str(exc)) from exc
+    release_appointment_pulse_usage(
+        db,
+        appointment=current,
+        changed_by_user_id=changed_by_user_id,
+        reason="appointment_rescheduled",
+    )
     transfer_campaign_booking_conversion(
         db,
         workspace_id=workspace.id,
@@ -602,6 +619,12 @@ def update_operational_status_operation(
             "An appointment cannot be completed or marked no-show before its start time."
         )
 
+    if target_status == "completed":
+        try:
+            require_pulse_settlement_before_completion(db, appointment=appointment)
+        except PulseBillingError as exc:
+            raise AppointmentOperationError(str(exc)) from exc
+
     old_status = appointment.status
     appointment.status = target_status
     if target_status == "completed":
@@ -646,6 +669,12 @@ def update_operational_status_operation(
                     appointment=appointment,
                     actor_type=actor_type,
                     actor_user_id=changed_by_user_id,
+                    reason="patient_no_show",
+                )
+                release_appointment_pulse_usage(
+                    db,
+                    appointment=appointment,
+                    changed_by_user_id=changed_by_user_id,
                     reason="patient_no_show",
                 )
         except PackageOperationError as exc:

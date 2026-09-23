@@ -68,6 +68,7 @@ class QuickAppointmentCreate(BaseModel):
     doctor_id: UUID
     service_id: UUID
     patient_package_id: UUID | None = None
+    use_pulse_balance: bool = False
     start_at: datetime
     customer_note: str | None = Field(default=None, max_length=5000)
     laser_device_key: LaserDeviceKey | None = None
@@ -97,6 +98,7 @@ class AppointmentCreate(BaseModel):
     doctor_assignment_known: bool = True
     service_id: UUID
     patient_package_id: UUID | None = None
+    use_pulse_balance: bool = False
     lead_id: UUID | None = None
     start_at: datetime
     source: AppointmentSource = "staff"

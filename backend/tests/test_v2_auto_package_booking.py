@@ -284,3 +284,114 @@ def test_write_executor_passes_auto_resolved_package_to_canonical_booking(monkey
 
     assert result["ok"] is True
     assert captured["patient_package_id"] == package_id
+
+
+def test_write_executor_uses_pulse_balance_without_auto_consuming_session_package(monkeypatch):
+    service_id, branch_id, doctor_id = uuid4(), uuid4(), uuid4()
+    workspace, patient = _workspace(), _patient()
+    captured_resolver = {}
+    captured_create = {}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.require_tia_workspace_domain_write",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_resolve(_db, **kwargs):
+        captured_resolver.update(kwargs)
+        return BookingPackageResolution(
+            package_id=None,
+            package_name=None,
+            package_used=False,
+            usage_mode=str(kwargs["package_usage"]),
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.resolve_booking_package",
+        fake_resolve,
+    )
+
+    def fake_create(_db, **kwargs):
+        captured_create.update(kwargs)
+        return SimpleNamespace(id=uuid4(), status="confirmed")
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.create_appointment_operation",
+        fake_create,
+    )
+    db = SimpleNamespace(begin_nested=lambda: nullcontext(), commit=lambda: None, rollback=lambda: None)
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters={
+                "branch_id": str(branch_id),
+                "doctor_id": str(doctor_id),
+                "service_id": str(service_id),
+                "device_key": "candela_gentle",
+                "start_at": "2026-09-15T10:00:00+03:00",
+                "package_usage": "unspecified",
+                "pulse_usage": "use_existing",
+            },
+        ),
+        response_goal="booking_completed",
+    )
+
+    result = execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=step,
+        commit=False,
+    )
+
+    assert result["ok"] is True
+    assert result["pulse_balance_used"] is True
+    assert result["billing_context"] == "pulse_prepaid"
+    assert captured_resolver["package_usage"] == "avoid_existing"
+    assert captured_create["patient_package_id"] is None
+    assert captured_create["use_pulse_balance"] is True
+
+
+def test_write_executor_fails_closed_on_package_and_pulse_double_entitlement(monkeypatch):
+    service_id, branch_id, doctor_id = uuid4(), uuid4(), uuid4()
+    workspace, patient = _workspace(), _patient()
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.require_tia_workspace_domain_write",
+        lambda *_args, **_kwargs: None,
+    )
+    db = SimpleNamespace(begin_nested=lambda: nullcontext(), commit=lambda: None, rollback=lambda: None)
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters={
+                "branch_id": str(branch_id),
+                "doctor_id": str(doctor_id),
+                "service_id": str(service_id),
+                "device_key": "candela_gentle",
+                "start_at": "2026-09-15T10:00:00+03:00",
+                "package_usage": "use_existing",
+                "pulse_usage": "use_existing",
+            },
+        ),
+        response_goal="booking_completed",
+    )
+
+    result = execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=step,
+        commit=False,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "write_failed"
+    assert "cannot use a session package and pulse balance" in str(result["detail"])

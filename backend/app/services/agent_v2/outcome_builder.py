@@ -33,6 +33,7 @@ _INTERNAL_KEYS = frozenset(
         "package_external_id",
         "laser_device_key",
         "device_key",
+        "pulse_usage",
         "doctor_ids",
         "service_ids",
         "branch_ids",
@@ -84,7 +85,10 @@ def _visible_dict(value: dict[str, Any]) -> dict[str, object]:
                 visible[key.removesuffix("_minor")] = converted
             continue
         if key == "billing_context":
-            visible["billing"] = "package" if item == "package_prepaid" else "standard"
+            visible["billing"] = {
+                "package_prepaid": "package",
+                "pulse_prepaid": "pulse_balance",
+            }.get(str(item), "standard")
             continue
         normalized = _visible_value(item)
         if normalized not in (None, {}, []):

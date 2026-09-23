@@ -165,13 +165,26 @@ def _create_sqlite_schema(engine) -> None:
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
             origin_appointment_id CHAR(32), patient_id CHAR(32), created_by_user_id CHAR(32),
-            reference_transaction_id CHAR(32), patient_package_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
+            reference_transaction_id CHAR(32), patient_package_id CHAR(32), patient_pulse_pack_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
             currency VARCHAR(3), payment_method VARCHAR(24), source VARCHAR(24),
             external_reference VARCHAR(128), reason TEXT, idempotency_key VARCHAR(128),
             created_at DATETIME
         )
         """,
         "CREATE UNIQUE INDEX uq_test_payment_idempotency ON payment_transactions(workspace_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+        """
+        CREATE TABLE patient_pulse_packs (
+            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32),
+            origin_appointment_id CHAR(32), sale_price_minor INTEGER DEFAULT 0,
+            status VARCHAR(16) DEFAULT 'active'
+        )
+        """,
+        """
+        CREATE TABLE appointment_pulse_settlements (
+            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
+            overage_charge_minor INTEGER DEFAULT 0, resolution VARCHAR(16) DEFAULT 'pending'
+        )
+        """,
         """
         CREATE TABLE payment_allocations (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), transaction_id CHAR(32),

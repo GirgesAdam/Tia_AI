@@ -120,6 +120,12 @@ function appointmentErrorMessage(error: unknown, bookingMode: "quick" | "standar
   if (detail.includes("laser device cannot be selected")) {
     return "الخدمة المختارة لا تستخدم جهاز ليزر.";
   }
+  if (detail.includes("no available pulse balance")) {
+    return "لا يوجد رصيد Pulses متاح للعميل على الجهاز المختار.";
+  }
+  if (detail.includes("either a session package or pulse balance")) {
+    return "اختار طريقة حساب واحدة فقط: باكيدج جلسات أو رصيد Pulses.";
+  }
   if (detail.includes("scheduling override could not be applied")) {
     return "تعذر تطبيق تجاوز التعارض الزمني للحجز السريع بسبب إعداد غير متوقع في قاعدة البيانات. لم يتم إنشاء الموعد.";
   }
@@ -198,6 +204,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     const serviceId = String(formData.get("service_id") || "").trim();
     const startsAt = String(formData.get("start_at") || "").trim();
     const packageId = String(formData.get("patient_package_id") || "").trim();
+    const usePulseBalance = String(formData.get("use_pulse_balance") || "false") === "true";
     const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
     if (!patientId || !branchId || !doctorId || !serviceId || !startsAt) return { ok: false, message: "كمّل بيانات العميل والخدمة والدكتور والموعد." };
 
@@ -211,6 +218,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
         doctor_id: doctorId,
         service_id: serviceId,
         patient_package_id: packageId || null,
+        use_pulse_balance: usePulseBalance,
         laser_device_key: laserDeviceKey || null,
         start_at: manualStartToIso(startsAt, clinicTimezone),
         ...(bookingMode === "standard" ? { source: "staff" } : {}),

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { appointmentLabels } from "@/lib/status";
-import type { Appointment, Doctor, Patient, PatientPackage, Service, Staff } from "@/lib/types";
+import type { Appointment, Doctor, Patient, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 
 type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
@@ -31,6 +31,7 @@ export function QuickAppointmentDialog({
   patient,
   history,
   packages,
+  pulseBalances,
   services,
   doctors,
   staff,
@@ -47,6 +48,7 @@ export function QuickAppointmentDialog({
   patient: Patient | null;
   history: Appointment[];
   packages: PatientPackage[];
+  pulseBalances: PulseBalance[];
   services: Service[];
   doctors: Doctor[];
   staff: Staff[];
@@ -136,6 +138,7 @@ export function QuickAppointmentDialog({
                 doctors={doctors}
                 staff={staff}
                 packages={packages}
+                pulseBalances={pulseBalances}
                 fixedLaserDeviceKey={column === "quick" ? undefined : fixedLaserDeviceKey}
                 allowedOperationalCategory={column === "quick" ? undefined : allowedOperationalCategory}
                 windowStartMinutes={windowStartMinutes}

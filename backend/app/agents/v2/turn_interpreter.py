@@ -141,8 +141,13 @@ SEMANTIC PRINCIPLES
   not force a service choice from the catalog. Unless one specific service is clearly named, leave
   the service entity null so Python can read the customer's actual appointments first.
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
-  whether an appointment should consume an existing package, avoid an existing package, or leaves
-  that question unspecified.
+  whether an appointment should consume an existing session package, avoid an existing package, or
+  leaves that question unspecified.
+- pulse_usage is independent from session-package usage and applies only to laser appointment
+  booking. Set pulse_usage=use_existing only when the customer explicitly asks to use their prepaid
+  Pulses/pulse balance for the appointment. Set avoid_existing only when they explicitly say not to
+  use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
+  customer may own Pulses. A booking cannot consume both a session package and pulse balance.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the

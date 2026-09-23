@@ -166,11 +166,11 @@ export interface AppointmentOperationsDetail {
 }
 export interface PaymentTransaction {
   id:string; workspace_id:string; appointment_id:string|null; origin_appointment_id:string|null; patient_id:string; created_by_user_id:string|null;
-  reference_transaction_id:string|null; patient_package_id:string|null; transaction_type:"payment"|"refund"; amount_minor:number; allocated_amount_minor:number|null; currency:string; payment_method:string;
+  reference_transaction_id:string|null; patient_package_id:string|null; patient_pulse_pack_id:string|null; transaction_type:"payment"|"refund"; amount_minor:number; allocated_amount_minor:number|null; currency:string; payment_method:string;
   source:string; external_reference:string|null; reason:string|null; created_at:string; refunded_minor:number; refundable_minor:number;
 }
 export interface AppointmentPaymentSummary {
-  appointment_id:string; patient_id:string; currency:string; price_minor:number; subtotal_minor:number; discount_minor:number; service_price_minor:number; products_total_minor:number; additional_services_total_minor:number; package_sales_total_minor:number; gross_paid_minor:number; refunded_minor:number;
+  appointment_id:string; patient_id:string; currency:string; price_minor:number; subtotal_minor:number; discount_minor:number; service_price_minor:number; products_total_minor:number; additional_services_total_minor:number; package_sales_total_minor:number; pulse_pack_sales_total_minor:number; pulse_overage_total_minor:number; gross_paid_minor:number; refunded_minor:number;
   net_paid_minor:number; balance_minor:number; payment_status:string; billing_context:string; package_external_id:string|null; transactions:PaymentTransaction[]; can_refund:boolean;
 }
 export interface PatientPackage {
@@ -178,6 +178,29 @@ export interface PatientPackage {
   name:string; sessions_purchased:number; sessions_reserved:number; sessions_consumed:number; sessions_remaining:number;
   sale_price_minor:number; standalone_session_price_minor_at_purchase:number|null; currency:string; purchased_at:string; expires_at:string|null; status:string; effective_status:string; source:string;
   created_at:string; updated_at:string;
+}
+export interface PulseBillingSettings {
+  overage_price_minor:number|null; currency:string;
+}
+export interface PulsePackOffer {
+  id:string; workspace_id:string; device_key:"prime_lase"|"candela_gentle"; device_name:string;
+  pulses_count:number; price_minor:number; currency:string; is_active:boolean; created_at:string; updated_at:string;
+}
+export interface PatientPulsePack {
+  id:string; workspace_id:string; patient_id:string; pulse_pack_offer_id:string|null; origin_appointment_id:string|null; purchase_transaction_id:string|null;
+  device_key:"prime_lase"|"candela_gentle"; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number;
+  sale_price_minor:number; amount_paid_minor:number; amount_refunded_minor:number; balance_due_minor:number;
+  standalone_pulse_price_minor_at_purchase:number|null; currency:string; purchased_at:string; expires_at:string|null; status:string; effective_status:string;
+  created_at:string; updated_at:string;
+}
+export interface PulseBalance {
+  device_key:"prime_lase"|"candela_gentle"; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number; active_pack_count:number;
+}
+export interface AppointmentPulseSettlement {
+  appointment_id:string; pulses_used:number; pulses_from_balance:number; deficit_pulses:number;
+  resolution:"pending"|"balance"|"new_pack"|"overage"; resolution_pulse_pack_id:string|null;
+  overage_unit_price_minor:number|null; overage_charge_minor:number; resolved_at:string|null;
+  available_balance_after:number; currency:string;
 }
 
 export interface AvailabilitySlot {

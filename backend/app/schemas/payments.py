@@ -52,6 +52,7 @@ class PaymentTransactionRead(BaseModel):
     created_by_user_id: UUID | None
     reference_transaction_id: UUID | None
     patient_package_id: UUID | None = None
+    patient_pulse_pack_id: UUID | None = None
     transaction_type: PaymentTransactionType
     amount_minor: int
     allocated_amount_minor: int | None = None
@@ -79,6 +80,8 @@ class AppointmentPaymentSummaryRead(BaseModel):
     products_total_minor: int = 0
     additional_services_total_minor: int = 0
     package_sales_total_minor: int = 0
+    pulse_pack_sales_total_minor: int = 0
+    pulse_overage_total_minor: int = 0
     gross_paid_minor: int
     refunded_minor: int
     net_paid_minor: int

@@ -11,7 +11,10 @@ def _appointment_has_financial_effect(row: dict[str, object]) -> bool:
 
     if row.get("patient_package_id") or row.get("package_external_id"):
         return True
-    if str(row.get("billing_context") or "").strip().lower() == "package_prepaid":
+    if str(row.get("billing_context") or "").strip().lower() in {
+        "package_prepaid",
+        "pulse_prepaid",
+    }:
         return True
     try:
         if int(row.get("amount_paid_minor") or 0) > 0:

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    PackageUsage,
+    PulseUsage,
+    TimeConstraint,
+)
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingTaskState,
@@ -182,7 +187,25 @@ def apply_booking_package_usage_change(
 ) -> BookingTaskState:
     if state.constraints.package_usage == package_usage:
         return state
-    constraints = state.constraints.model_copy(update={"package_usage": package_usage})
+    update: dict[str, object] = {"package_usage": package_usage}
+    if package_usage == "use_existing":
+        update["pulse_usage"] = "avoid_existing"
+    constraints = state.constraints.model_copy(update=update)
+    derived = _booking_derived(state, clear_package=True)
+    return _next_booking_state(state, constraints=constraints, derived=derived)
+
+
+def apply_booking_pulse_usage_change(
+    state: BookingTaskState,
+    *,
+    pulse_usage: PulseUsage,
+) -> BookingTaskState:
+    if state.constraints.pulse_usage == pulse_usage:
+        return state
+    update: dict[str, object] = {"pulse_usage": pulse_usage}
+    if pulse_usage == "use_existing":
+        update["package_usage"] = "avoid_existing"
+    constraints = state.constraints.model_copy(update=update)
     derived = _booking_derived(state, clear_package=True)
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
@@ -274,6 +297,7 @@ def apply_reschedule_target_change(
         date=None,
         time=None,
         package_usage="unspecified",
+        pulse_usage="unspecified",
     )
     return state.model_copy(
         update={

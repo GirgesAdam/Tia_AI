@@ -12,6 +12,7 @@ from app.models.clinic_inventory import AppointmentProductLine
 from app.models.expense import Expense
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
+from app.models.pulse_billing import AppointmentPulseSettlement, PatientPulsePack
 from app.schemas.finance import (
     ExpenseCreate,
     ExpenseUpdate,
@@ -339,12 +340,54 @@ def outstanding_balances(
         )
         .subquery()
     )
+    pulse_pack_totals = (
+        select(
+            PatientPulsePack.workspace_id.label("workspace_id"),
+            PatientPulsePack.origin_appointment_id.label("appointment_id"),
+            func.coalesce(func.sum(PatientPulsePack.sale_price_minor), 0).label(
+                "pulse_pack_sales_minor"
+            ),
+        )
+        .where(
+            PatientPulsePack.workspace_id == workspace_id,
+            PatientPulsePack.origin_appointment_id.is_not(None),
+            PatientPulsePack.status != "cancelled",
+        )
+        .group_by(
+            PatientPulsePack.workspace_id,
+            PatientPulsePack.origin_appointment_id,
+        )
+        .subquery()
+    )
+    pulse_overage_totals = (
+        select(
+            AppointmentPulseSettlement.workspace_id.label("workspace_id"),
+            AppointmentPulseSettlement.appointment_id.label("appointment_id"),
+            func.coalesce(
+                func.sum(AppointmentPulseSettlement.overage_charge_minor), 0
+            ).label("pulse_overage_minor"),
+        )
+        .where(
+            AppointmentPulseSettlement.workspace_id == workspace_id,
+            AppointmentPulseSettlement.resolution == "overage",
+        )
+        .group_by(
+            AppointmentPulseSettlement.workspace_id,
+            AppointmentPulseSettlement.appointment_id,
+        )
+        .subquery()
+    )
     products_due = func.coalesce(product_totals.c.products_total_minor, 0)
+    pulse_pack_due = func.coalesce(pulse_pack_totals.c.pulse_pack_sales_minor, 0)
+    pulse_overage_due = func.coalesce(pulse_overage_totals.c.pulse_overage_minor, 0)
     service_due = case(
-        (Appointment.billing_context == "package_prepaid", 0),
+        (
+            Appointment.billing_context.in_(("package_prepaid", "pulse_prepaid")),
+            0,
+        ),
         else_=Appointment.price_minor,
     )
-    total_due = service_due + products_due
+    total_due = service_due + products_due + pulse_pack_due + pulse_overage_due
     paid_expr = func.coalesce(Appointment.amount_paid_minor, 0)
     balance_expr = case(
         (total_due > paid_expr, total_due - paid_expr),
@@ -369,6 +412,16 @@ def outstanding_balances(
             product_totals,
             (product_totals.c.workspace_id == Appointment.workspace_id)
             & (product_totals.c.appointment_id == Appointment.id),
+        )
+        .outerjoin(
+            pulse_pack_totals,
+            (pulse_pack_totals.c.workspace_id == Appointment.workspace_id)
+            & (pulse_pack_totals.c.appointment_id == Appointment.id),
+        )
+        .outerjoin(
+            pulse_overage_totals,
+            (pulse_overage_totals.c.workspace_id == Appointment.workspace_id)
+            & (pulse_overage_totals.c.appointment_id == Appointment.id),
         )
         .where(
             Appointment.workspace_id == workspace_id,

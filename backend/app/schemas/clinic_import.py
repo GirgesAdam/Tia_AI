@@ -103,7 +103,7 @@ CanonicalAppointmentStatus = ImportAppointmentLifecycle
 
 PaymentStatus = Literal["unknown", "unpaid", "partial", "paid", "refunded"]
 PaymentMethod = Literal["unknown", "cash", "card", "bank_transfer", "wallet", "other"]
-BillingContext = Literal["standard", "package_prepaid"]
+BillingContext = Literal["standard", "package_prepaid", "pulse_prepaid"]
 PackageStatus = Literal["active", "expired", "cancelled"]
 PackageUsageStatus = Literal["reserved", "consumed", "released"]
 AppointmentSource = Literal["ai", "staff", "whatsapp", "instagram", "website", "phone", "walk_in", "facebook", "email", "other"]

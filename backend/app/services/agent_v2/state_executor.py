@@ -20,6 +20,7 @@ from app.services.agent_v2.state_rules import (
     apply_booking_device_change,
     apply_booking_doctor_change,
     apply_booking_package_usage_change,
+    apply_booking_pulse_usage_change,
     apply_booking_service_change,
     apply_booking_time_change,
     apply_reschedule_date_change,
@@ -85,6 +86,7 @@ def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerCo
         date=_date_constraint(facts.get("date") or operation.entities.date),
         time=_time_constraint(facts.get("time") or operation.entities.time),
         package_usage=operation.package_usage,
+        pulse_usage=operation.pulse_usage,
     )
 
 
@@ -146,6 +148,11 @@ def _apply_booking_updates(
         updated = apply_booking_package_usage_change(
             updated,
             package_usage=operation.package_usage,
+        )
+    if operation.pulse_usage != "unspecified":
+        updated = apply_booking_pulse_usage_change(
+            updated,
+            pulse_usage=operation.pulse_usage,
         )
     return updated
 
@@ -216,6 +223,7 @@ def _new_reschedule_state(
         date=_date_constraint(step.facts.get("date") or operation.entities.date),
         time=_time_constraint(step.facts.get("time") or operation.entities.time),
         package_usage=operation.package_usage,
+        pulse_usage="unspecified",
     )
     return RescheduleTaskState(
         write_authorization=_authorization(
@@ -312,6 +320,7 @@ def _booking_slot_payload(
     payload = _slot_payload(row)
     if isinstance(state, BookingTaskState):
         payload["package_usage"] = state.constraints.package_usage
+        payload["pulse_usage"] = state.constraints.pulse_usage
         if step.facts.get("package_id") not in (None, ""):
             payload["package_id"] = step.facts["package_id"]
     return payload

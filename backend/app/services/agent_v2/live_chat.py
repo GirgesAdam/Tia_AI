@@ -134,8 +134,11 @@ def _verified_read_context_from_turn(
             "date",
             "time",
             "package_usage",
+            "pulse_usage",
         ):
             value = step.facts.get(key)
+            if key == "pulse_usage" and value == "unspecified":
+                continue
             if value not in (None, "", [], {}):
                 context[key] = value
 

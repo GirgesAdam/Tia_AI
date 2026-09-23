@@ -13,6 +13,7 @@ import type {
   Doctor,
   Patient,
   PatientPackage,
+  PulseBalance,
   Service,
   Staff,
 } from "@/lib/types";
@@ -527,19 +528,21 @@ export default async function AppointmentsPage({
     quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
   ]);
 
-  const [manualPackages, manualHistory] = manualPatient
+  const [manualPackages, manualHistory, manualPulseBalances] = manualPatient
     ? await Promise.all([
         tiaRequest<PatientPackage[]>(`/booking/patients/${manualPatient.id}/packages?usable_only=true`).catch(() => []),
         tiaRequest<Appointment[]>(`/booking/appointments?patient_id=${manualPatient.id}&scope=all&limit=20`).catch(() => []),
+        tiaRequest<PulseBalance[]>(`/booking/patients/${manualPatient.id}/pulse-balance`).catch(() => []),
       ])
-    : [[], []];
+    : [[], [], []];
 
-  const [quickPackages, quickHistory] = quickPatient
+  const [quickPackages, quickHistory, quickPulseBalances] = quickPatient
     ? await Promise.all([
         tiaRequest<PatientPackage[]>(`/booking/patients/${quickPatient.id}/packages?usable_only=true`).catch(() => []),
         tiaRequest<Appointment[]>(`/booking/appointments?patient_id=${quickPatient.id}&scope=all&limit=20`).catch(() => []),
+        tiaRequest<PulseBalance[]>(`/booking/patients/${quickPatient.id}/pulse-balance`).catch(() => []),
       ])
-    : [[], []];
+    : [[], [], []];
 
   const defaultBranchId = selectedBranch?.id;
 
@@ -629,6 +632,7 @@ export default async function AppointmentsPage({
                   doctors={doctors}
                   staff={staff}
                   packages={manualPackages}
+                  pulseBalances={manualPulseBalances}
                   timezone={timezone}
                 />
               </div>
@@ -728,6 +732,7 @@ export default async function AppointmentsPage({
           patient={quickPatient}
           history={quickHistory}
           packages={quickPackages}
+          pulseBalances={quickPulseBalances}
           services={services}
           doctors={doctors}
           staff={staff}

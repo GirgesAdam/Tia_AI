@@ -21,7 +21,7 @@ def _engine():
         "CREATE TABLE doctors (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), staff_id CHAR(32), is_active BOOLEAN)",
         "CREATE TABLE patients (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40), status VARCHAR(20), marketing_consent BOOLEAN, source_created_at DATETIME, created_at DATETIME, updated_at DATETIME)",
         "CREATE TABLE appointments (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), branch_id CHAR(32), doctor_id CHAR(32), service_id CHAR(32), status VARCHAR(20), source VARCHAR(20), start_at DATETIME, end_at DATETIME, created_at DATETIME, updated_at DATETIME)",
-        "CREATE TABLE payment_transactions (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER, currency VARCHAR(3), reference_transaction_id CHAR(32), created_at DATETIME, patient_package_id CHAR(32))",
+        "CREATE TABLE payment_transactions (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER, currency VARCHAR(3), reference_transaction_id CHAR(32), created_at DATETIME, patient_package_id CHAR(32), patient_pulse_pack_id CHAR(32))",
         "CREATE TABLE payment_allocations (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), transaction_id CHAR(32), appointment_id CHAR(32), amount_minor INTEGER, created_at DATETIME)",
         "CREATE TABLE patient_packages (id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), service_id CHAR(32), purchase_transaction_id CHAR(32), name VARCHAR(200), sessions_purchased INTEGER, sale_price_minor INTEGER, currency VARCHAR(3), purchased_at DATETIME, status VARCHAR(16), source VARCHAR(16))",
     ]
@@ -46,7 +46,7 @@ def test_package_sale_and_refund_are_attributed_once_to_service_not_sessions() -
         db.execute(text("INSERT INTO patients VALUES (:id,:w,'Mona','Ali','01000000000','active',1,'2026-01-01','2026-01-01','2026-01-01')"), {"id": patient.hex, "w": w.hex})
 
         purchase = uuid4()
-        db.execute(text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
+        db.execute(text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
         db.execute(text("INSERT INTO patient_packages VALUES (:id,:w,:p,:s,:tx,'6 Laser',6,480000,'EGP','2026-08-10','active','staff')"), {"id": uuid4().hex, "w": w.hex, "p": patient.hex, "s": service.hex, "tx": purchase.hex})
 
         # A legacy allocation on the same package purchase must not double-count it.
@@ -55,7 +55,7 @@ def test_package_sale_and_refund_are_attributed_once_to_service_not_sessions() -
         db.execute(text("INSERT INTO payment_allocations VALUES (:id,:w,:tx,:a,80000,'2026-08-11')"), {"id": uuid4().hex, "w": w.hex, "tx": purchase.hex, "a": appointment.hex})
 
         refund = uuid4()
-        db.execute(text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'refund',60000,'EGP',:ref,'2026-08-20',NULL)"), {"id": refund.hex, "w": w.hex, "p": patient.hex, "ref": purchase.hex})
+        db.execute(text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'refund',60000,'EGP',:ref,'2026-08-20',NULL)"), {"id": refund.hex, "w": w.hex, "p": patient.hex, "ref": purchase.hex})
         db.commit()
 
         result = run_catalog_analysis(db, workspace_id=w, request=AnalyticsCatalogRunRequest(analysis_key="revenue_by_service", lookback_days=30), now=NOW, use_cache=False)
@@ -76,7 +76,7 @@ def test_package_sale_is_not_attributed_to_doctor_or_branch() -> None:
         db.execute(text("INSERT INTO doctors VALUES (:id,:w,:s,1)"), {"id": doctor.hex, "w": w.hex, "s": staff.hex})
         db.execute(text("INSERT INTO patients VALUES (:id,:w,'Mona','Ali','01000000000','active',1,'2026-01-01','2026-01-01','2026-01-01')"), {"id": patient.hex, "w": w.hex})
         purchase = uuid4()
-        db.execute(text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
+        db.execute(text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
         db.execute(text("INSERT INTO patient_packages VALUES (:id,:w,:p,:s,:tx,'6 Laser',6,480000,'EGP','2026-08-10','active','staff')"), {"id": uuid4().hex, "w": w.hex, "p": patient.hex, "s": service.hex, "tx": purchase.hex})
         db.commit()
         for key in ("revenue_by_doctor", "revenue_by_branch"):
@@ -99,10 +99,10 @@ def test_service_paying_patient_is_distinct_across_direct_payment_and_package_pu
         appointment = uuid4()
         db.execute(text("INSERT INTO appointments VALUES (:id,:w,:p,:b,:d,:s,'completed','staff','2026-08-05','2026-08-05','2026-08-05','2026-08-05')"), {"id": appointment.hex, "w": w.hex, "p": patient.hex, "b": branch.hex, "d": doctor.hex, "s": service.hex})
         direct = uuid4()
-        db.execute(text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',100000,'EGP',NULL,'2026-08-05',NULL)"), {"id": direct.hex, "w": w.hex, "p": patient.hex})
+        db.execute(text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',100000,'EGP',NULL,'2026-08-05',NULL)"), {"id": direct.hex, "w": w.hex, "p": patient.hex})
         db.execute(text("INSERT INTO payment_allocations VALUES (:id,:w,:tx,:a,100000,'2026-08-05')"), {"id": uuid4().hex, "w": w.hex, "tx": direct.hex, "a": appointment.hex})
         purchase = uuid4()
-        db.execute(text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
+        db.execute(text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',480000,'EGP',NULL,'2026-08-10',NULL)"), {"id": purchase.hex, "w": w.hex, "p": patient.hex})
         db.execute(text("INSERT INTO patient_packages VALUES (:id,:w,:p,:s,:tx,'6 Laser',6,480000,'EGP','2026-08-10','active','staff')"), {"id": uuid4().hex, "w": w.hex, "p": patient.hex, "s": service.hex, "tx": purchase.hex})
         db.commit()
         plan = AnalyticsBusinessPlan.model_validate({
@@ -137,11 +137,11 @@ def test_installment_package_payments_and_cancellation_refunds_stay_on_service()
         db.execute(text("INSERT INTO patients VALUES (:id,:w,'Mona','Ali','01000000000','active',1,'2026-01-01','2026-01-01','2026-01-01')"), {"id": patient.hex, "w": w.hex})
         first, second = uuid4(), uuid4()
         db.execute(
-            text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',600000,'EGP',NULL,'2026-08-01',:pkg)"),
+            text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',600000,'EGP',NULL,'2026-08-01',:pkg)"),
             {"id": first.hex, "w": w.hex, "p": patient.hex, "pkg": package.hex},
         )
         db.execute(
-            text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'payment',600000,'EGP',NULL,'2026-08-05',:pkg)"),
+            text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'payment',600000,'EGP',NULL,'2026-08-05',:pkg)"),
             {"id": second.hex, "w": w.hex, "p": patient.hex, "pkg": package.hex},
         )
         db.execute(
@@ -150,11 +150,11 @@ def test_installment_package_payments_and_cancellation_refunds_stay_on_service()
         )
         refund_a, refund_b = uuid4(), uuid4()
         db.execute(
-            text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'refund',600000,'EGP',:ref,'2026-08-20',:pkg)"),
+            text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'refund',600000,'EGP',:ref,'2026-08-20',:pkg)"),
             {"id": refund_a.hex, "w": w.hex, "p": patient.hex, "ref": second.hex, "pkg": package.hex},
         )
         db.execute(
-            text("INSERT INTO payment_transactions VALUES (:id,:w,:p,'refund',350000,'EGP',:ref,'2026-08-20',:pkg)"),
+            text("INSERT INTO payment_transactions (id, workspace_id, patient_id, transaction_type, amount_minor, currency, reference_transaction_id, created_at, patient_package_id) VALUES (:id,:w,:p,'refund',350000,'EGP',:ref,'2026-08-20',:pkg)"),
             {"id": refund_b.hex, "w": w.hex, "p": patient.hex, "ref": first.hex, "pkg": package.hex},
         )
         db.commit()

@@ -45,7 +45,7 @@ def _engine():
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), patient_id CHAR(32), transaction_type VARCHAR(16),
             amount_minor INTEGER, currency VARCHAR(3), reference_transaction_id CHAR(32), created_at DATETIME,
-            patient_package_id CHAR(32)
+            patient_package_id CHAR(32), patient_pulse_pack_id CHAR(32)
         )
         """,
         """

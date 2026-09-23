@@ -44,6 +44,8 @@ def resolved_operation_parameters(
         params["package_sessions"] = operation.entities.package_sessions
     if operation.package_usage != "unspecified":
         params["package_usage"] = operation.package_usage
+    if operation.pulse_usage != "unspecified":
+        params["pulse_usage"] = operation.pulse_usage
     return params
 
 

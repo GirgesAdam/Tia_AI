@@ -49,5 +49,9 @@ def test_outstanding_balances_only_start_after_completion_and_include_product_du
     params = statement.compile().params
     sql = str(statement.compile()).lower()
     assert "completed" in params.values()
-    assert "package_prepaid" in params.values()
+    assert any(
+        isinstance(value, (list, tuple, set))
+        and {"package_prepaid", "pulse_prepaid"}.issubset(set(value))
+        for value in params.values()
+    )
     assert "appointment_product_lines" in sql

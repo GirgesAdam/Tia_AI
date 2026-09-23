@@ -63,11 +63,16 @@ RESET_RESEED_TABLES = frozenset({
     "package_usages",
     "patient_notes",
     "patient_packages",
+    "patient_pulse_packs",
     "patient_tag_assignments",
     "patient_tags",
     "patients",
     "payment_allocations",
     "payment_transactions",
+    "pulse_billing_settings",
+    "pulse_pack_offers",
+    "pulse_usages",
+    "appointment_pulse_settlements",
     "service_device_prices",
     "service_package_offers",
     "services",
@@ -113,6 +118,11 @@ CYCLE_NULL_COLUMNS = {
         "appointment_id",
         "origin_appointment_id",
         "patient_package_id",
+        "patient_pulse_pack_id",
+    ),
+    "patient_pulse_packs": (
+        "origin_appointment_id",
+        "purchase_transaction_id",
     ),
 }
 

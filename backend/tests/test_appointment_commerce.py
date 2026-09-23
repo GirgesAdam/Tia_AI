@@ -385,12 +385,12 @@ def test_package_bought_from_visit_replaces_session_price_and_becomes_due() -> N
         billing_context="package_prepaid",
     )
     breakdown = payment_service._appointment_charge_breakdown(
-        _ChargeDb([0, 0, 480000]),
+        _ChargeDb([0, 0, 480000, 0, 0]),
         workspace_id=uuid4(),
         appointment=appointment,
     )
 
-    assert breakdown == (100000, 0, 0, 480000, 480000)
+    assert breakdown == (100000, 0, 0, 480000, 0, 0, 480000)
 
 
 def test_additional_service_package_replaces_extra_service_price_but_keeps_primary_due() -> None:
@@ -400,9 +400,9 @@ def test_additional_service_package_replaces_extra_service_price_but_keeps_prima
         billing_context="standard",
     )
     breakdown = payment_service._appointment_charge_breakdown(
-        _ChargeDb([0, 0, 350000]),
+        _ChargeDb([0, 0, 350000, 0, 0]),
         workspace_id=uuid4(),
         appointment=appointment,
     )
 
-    assert breakdown == (100000, 0, 0, 350000, 450000)
+    assert breakdown == (100000, 0, 0, 350000, 0, 0, 450000)

@@ -401,3 +401,62 @@ def test_laser_device_requirement_stays_deterministic_outside_model_input() -> N
     )
     assert clarified.disposition == "clarify"
     assert clarified.clarification_field == "device"
+
+
+def test_booking_carries_explicit_pulse_balance_policy_to_verified_write() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="19:00", end_time=None),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        pulse_usage="use_existing",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is not None
+    assert step.write_intent.parameters["pulse_usage"] == "use_existing"
+
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "start_at": "2026-09-17T19:00:00+03:00",
+                "branch_id": "branch-main",
+                "doctor_id": "doctor-maryam",
+                "device_key": "candela_gentle",
+            },
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters["pulse_usage"] == "use_existing"
+
+
+def test_booking_cannot_request_session_package_and_pulse_balance_together() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+        ),
+        selection=None,
+        package_usage="use_existing",
+        pulse_usage="use_existing",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "intent"
+    assert step.facts["billing_choice_conflict"] is True

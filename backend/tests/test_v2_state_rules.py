@@ -18,6 +18,7 @@ from app.services.agent_v2.state_rules import (
     apply_booking_device_change,
     apply_booking_doctor_change,
     apply_booking_package_usage_change,
+    apply_booking_pulse_usage_change,
     apply_booking_service_change,
     apply_booking_time_change,
     apply_reschedule_date_change,
@@ -220,3 +221,16 @@ def test_reschedule_date_change_preserves_replacement_identity_and_time_preferen
     assert changed.derived.availability_snapshot_id is None
     assert changed.derived.selected_slot_ref is None
     assert changed.derived.package_validated is False
+
+
+def test_pulse_usage_switches_off_session_package_and_invalidates_package_choice() -> None:
+    state = _booking_state()
+    changed = apply_booking_pulse_usage_change(state, pulse_usage="use_existing")
+
+    assert changed.constraints.pulse_usage == "use_existing"
+    assert changed.constraints.package_usage == "avoid_existing"
+    assert changed.constraints.service_id == state.constraints.service_id
+    assert changed.constraints.device_key == state.constraints.device_key
+    assert changed.derived.selected_package_id is None
+    assert changed.derived.package_validated is False
+    assert changed.option_snapshot is None

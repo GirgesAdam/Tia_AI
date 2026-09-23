@@ -59,6 +59,7 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         entities.follow_up_at_local,
         operation.selection.model_dump_json() if operation.selection is not None else None,
         operation.package_usage,
+        operation.pulse_usage,
         tuple(operation.requested_service_details),
     )
 
