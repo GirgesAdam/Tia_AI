@@ -8,13 +8,13 @@ from uuid import uuid4
 import pytest
 
 from app.agents.v2.turn_contract import DateConstraint, TurnEntities, TurnOperation
+from app.schemas.pulse_billing import PulsePackOfferRead
 from app.services.agent_v2.package_booking_policy import (
     BookingPackagePolicyError,
     BookingPackageResolution,
     resolve_booking_package,
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
-from app.schemas.pulse_billing import PulsePackOfferRead
 from app.services.agent_v2.read_executor import (
     ReadExecutionBundle,
     ReadExecutionContext,
