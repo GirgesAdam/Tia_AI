@@ -1,5 +1,3 @@
-[Reading 339 lines from start (total: 339 lines, 0 remaining)]
-
 import Link from "next/link";
 import { ArrowRight, CalendarClock } from "lucide-react";
 
@@ -339,5 +337,3 @@ export default async function RescheduleAppointmentPage({
     </>
   );
 }
-
-[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
