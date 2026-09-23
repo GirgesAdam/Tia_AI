@@ -215,6 +215,55 @@ def _laser_booking_fixture(
     )
 
 
+def _standard_booking_fixture(
+    db: Session,
+    workspace: Workspace,
+):
+    catalog = build_clinic_catalog(db, workspace)
+    branch_id = active_branch_id(catalog)
+    services = [
+        row
+        for row in catalog.get("services", [])
+        if isinstance(row, dict)
+        and row.get("id")
+        and not bool(row.get("requires_laser_device"))
+    ]
+    doctors = [
+        row
+        for row in catalog.get("doctors", [])
+        if isinstance(row, dict) and row.get("id")
+    ]
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
+    today = datetime.now(UTC).date()
+
+    for service in services:
+        service_id = str(service["id"])
+        for doctor in doctors:
+            if service_id not in {
+                str(value) for value in (doctor.get("service_ids") or [])
+            }:
+                continue
+            branch_ids = {
+                str(value) for value in (doctor.get("branch_ids") or []) if value
+            }
+            if branch_ids and branch_id not in branch_ids:
+                continue
+            for offset in range(1, 36):
+                booking_date = today + timedelta(days=offset)
+                available = adapter.get_availability(
+                    AvailabilityRequest(
+                        branch_id=branch_id,
+                        service_id=service_id,
+                        booking_date=booking_date,
+                        doctor_id=str(doctor["id"]),
+                    )
+                )
+                if available.slots:
+                    return catalog, service, doctor, available, available.slots[0]
+    raise RuntimeError("EVAL_INFRA_ERROR: no bookable non-laser service found")
+
+
 def _created_appointments(
     db: Session,
     workspace: Workspace,
@@ -813,6 +862,173 @@ def case_purchase_then_book_with_pulses(
     )
 
 
+def case_book_service_and_buy_pulses_for_other_unspecified_use(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    offer = _active_offer(db, workspace)
+    patient = _active_patient(db, workspace)
+    _catalog, service, doctor, available, slot = _standard_booking_fixture(
+        db,
+        workspace,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_packs = _pulse_pack_count(db, workspace, patient)
+    before_payments = _payment_count(db, workspace, patient)
+
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "book_service_buy_pulses_other_unspecified",
+        1,
+        (
+            f"احجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')}، "
+            f"وكمان اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name} "
+            "لحاجة تانية بعدين، مش للجلسة دي."
+        ),
+        None,
+    )
+
+    created = _created_appointments(
+        db,
+        workspace,
+        patient,
+        before_ids=before_appointments,
+    )
+    after_packs = _pulse_pack_count(db, workspace, patient)
+    after_payments = _payment_count(db, workspace, patient)
+    appointment = created[0] if len(created) == 1 else None
+    ok = (
+        "pulse_pack_offers" in turn.verified_reads
+        and "availability" in turn.verified_reads
+        and after_packs == before_packs + 1
+        and after_payments == before_payments
+        and appointment is not None
+        and str(appointment.service_id) == slot.service_id
+        and str(appointment.doctor_id) == slot.doctor_id
+        and appointment.billing_context == "standard"
+        and appointment.patient_package_id is None
+        and appointment.laser_device_key is None
+    )
+    return _result(
+        scenario_id="book_service_buy_pulses_other_unspecified",
+        purpose=(
+            "Book an unrelated non-laser service while buying a specific Pulse pack "
+            "for an unspecified future use, without attaching Pulses to the appointment."
+        ),
+        turns=[turn],
+        verification={
+            "booked_service": service["name"],
+            "pulse_offer_device": offer.device_name,
+            "pulse_offer_count": offer.pulses_count,
+            "appointment_count_created": len(created),
+            "billing_context": (
+                appointment.billing_context if appointment is not None else None
+            ),
+            "laser_device_key": (
+                appointment.laser_device_key if appointment is not None else None
+            ),
+            "pack_count_delta": after_packs - before_packs,
+            "payment_count_delta": after_payments - before_payments,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Unrelated Pulse purchase leaked into the booked service",
+        issue_detail=(
+            "Expected independent standard booking plus Pulse-pack purchase. The "
+            "unspecified future Pulse use must not change this appointment billing."
+        ),
+        action=True,
+    )
+
+
+def case_book_service_and_buy_pulses_for_retouch(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    offer = _active_offer(db, workspace)
+    patient = _active_patient(db, workspace)
+    _catalog, service, doctor, available, slot = _standard_booking_fixture(
+        db,
+        workspace,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_packs = _pulse_pack_count(db, workspace, patient)
+    before_payments = _payment_count(db, workspace, patient)
+
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "book_service_buy_pulses_retouch",
+        1,
+        (
+            f"احجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')}، "
+            f"واشتريلي كمان باقة {offer.pulses_count} pulse على {offer.device_name} "
+            "عشان retouch بعدين. الـpulses مش للجلسة اللي بحجزها دلوقتي."
+        ),
+        None,
+    )
+
+    created = _created_appointments(
+        db,
+        workspace,
+        patient,
+        before_ids=before_appointments,
+    )
+    after_packs = _pulse_pack_count(db, workspace, patient)
+    after_payments = _payment_count(db, workspace, patient)
+    appointment = created[0] if len(created) == 1 else None
+    ok = (
+        "pulse_pack_offers" in turn.verified_reads
+        and "availability" in turn.verified_reads
+        and after_packs == before_packs + 1
+        and after_payments == before_payments
+        and appointment is not None
+        and str(appointment.service_id) == slot.service_id
+        and str(appointment.doctor_id) == slot.doctor_id
+        and appointment.billing_context == "standard"
+        and appointment.patient_package_id is None
+        and appointment.laser_device_key is None
+    )
+    return _result(
+        scenario_id="book_service_buy_pulses_retouch",
+        purpose=(
+            "Book an unrelated service while buying Pulses explicitly for a future "
+            "retouch, ensuring the retouch purpose is not bound to the current booking."
+        ),
+        turns=[turn],
+        verification={
+            "booked_service": service["name"],
+            "future_purpose": "retouch",
+            "pulse_offer_device": offer.device_name,
+            "pulse_offer_count": offer.pulses_count,
+            "appointment_count_created": len(created),
+            "billing_context": (
+                appointment.billing_context if appointment is not None else None
+            ),
+            "laser_device_key": (
+                appointment.laser_device_key if appointment is not None else None
+            ),
+            "pack_count_delta": after_packs - before_packs,
+            "payment_count_delta": after_payments - before_payments,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Retouch Pulse purpose leaked into the current booking",
+        issue_detail=(
+            "Expected independent standard booking plus verified Pulse-pack purchase. "
+            "The future retouch purpose must not make the current appointment pulse_prepaid."
+        ),
+        action=True,
+    )
+
+
 CASES = [
     case_balance,
     case_offer_price,
@@ -821,6 +1037,8 @@ CASES = [
     case_purchase_and_book_standard,
     case_purchase_and_book_with_new_pulses,
     case_purchase_then_book_with_pulses,
+    case_book_service_and_buy_pulses_for_other_unspecified_use,
+    case_book_service_and_buy_pulses_for_retouch,
 ]
 
 
@@ -908,7 +1126,16 @@ def main() -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "batch_summary": summary,
+                "scenario_results": [jsonable(asdict(row)) for row in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
