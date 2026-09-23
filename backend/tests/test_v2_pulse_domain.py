@@ -180,7 +180,12 @@ def test_agent_pulse_purchase_never_assumes_payment(monkeypatch) -> None:
 
     def fake_purchase(_db, **kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(id=uuid4(), status="active")
+        return SimpleNamespace(
+            id=uuid4(),
+            status="active",
+            sale_price_minor=250_000,
+            currency="EGP",
+        )
 
     monkeypatch.setattr(
         "app.services.agent_v2.write_executor.purchase_pulse_pack_offer",
@@ -218,5 +223,7 @@ def test_agent_pulse_purchase_never_assumes_payment(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["amount_paid_minor"] == 0
     assert captured["amount_paid_minor"] == 0
+    assert result["sale_price_minor"] == 250_000
+    assert result["currency"] == "EGP"
     assert captured["payment_method"] == "unknown"
     assert captured["actor_type"] == "ai"
