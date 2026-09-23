@@ -187,6 +187,95 @@ def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) ->
     assert captured["use_pulse_balance"] is True
 
 
+def test_explicit_pulse_purchase_continuation_inherits_verified_device() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-laser",
+                    "name": "ليزر إبط",
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                        }
+                    ],
+                }
+            ],
+            "doctors": [],
+            "appointments": [],
+            "packages": [],
+        }
+    )
+    context = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "buy_pulse_pack",
+            "device_key": "candela_gentle",
+            "pulse_count": 1000,
+        },
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        pulse_usage="use_existing",
+        continues_previous=True,
+        execution_intent="execute",
+    )
+
+    merged = merge_verified_action_context(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        context,
+    )
+
+    assert merged.operations[0].entities.device is not None
+    assert merged.operations[0].entities.device.ref == "V1"
+
+
+def test_unrelated_pulse_booking_does_not_inherit_previous_purchase_device() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-laser",
+                    "name": "ليزر إبط",
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                        }
+                    ],
+                }
+            ],
+            "doctors": [],
+            "appointments": [],
+            "packages": [],
+        }
+    )
+    context = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "buy_pulse_pack",
+            "device_key": "candela_gentle",
+            "pulse_count": 1000,
+        },
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        pulse_usage="use_existing",
+        continues_previous=False,
+        execution_intent="execute",
+    )
+
+    merged = merge_verified_action_context(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        context,
+    )
+
+    assert merged.operations[0].entities.device is None
+
+
 def test_pulse_purchase_and_booking_remain_independent_ordered_steps() -> None:
     purchase = TurnOperation(
         type="buy_pulse_pack",
