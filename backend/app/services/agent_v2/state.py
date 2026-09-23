@@ -5,14 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.v2.turn_contract import (
-    DateConstraint,
-    PackageUsage,
-    PulseUsage,
-    TimeConstraint,
-)
+from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
 
 TaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
+LegacyPulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ChoicePurpose = Literal[
     "service",
     "doctor",
@@ -51,7 +47,17 @@ class CustomerConstraints(StrictStateModel):
     date: DateConstraint | None = None
     time: TimeConstraint | None = None
     package_usage: PackageUsage = "unspecified"
-    pulse_usage: PulseUsage = "unspecified"
+    # Backward-compatibility only. New turns never populate or consume this field.
+    pulse_usage: LegacyPulseUsage = "unspecified"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_pulse_usage(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if value.get("pulse_usage") in {"use_existing", "avoid_existing"}:
+            return {**value, "pulse_usage": "unspecified"}
+        return value
 
 
 class DerivedBookingState(StrictStateModel):
