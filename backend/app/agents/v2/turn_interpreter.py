@@ -120,9 +120,14 @@ SEMANTIC PRINCIPLES
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
-- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read when
-  it is supplied because that scope was verified by Python. Do not reconstruct stale constraints
-  from assistant prose when a verified read scope exists.
+- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read and
+  recent_verified_action when supplied because those scopes were verified by Python. Do not
+  reconstruct stale constraints from assistant prose when a verified structured scope exists.
+- recent_verified_action describes only the immediately previous completed action when Python exposes
+  one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
+  added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
+  verified device reference instead of asking for that device again. Do not inherit it when the
+  customer starts an unrelated request or names a different device.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -153,8 +158,10 @@ SEMANTIC PRINCIPLES
   customer may own Pulses. A booking cannot consume both a session package and pulse balance.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
   Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
-  pulse_info with requested_pulse_details=[offers]; it does not require a service. Set
-  requested_pulse_details to exactly what was requested. Preserve an explicitly stated Pulse-pack
+  pulse_info with requested_pulse_details=[offers]; it does not require a service. Do not add
+  overage_price to a Pulse-pack price question unless the customer separately asks about extra,
+  excess, or overage Pulses. Set requested_pulse_details to exactly what was requested. Preserve an
+  explicitly stated Pulse-pack
   size in entities.pulse_count and a clearly referenced laser device in entities.device. Never
   estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
   supplies that fact.
