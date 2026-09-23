@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.semantic_state_view import with_safe_task_context
+from app.agents.v2.semantic_state_view import (
+    with_safe_read_context,
+    with_safe_task_context,
+)
 
 SERVICE_ID = "123e4567-e89b-12d3-a456-426614174001"
 DOCTOR_ID = "123e4567-e89b-12d3-a456-426614174002"
@@ -140,3 +143,22 @@ def test_reschedule_task_view_uses_appointment_ref_without_payment_or_write_meta
     assert "write_authorization" not in payload
     assert "secret-turn" not in payload
     assert '"appointment_ref": "A1"' in payload
+
+
+def test_verified_pulse_read_scope_keeps_safe_semantics_without_device_key() -> None:
+    context = _context()
+    safe = with_safe_read_context(
+        context,
+        read_context={
+            "operation_type": "pulse_info",
+            "device_key": "candela_gentle",
+            "pulse_count": 2000,
+            "requested_pulse_details": ["offers", "overage_price"],
+        },
+    )
+    payload = json.dumps(safe.model_input["recent_verified_read"], ensure_ascii=False)
+
+    assert "candela_gentle" not in payload
+    assert '"device_ref": "V1"' in payload
+    assert '"pulse_count": 2000' in payload
+    assert '"requested_pulse_details": ["offers", "overage_price"]' in payload
