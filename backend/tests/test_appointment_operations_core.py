@@ -1,3 +1,5 @@
+[Reading 285 lines from start (total: 285 lines, 0 remaining)]
+
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -269,3 +271,19 @@ def test_eval_preflight_is_read_only() -> None:
     assert "reset_demo_workspace(" not in source
     assert "services_expected_from_seed" in source
     assert "canonical_reset\": \"NOT_NEEDED" in source
+
+
+def test_staff_reschedule_uses_immediate_booking_window() -> None:
+    root = Path(__file__).resolve().parents[2]
+    route = (root / "backend/app/api/routes/booking.py").read_text(encoding="utf-8")
+    service = (root / "backend/app/services/appointment_operations.py").read_text(encoding="utf-8")
+    page = (
+        root
+        / "frontend/src/app/(dashboard)/appointments/[appointmentId]/reschedule/page.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "minimum_notice_minutes_override=0" in route
+    assert "minimum_notice_minutes_override=minimum_notice_minutes_override" in service
+    assert 'allow_immediate: "true"' in page
+
+[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
