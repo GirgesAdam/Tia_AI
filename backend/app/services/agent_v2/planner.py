@@ -32,6 +32,10 @@ ReadKind = Literal[
     "customer_packages",
     "package_offers",
     "package_refund_quote",
+    "pulse_balance",
+    "pulse_packs",
+    "pulse_pack_offers",
+    "pulse_billing_settings",
 ]
 WriteKind = Literal[
     "booking",
@@ -39,6 +43,7 @@ WriteKind = Literal[
     "cancel_appointment",
     "reschedule",
     "buy_package",
+    "buy_pulse_pack",
     "follow_up",
     "marketing_update",
 ]
@@ -103,6 +108,7 @@ class VerificationFacts(StrictPlannerModel):
     appointment_match_count: int | None = None
     exact_slot_match_count: int | None = None
     package_offer_match_count: int | None = None
+    pulse_offer_match_count: int | None = None
     requires_human: bool = False
     verified_parameters: dict[str, object] = Field(default_factory=dict)
 
@@ -169,6 +175,8 @@ def _base_parameters(
         values["time"] = operation.entities.time.model_dump(mode="json")
     if operation.entities.package_sessions is not None:
         values["package_sessions"] = operation.entities.package_sessions
+    if operation.entities.pulse_count is not None:
+        values["pulse_count"] = operation.entities.pulse_count
     if operation.entities.marketing_consent is not None:
         values["marketing_consent"] = operation.entities.marketing_consent
     if operation.entities.follow_up_at_local is not None:
@@ -395,6 +403,15 @@ def _informational_write_read(
             response_goal="package_information",
             facts=params,
         )
+    if operation.type == "buy_pulse_pack":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="pulse_pack_offers", parameters=params)],
+            response_goal="pulse_information",
+            facts=params,
+        )
     if operation.type in {"follow_up", "marketing_update"}:
         return _clarify(index=index, operation=operation, field="intent")
     return None
@@ -463,6 +480,8 @@ def _plan_operation(
         "book",
         "package_info",
         "buy_package",
+        "pulse_info",
+        "buy_pulse_pack",
         "refund_quote",
         "reschedule",
     }:
@@ -666,6 +685,28 @@ def _plan_operation(
             response_goal="answer_customer_history",
         )
 
+    if operation.type == "pulse_info":
+        details = set(operation.requested_pulse_details)
+        if not details:
+            details = {"balance"}
+        reads: list[ReadRequest] = []
+        if "balance" in details:
+            reads.append(ReadRequest(kind="pulse_balance", parameters=params))
+        if "owned_packs" in details:
+            reads.append(ReadRequest(kind="pulse_packs", parameters=params))
+        if "offers" in details:
+            reads.append(ReadRequest(kind="pulse_pack_offers", parameters=params))
+        if "overage_price" in details:
+            reads.append(ReadRequest(kind="pulse_billing_settings", parameters=params))
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=reads,
+            response_goal="pulse_information",
+            facts=params,
+        )
+
     if operation.type == "package_info":
         return PlanStep(
             operation_index=index,
@@ -684,6 +725,17 @@ def _plan_operation(
             reads=[ReadRequest(kind="package_offers", parameters=params)],
             write_intent=WriteIntent(kind="buy_package", authorized=True, parameters=params),
             response_goal="package_purchased",
+            facts=params,
+        )
+
+    if operation.type == "buy_pulse_pack":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="pulse_pack_offers", parameters=params)],
+            write_intent=WriteIntent(kind="buy_pulse_pack", authorized=True, parameters=params),
+            response_goal="pulse_pack_purchased",
             facts=params,
         )
 
@@ -918,6 +970,31 @@ def advance_step_after_verification(
                     "disposition": "clarify",
                     "clarification_field": field,
                     "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
+                }
+            )
+        return step
+
+    if kind == "buy_pulse_pack":
+        count = verification.pulse_offer_match_count
+        if count == 1:
+            return step.model_copy(
+                update={
+                    "disposition": "write_ready",
+                    "write_intent": step.write_intent.model_copy(
+                        update={"parameters": verified_parameters}
+                    ),
+                }
+            )
+        if count == 0:
+            return step.model_copy(
+                update={"disposition": "blocked", "response_goal": "pulse_information"}
+            )
+        if count is not None and count > 1:
+            return step.model_copy(
+                update={
+                    "disposition": "clarify",
+                    "clarification_field": "intent",
+                    "response_goal": "clarification",
                 }
             )
         return step
