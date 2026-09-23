@@ -19,7 +19,10 @@ from app.agents.v2.turn_contract import (
     TiaTurnUnderstanding,
     TimeConstraint,
 )
-from app.agents.v2.turn_normalization import dedupe_exact_operations
+from app.agents.v2.turn_normalization import (
+    dedupe_exact_operations,
+    normalize_semantic_invariants,
+)
 from app.core.config import settings
 
 
@@ -149,10 +152,12 @@ SEMANTIC PRINCIPLES
   use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
   customer may own Pulses. A booking cannot consume both a session package and pulse balance.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
-  Pulse-pack offers, or per-device overage price. Set requested_pulse_details to exactly what was
-  requested. Preserve an explicitly stated Pulse-pack size in entities.pulse_count and a clearly
-  referenced laser device in entities.device. Never estimate how many Pulses a future treatment will
-  consume unless verified clinic data explicitly supplies that fact.
+  Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
+  pulse_info with requested_pulse_details=[offers]; it does not require a service. Set
+  requested_pulse_details to exactly what was requested. Preserve an explicitly stated Pulse-pack
+  size in entities.pulse_count and a clearly referenced laser device in entities.device. Never
+  estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
+  supplies that fact.
 - buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. It is separate
   from booking. A request to buy a Pulse pack and book a session requires separate buy_pulse_pack and
   book operations. Never claim or infer that money was paid merely because the customer authorized
@@ -407,5 +412,6 @@ def interpret_customer_turn_v2(
     )
     continued = merge_verified_read_context(invocation.value, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
-    resolved = resolve_turn_times_by_clinic_hours(grounded, semantic_context)
+    normalized = normalize_semantic_invariants(grounded)
+    resolved = resolve_turn_times_by_clinic_hours(normalized, semantic_context)
     return dedupe_exact_operations(resolved)
