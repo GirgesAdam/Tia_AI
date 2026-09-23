@@ -12,8 +12,8 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.services.agent_v2.planner import (
-    PlannerContext,
     PlanStep,
+    PlannerContext,
     VerificationFacts,
     WriteIntent,
     advance_step_after_verification,
