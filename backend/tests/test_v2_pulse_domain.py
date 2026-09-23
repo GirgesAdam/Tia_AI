@@ -6,17 +6,18 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import (
+    TiaTurnUnderstanding,
+    TurnEntities,
+    TurnOperation,
+)
 from app.services.agent_v2.planner import (
     PlannerContext,
     VerificationFacts,
     advance_step_after_verification,
     plan_turn,
 )
-from app.services.agent_v2.read_executor import (
-    ReadExecutionContext,
-    execute_step_reads,
-)
+from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
 from app.services.agent_v2.write_executor import execute_write_ready_step
 
 
