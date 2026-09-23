@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.semantic_state_view import with_safe_task_context
+from app.agents.v2.semantic_state_view import (
+    with_safe_action_context,
+    with_safe_task_context,
+)
 
 SERVICE_ID = "123e4567-e89b-12d3-a456-426614174001"
 DOCTOR_ID = "123e4567-e89b-12d3-a456-426614174002"
@@ -140,3 +143,29 @@ def test_reschedule_task_view_uses_appointment_ref_without_payment_or_write_meta
     assert "write_authorization" not in payload
     assert "secret-turn" not in payload
     assert '"appointment_ref": "A1"' in payload
+
+
+
+def test_verified_pulse_purchase_action_view_uses_ephemeral_device_ref() -> None:
+    context = _context()
+    safe = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "buy_pulse_pack",
+            "device_key": "candela_gentle",
+            "pulse_count": 1000,
+            "patient_pulse_pack_id": "internal-pack-id",
+            "amount_paid_minor": 0,
+        },
+    )
+
+    recent = safe.model_input["recent_verified_action"]
+    assert recent == {
+        "operation_type": "buy_pulse_pack",
+        "device_ref": "V1",
+        "pulse_count": 1000,
+    }
+    encoded = json.dumps(safe.model_input, ensure_ascii=False, default=str)
+    assert "candela_gentle" not in encoded
+    assert "internal-pack-id" not in encoded
+    assert "amount_paid_minor" not in encoded
