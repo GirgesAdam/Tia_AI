@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
+import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
 import { updatePackageOffer } from "./actions";
+import { PulsePricingPanel } from "./pulse-pricing-panel";
 import { ServiceCreateForm } from "./service-create-form";
 import { ServicePricingForm } from "./service-pricing-form";
 
@@ -55,11 +57,13 @@ function major(minor: number | null) {
 }
 
 export default async function ServicesPage() {
-  const [{ workspace }, services, devicePrices, packageOffers] = await Promise.all([
+  const [{ workspace }, services, devicePrices, packageOffers, pulseSettings, pulseOffers] = await Promise.all([
     getAppContext(),
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<DevicePrice[]>("/inventory/laser-prices").catch(() => []),
     tiaRequest<PackageOffer[]>("/booking/package-offers").catch(() => []),
+    tiaRequest<PulseBillingSettings>("/booking/pulse-settings"),
+    tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers"),
   ]);
   const isAdmin = workspace.role === "admin";
   const byService = new Map<string, DevicePrice[]>();
@@ -72,7 +76,7 @@ export default async function ServicesPage() {
     <>
       <PageHeader
         title="الخدمات والأسعار"
-        description="أضف الخدمات وعدّل بياناتها. خدمات الليزر لها سعر ومدة مستقلان لكل جهاز، ويمكن تحديد باكيدجات 3 أو 6 أو 9 جلسات لكل جهاز."
+        description="أضف الخدمات وعدّل أسعارها ومددها وباقاتها. خدمات الليزر لها إعداد مستقل لكل جهاز، ومن هنا تقدر كمان تسعّر الـPulses وباقاتها."
       />
       {isAdmin && (
         <Card className="mb-5">
@@ -83,6 +87,13 @@ export default async function ServicesPage() {
           </CardContent>
         </Card>
       )}
+
+      {isAdmin && (
+        <div className="mb-5">
+          <PulsePricingPanel settings={pulseSettings} offers={pulseOffers} />
+        </div>
+      )}
+
       <div className="space-y-4">
         {services.map((service) => {
           const prices = byService.get(service.id) || [];

@@ -10,6 +10,15 @@ function moneyMinor(value: FormDataEntryValue | null) {
   return Math.round(amount * 100);
 }
 
+function pulseMoneyMinor(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? "").trim().replace(",", ".");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
+    throw new Error("اكتب سعر صحيح بحد أقصى رقمين عشريين.");
+  }
+  const [whole, fraction = ""] = normalized.split(".");
+  return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
+}
+
 function serviceCategory(formData: FormData, requiresLaserDevice: boolean) {
   if (requiresLaserDevice) return "laser";
   const value = String(formData.get("operational_category") || "");
@@ -192,4 +201,42 @@ export async function updatePackageOffer(formData: FormData) {
     }),
   });
   revalidatePath("/services");
+}
+
+export async function savePulsePriceFormAction(formData: FormData) {
+  await tiaRequest("/booking/pulse-settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      overage_price_minor: pulseMoneyMinor(formData.get("overage_price")),
+      currency: "EGP",
+    }),
+  });
+  revalidatePath("/services");
+  revalidatePath("/appointments");
+  revalidatePath("/finance");
+}
+
+export async function savePulsePackOfferFormAction(formData: FormData) {
+  const deviceKey = String(formData.get("device_key") || "").trim();
+  const pulsesCount = Number(String(formData.get("pulses_count") || "0"));
+  if (!["prime_lase", "candela_gentle"].includes(deviceKey)) {
+    throw new Error("اختار جهاز ليزر صحيح.");
+  }
+  if (!Number.isInteger(pulsesCount) || pulsesCount <= 0) {
+    throw new Error("عدد الـPulses لازم يكون رقم صحيح أكبر من صفر.");
+  }
+
+  await tiaRequest("/booking/pulse-pack-offers", {
+    method: "PUT",
+    body: JSON.stringify({
+      device_key: deviceKey,
+      pulses_count: pulsesCount,
+      price_minor: pulseMoneyMinor(formData.get("price")),
+      currency: "EGP",
+      is_active: formData.get("is_active") === "on",
+    }),
+  });
+  revalidatePath("/services");
+  revalidatePath("/patients");
+  revalidatePath("/appointments");
 }

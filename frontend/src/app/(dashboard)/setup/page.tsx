@@ -7,7 +7,6 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
-import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -15,13 +14,11 @@ import { getAppContext } from "@/lib/tia/workspace";
 import { ClinicSettingsPanel } from "./clinic-settings-panel";
 
 export default async function SetupPage() {
-  const [setup, knowledge, history, ctx, pulseSettings, pulseOffers] = await Promise.all([
+  const [setup, knowledge, history, ctx] = await Promise.all([
     tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
     tiaRequest<ClinicKnowledgeText>("/clinic/knowledge-text"),
     tiaRequest<{ batches: HistoricalBatch[] }>("/clinic/history/batches"),
     getAppContext(),
-    tiaRequest<PulseBillingSettings>("/booking/pulse-settings"),
-    tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers"),
   ]);
   const admin = ctx.workspace.role === "admin";
   const activeBatch = history.batches.find((batch) => ["importing", "preview_ready", "failed"].includes(batch.status)) || null;
@@ -69,8 +66,6 @@ export default async function SetupPage() {
           knowledgeText={knowledge.content}
           historicalBatches={history.batches}
           activeBatch={activeBatch}
-          pulseSettings={pulseSettings}
-          pulseOffers={pulseOffers}
         />
       ) : (
         <Card><CardContent className="p-5 text-sm text-[var(--muted)]">إعدادات العيادة متاحة للأدمن فقط.</CardContent></Card>
