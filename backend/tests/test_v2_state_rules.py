@@ -224,9 +224,9 @@ def test_reschedule_date_change_preserves_replacement_identity_and_time_preferen
 
 def test_package_usage_change_does_not_create_pulse_billing_preference() -> None:
     state = _booking_state()
-    changed = apply_booking_package_usage_change(state, package_usage="use_existing")
+    changed = apply_booking_package_usage_change(state, package_usage="avoid_existing")
 
-    assert changed.constraints.package_usage == "use_existing"
+    assert changed.constraints.package_usage == "avoid_existing"
     assert changed.constraints.pulse_usage == "unspecified"
     assert changed.derived.selected_package_id is None
     assert changed.derived.package_validated is False
