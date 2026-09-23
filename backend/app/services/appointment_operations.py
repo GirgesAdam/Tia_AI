@@ -1,3 +1,5 @@
+[Reading 698 lines from start (total: 698 lines, 0 remaining)]
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -361,6 +363,7 @@ def reschedule_appointment_operation(
     actor_type: ActivityActorType = "staff",
     now: datetime | None = None,
     exclude_appointment_ids: tuple[UUID, ...] = (),
+    minimum_notice_minutes_override: int | None = None,
 ) -> tuple[Appointment, Appointment]:
     if idempotency_key:
         existing = db.scalar(
@@ -449,6 +452,7 @@ def reschedule_appointment_operation(
             exclude_appointment_id=current.id,
             exclude_appointment_ids=exclude_appointment_ids,
             laser_device_key=new_laser_device_key,
+            minimum_notice_minutes_override=minimum_notice_minutes_override,
         )
     except BookingRuleError as exc:
         raise AppointmentOperationError(str(exc)) from exc
@@ -694,3 +698,5 @@ def update_operational_status_operation(
     )
     db.flush()
     return appointment
+
+[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
