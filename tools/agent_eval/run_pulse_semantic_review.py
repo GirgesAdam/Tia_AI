@@ -127,7 +127,7 @@ def _billing_paraphrases(db: Session, workspace: Workspace) -> list[dict[str, ob
         message = (
             f"احجزيلي {service['name']} مع {doctor['name']} "
             f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
-            f"{wording}"
+            f"على جهاز {offer.device_name} {wording}"
         )
         _, turn = send_turn(
             db,
