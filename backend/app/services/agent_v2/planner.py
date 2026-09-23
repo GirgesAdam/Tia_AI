@@ -704,7 +704,10 @@ def _plan_operation(
             disposition="read",
             reads=reads,
             response_goal="pulse_information",
-            facts=params,
+            facts={
+                **params,
+                "requested_pulse_details": sorted(details),
+            },
         )
 
     if operation.type == "package_info":
