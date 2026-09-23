@@ -135,6 +135,8 @@ def _verified_read_context_from_turn(
             "time",
             "package_usage",
             "pulse_usage",
+            "pulse_count",
+            "requested_pulse_details",
         ):
             value = step.facts.get(key)
             if key == "pulse_usage" and value == "unspecified":
