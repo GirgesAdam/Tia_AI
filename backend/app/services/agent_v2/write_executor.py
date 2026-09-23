@@ -226,7 +226,8 @@ def execute_write_ready_step(
                     if package_resolution.package_name:
                         result["package_name"] = package_resolution.package_name
                 if pulse_usage == "use_existing":
-                    result["pulse_balance_used"] = True
+                    result["pulse_billing_selected"] = True
+                    result["pulse_consumption_recorded"] = False
                     result["billing_context"] = "pulse_prepaid"
             elif intent.kind == "confirm_appointment":
                 appointment = confirm_appointment_operation(
