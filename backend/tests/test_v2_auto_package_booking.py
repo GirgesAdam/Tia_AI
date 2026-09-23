@@ -349,7 +349,9 @@ def test_write_executor_uses_pulse_balance_without_auto_consuming_session_packag
     )
 
     assert result["ok"] is True
-    assert result["pulse_balance_used"] is True
+    assert result["pulse_billing_selected"] is True
+    assert result["pulse_consumption_recorded"] is False
+    assert "pulse_balance_used" not in result
     assert result["billing_context"] == "pulse_prepaid"
     assert captured_resolver["package_usage"] == "avoid_existing"
     assert captured_create["patient_package_id"] is None
