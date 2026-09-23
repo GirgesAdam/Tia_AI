@@ -154,6 +154,7 @@ export default async function RescheduleAppointmentPage({
     doctor_id: detail.appointment.doctor_id,
     date: selectedDate,
     exclude_appointment_id: appointmentId,
+    allow_immediate: "true",
   });
   if (detail.appointment.laser_device_key) {
     availabilityQuery.set("laser_device_key", detail.appointment.laser_device_key);

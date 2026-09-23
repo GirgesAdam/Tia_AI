@@ -361,6 +361,7 @@ def reschedule_appointment_operation(
     actor_type: ActivityActorType = "staff",
     now: datetime | None = None,
     exclude_appointment_ids: tuple[UUID, ...] = (),
+    minimum_notice_minutes_override: int | None = None,
 ) -> tuple[Appointment, Appointment]:
     if idempotency_key:
         existing = db.scalar(
@@ -449,6 +450,7 @@ def reschedule_appointment_operation(
             exclude_appointment_id=current.id,
             exclude_appointment_ids=exclude_appointment_ids,
             laser_device_key=new_laser_device_key,
+            minimum_notice_minutes_override=minimum_notice_minutes_override,
         )
     except BookingRuleError as exc:
         raise AppointmentOperationError(str(exc)) from exc

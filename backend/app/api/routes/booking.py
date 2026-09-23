@@ -1102,6 +1102,7 @@ def reschedule_appointment(
             doctor_id=payload.doctor_id,
             reason=payload.reason or "appointment_rescheduled",
             idempotency_key=idempotency_key,
+            minimum_notice_minutes_override=0,
         )
         db.commit()
     except AppointmentOperationNotFound as exc:

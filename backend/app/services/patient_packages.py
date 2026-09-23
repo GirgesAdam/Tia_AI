@@ -729,7 +729,10 @@ def cancel_patient_package_with_refund(
                 AppointmentAdditionalService.id.in_(additional_line_ids),
                 AppointmentAdditionalService.patient_package_id == package.id,
             )
-            .values(patient_package_id=None)
+            .values(
+                patient_package_id=None,
+                billing_context="standard",
+            )
         )
     if linked_appointment_ids:
         refresh_appointment_payment_snapshots(
