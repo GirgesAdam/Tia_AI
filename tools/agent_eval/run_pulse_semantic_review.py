@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.models.pulse_billing import PulsePackOffer
 from app.models.workspace import Workspace
 from app.services.pulse_billing import list_patient_pulse_balances
 from tools.agent_eval.harness import assert_demo_only, jsonable, send_turn
@@ -97,35 +98,38 @@ def _billing_paraphrases(db: Session, workspace: Workspace) -> list[dict[str, ob
     if not balances:
         raise RuntimeError("EVAL_INFRA_ERROR: no patient with remaining Pulse balance")
     balance = balances[0]
-    offer = _active_offer(db, workspace)
-    if offer.device_key != balance.device_key:
-        matching = [
-            candidate
-            for candidate in [_active_offer(db, workspace)]
-            if candidate.device_key == balance.device_key
-        ]
-        if matching:
-            offer = matching[0]
-    _catalog, service, doctor, available, slot = _laser_booking_fixture(
-        db,
-        workspace,
-        offer=offer,
+    offer = db.scalar(
+        select(PulsePackOffer)
+        .where(
+            PulsePackOffer.workspace_id == workspace.id,
+            PulsePackOffer.device_key == balance.device_key,
+            PulsePackOffer.is_active.is_(True),
+        )
+        .order_by(PulsePackOffer.pulses_count)
+        .limit(1)
     )
-    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
-    messages = [
-        (
+    if offer is None:
+        raise RuntimeError(
+            "EVAL_INFRA_ERROR: no active Pulse offer matches the patient's balance device"
+        )
+
+    rows: list[dict[str, object]] = []
+    wording_templates = [
+        "وخلي حساب الجلسة من رصيد النبضات اللي عندي.",
+        "وعايزها تتحاسب على الـpulse balance.",
+    ]
+    for index, wording in enumerate(wording_templates, start=1):
+        _catalog, service, doctor, available, slot = _laser_booking_fixture(
+            db,
+            workspace,
+            offer=offer,
+        )
+        local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+        message = (
             f"احجزيلي {service['name']} مع {doctor['name']} "
             f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
-            "وخلي حساب الجلسة من رصيد النبضات اللي عندي."
-        ),
-        (
-            f"ثبتيلي {service['name']} مع {doctor['name']} "
-            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
-            "وعايزها تتحاسب على الـpulse balance."
-        ),
-    ]
-    rows: list[dict[str, object]] = []
-    for index, message in enumerate(messages, start=1):
+            f"{wording}"
+        )
         _, turn = send_turn(
             db,
             workspace,
@@ -184,6 +188,12 @@ def _purchase_then_bill_paraphrases(
         first_response.conversation_id,
     )
 
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db,
+        workspace,
+        offer=offer,
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
     _, compound_turn = send_turn(
         db,
         workspace,
