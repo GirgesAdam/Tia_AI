@@ -7,7 +7,7 @@ import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 import {
   savePulsePackOfferFormAction,
   savePulsePriceFormAction,
-} from "./clinic-settings-actions";
+} from "./actions";
 
 function NumberField({
   label,

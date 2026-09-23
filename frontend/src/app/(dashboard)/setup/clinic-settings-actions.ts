@@ -16,18 +16,9 @@ function text(formData: FormData, key: string) {
   return value || null;
 }
 
-function moneyMinor(value: FormDataEntryValue | null) {
-  const normalized = String(value ?? "").trim().replace(",", ".");
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
-    throw new Error("اكتب سعر صحيح بحد أقصى رقمين عشريين.");
-  }
-  const [whole, fraction = ""] = normalized.split(".");
-  return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
-}
-
 export async function saveClinicProfileFormAction(formData: FormData) {
   const name = text(formData, "name");
-  if (!name) throw new Error("اسم العيادة مطلوب.");
+  if (!name) throw new Error("Ø§Ø³Ù… Ø§Ù„Ø¹ÙŠØ§Ø¯Ø© Ù…Ø·Ù„ÙˆØ¨.");
   await tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2/profile", {
     method: "PUT",
     body: JSON.stringify({
@@ -46,7 +37,7 @@ export async function saveClinicHoursFormAction(formData: FormData) {
     if (formData.get(`enabled_${weekday}`) !== "on") continue;
     const start = text(formData, `start_${weekday}`);
     const end = text(formData, `end_${weekday}`);
-    if (!start || !end) throw new Error("حدد بداية ونهاية مواعيد كل يوم مفعّل.");
+    if (!start || !end) throw new Error("Ø­Ø¯Ø¯ Ø¨Ø¯Ø§ÙŠØ© ÙˆÙ†Ù‡Ø§ÙŠØ© Ù…ÙˆØ§Ø¹ÙŠØ¯ ÙƒÙ„ ÙŠÙˆÙ… Ù…ÙØ¹Ù‘Ù„.");
     intervals.push({ weekday, start_time: start, end_time: end });
   }
   await tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2/hours", {
@@ -63,41 +54,4 @@ export async function saveKnowledgeTextFormAction(formData: FormData) {
     body: JSON.stringify({ content }),
   });
   refresh();
-}
-
-export async function savePulsePriceFormAction(formData: FormData) {
-  await tiaRequest("/booking/pulse-settings", {
-    method: "PUT",
-    body: JSON.stringify({
-      overage_price_minor: moneyMinor(formData.get("overage_price")),
-      currency: "EGP",
-    }),
-  });
-  revalidatePath("/setup");
-  revalidatePath("/appointments");
-  revalidatePath("/finance");
-}
-
-export async function savePulsePackOfferFormAction(formData: FormData) {
-  const deviceKey = String(formData.get("device_key") || "").trim();
-  const pulsesCount = Number(String(formData.get("pulses_count") || "0"));
-  if (!["prime_lase", "candela_gentle"].includes(deviceKey)) {
-    throw new Error("اختار جهاز ليزر صحيح.");
-  }
-  if (!Number.isInteger(pulsesCount) || pulsesCount <= 0) {
-    throw new Error("عدد الـPulses لازم يكون رقم صحيح أكبر من صفر.");
-  }
-  await tiaRequest("/booking/pulse-pack-offers", {
-    method: "PUT",
-    body: JSON.stringify({
-      device_key: deviceKey,
-      pulses_count: pulsesCount,
-      price_minor: moneyMinor(formData.get("price")),
-      currency: "EGP",
-      is_active: formData.get("is_active") === "on",
-    }),
-  });
-  revalidatePath("/setup");
-  revalidatePath("/patients");
-  revalidatePath("/appointments");
 }

@@ -5,7 +5,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
-import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 
 import {
   saveClinicHoursFormAction,
@@ -13,7 +12,6 @@ import {
   saveKnowledgeTextFormAction,
 } from "./clinic-settings-actions";
 import { HistoricalImportUploader } from "./integration/history-uploader";
-import { PulsePricingPanel } from "./pulse-pricing-panel";
 
 const DAYS = [
   { weekday: 5, label: "السبت" },
@@ -56,15 +54,11 @@ export function ClinicSettingsPanel({
   knowledgeText,
   historicalBatches,
   activeBatch,
-  pulseSettings,
-  pulseOffers,
 }: {
   setup: ClinicSetupV2Snapshot;
   knowledgeText: string;
   historicalBatches: HistoricalBatch[];
   activeBatch: HistoricalBatch | null;
-  pulseSettings: PulseBillingSettings;
-  pulseOffers: PulsePackOffer[];
 }) {
   const byDay = new Map(setup.clinic_hours.map((row) => [row.weekday, row]));
 
@@ -110,8 +104,6 @@ export function ClinicSettingsPanel({
           </form>
         </CardContent>
       </Card>
-
-      <PulsePricingPanel settings={pulseSettings} offers={pulseOffers} />
 
       <Card id="tia-knowledge">
         <CardHeader>
