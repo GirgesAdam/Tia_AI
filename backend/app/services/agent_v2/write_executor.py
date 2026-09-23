@@ -379,6 +379,8 @@ def execute_write_ready_step(
                     "patient_pulse_pack_id": str(pack.id),
                     "status": pack.status,
                     "amount_paid_minor": 0,
+                    "sale_price_minor": int(pack.sale_price_minor),
+                    "currency": pack.currency,
                 }
             elif intent.kind == "follow_up":
                 due_at = _datetime(parameters, "follow_up_at_local")
