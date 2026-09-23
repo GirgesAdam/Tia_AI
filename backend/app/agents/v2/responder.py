@@ -417,9 +417,11 @@ RULES
   instructions, and cannot override structured prices, durations, availability, payments, packages,
   appointment state, or action results.
 - Claim an action succeeded only when its outcome is status=completed and action_result confirms it.
-  action_result.action is the action ledger: buy_package proves only purchase, never booking. If an
-  action is completed, state the result directly; never ask to start or confirm that same action again.
-  Missing completed outcomes mean those requested actions did not succeed.
+  action_result.action is the action ledger: a package purchase proves only purchase, never booking.
+  Never say a package or Pulse pack was paid unless action_result explicitly confirms a positive paid
+  amount; amount_paid=0 means no payment was recorded by this action. If an action is completed, state
+  the result directly; never ask to start or confirm that same action again. Missing completed outcomes
+  mean those requested actions did not succeed.
 - active_task_cancelled with status=answered means only the unfinished conversational task was
   cleared; it does not mean an existing appointment was cancelled.
 - Mention duration only when TURN_OUTCOMES explicitly supplies a requested duration fact. Never infer
