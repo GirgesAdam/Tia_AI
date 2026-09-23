@@ -25,12 +25,13 @@ def test_token_usage_aggregates_actual_metadata():
             "input_tokens": 100,
             "output_tokens": 20,
             "total_tokens": 120,
-            "input_token_details": {"cache_read": 40},
+            "input_token_details": {"cache_read": 40, "cache_creation": 25},
         }
     )
     assert usage.input_tokens == 100
     assert usage.output_tokens == 20
     assert usage.cached_tokens == 40
+    assert usage.cache_write_tokens == 25
     assert usage.total_tokens == 120
     assert usage.metadata_missing_calls == 0
 
@@ -159,6 +160,7 @@ def test_attach_actual_usage_keeps_provider_total_authoritative():
         input_tokens=100,
         output_tokens=20,
         cached_tokens=10,
+        cache_write_tokens=30,
         total_tokens=120,
         model="test-model",
         latency_ms=123,
@@ -167,6 +169,9 @@ def test_attach_actual_usage_keeps_provider_total_authoritative():
     )
 
     assert attributed["input_tokens_actual"] == 100
+    assert attributed["cached_tokens_actual"] == 10
+    assert attributed["cache_write_tokens_actual"] == 30
+    assert attributed["uncached_input_tokens_actual"] == 60
     assert attributed["total_tokens_actual"] == 120
     assert attributed["provider_input_minus_estimate"] == 10
     assert attributed["retry_count"] == 1

@@ -229,6 +229,58 @@ Clinic local time: {local_now.isoformat()}
 """
 
 
+def _with_interpreter_prompt_cache_breakpoint(
+    messages: list[BaseMessage],
+    *,
+    timezone_name: str,
+    local_now: datetime,
+) -> list[BaseMessage]:
+    """Mark only the stable interpreter prefix for provider prompt caching."""
+
+    if not messages or not isinstance(messages[0], SystemMessage):
+        raise ValueError("Interpreter messages must start with a system message.")
+    content = messages[0].content
+    if not isinstance(content, str):
+        raise ValueError("Interpreter system message must be plain text before cache wrapping.")
+
+    dynamic_tail = (
+        f"Clinic timezone: {timezone_name}\n"
+        f"Clinic local time: {local_now.isoformat()}\n"
+    )
+    if not content.endswith(dynamic_tail):
+        raise ValueError("Interpreter system prompt has an unexpected dynamic tail.")
+
+    stable_prefix = content[: -len(dynamic_tail)]
+    cached_system = SystemMessage(
+        content=[
+            {
+                "type": "text",
+                "text": stable_prefix,
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            },
+            {"type": "text", "text": dynamic_tail},
+        ]
+    )
+    return [cached_system, *messages[1:]]
+
+
+def _messages_for_prompt_cache(
+    model: object,
+    messages: list[BaseMessage],
+    *,
+    timezone_name: str,
+    local_now: datetime,
+) -> list[BaseMessage]:
+    options = getattr(model, "prompt_cache_options", None)
+    if not isinstance(options, dict) or options.get("mode") != "explicit":
+        return messages
+    return _with_interpreter_prompt_cache_breakpoint(
+        messages,
+        timezone_name=timezone_name,
+        local_now=local_now,
+    )
+
+
 def _build_interpreter_messages(
     *,
     history: list[BaseMessage],
@@ -474,28 +526,47 @@ def interpret_customer_turn_v2(
     fallback_name = settings.openai_fallback_model
     primary_model = build_realtime_interpreter_model()
 
-    def invoke_structured(model) -> TiaTurnUnderstanding:
+    def invoke_structured(
+        model,
+        request_messages: list[BaseMessage],
+    ) -> TiaTurnUnderstanding:
         try:
             return invoke_typed_structured_output(
                 model=model,
                 schema=TiaTurnUnderstanding,
-                messages=messages,
+                messages=request_messages,
             )
         except StructuredOutputError:
             return invoke_typed_structured_output(
                 model=model,
                 schema=TiaTurnUnderstanding,
-                messages=messages,
+                messages=request_messages,
             )
 
     def invoke_primary() -> TiaTurnUnderstanding:
-        return invoke_structured(primary_model)
+        return invoke_structured(
+            primary_model,
+            _messages_for_prompt_cache(
+                primary_model,
+                messages,
+                timezone_name=timezone_name,
+                local_now=local_now,
+            ),
+        )
 
     def invoke_fallback() -> TiaTurnUnderstanding:
         fallback_model = build_realtime_interpreter_fallback_model()
         if fallback_model is None:
             raise RuntimeError("V2 turn interpreter fallback model is not configured.")
-        return invoke_structured(fallback_model)
+        return invoke_structured(
+            fallback_model,
+            _messages_for_prompt_cache(
+                fallback_model,
+                messages,
+                timezone_name=timezone_name,
+                local_now=local_now,
+            ),
+        )
 
     model_calls = [(primary_name, invoke_primary)]
     if fallback_name and fallback_name != primary_name:
