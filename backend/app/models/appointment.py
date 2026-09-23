@@ -96,7 +96,7 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="appointment_quick_booking_staff_only",
         ),
         CheckConstraint(
-            "billing_context IN ('standard', 'package_prepaid')",
+            "billing_context IN ('standard', 'package_prepaid', 'pulse_prepaid')",
             name="appointment_billing_context_valid",
         ),
         CheckConstraint(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from app.services.patient_packages import (
     reserve_package_usage,
     validate_package_for_booking,
 )
+from app.services.pulse_billing import PulseBillingError, validate_pulse_booking
 
 
 def create_appointment_operation(
@@ -31,6 +33,7 @@ def create_appointment_operation(
     requested_start_at: datetime,
     created_by_user_id: UUID | None,
     patient_package_id: UUID | None = None,
+    use_pulse_balance: bool = False,
     visit_group_id: UUID | None = None,
     lead: Lead | None = None,
     source: str = "staff",
@@ -70,6 +73,11 @@ def create_appointment_operation(
     except (BookingRuleError, InventoryOperationError) as exc:
         raise AppointmentOperationError(str(exc)) from exc
 
+    if patient_package_id is not None and use_pulse_balance:
+        raise AppointmentOperationError(
+            "Choose either a session package or pulse balance, not both."
+        )
+
     patient_package = None
     if patient_package_id is not None:
         try:
@@ -83,6 +91,20 @@ def create_appointment_operation(
                 laser_device_key=slot.laser_device_key,
             )
         except PackageOperationError as exc:
+            raise AppointmentOperationError(str(exc)) from exc
+
+    if use_pulse_balance:
+        try:
+            validate_pulse_booking(
+                db,
+                workspace_id=workspace.id,
+                patient_id=patient_id,
+                device_key=slot.laser_device_key,
+                appointment_date=slot.start_at.astimezone(
+                    ZoneInfo(workspace.timezone or "UTC")
+                ).date(),
+            )
+        except PulseBillingError as exc:
             raise AppointmentOperationError(str(exc)) from exc
 
     settings = get_effective_booking_settings(db, workspace.id)
@@ -109,6 +131,7 @@ def create_appointment_operation(
         currency=slot.currency,
         laser_device_key=slot.laser_device_key,
         laser_device_name=slot.laser_device_name,
+        billing_context="pulse_prepaid" if use_pulse_balance else "standard",
         customer_note=customer_note,
         idempotency_key=idempotency_key,
         confirmed_at=occurred_at if initial_status == "confirmed" else None,
@@ -155,6 +178,7 @@ def create_appointment_operation(
             "source": appointment.source,
             "patient_package_id": appointment.patient_package_id,
             "laser_device_key": appointment.laser_device_key,
+            "billing_context": appointment.billing_context,
         },
     )
     db.flush()

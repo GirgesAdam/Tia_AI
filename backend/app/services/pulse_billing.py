@@ -1,0 +1,1143 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from uuid import UUID
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from app.integrations.clinic.authority import (
+    ClinicIntegrationAuthorityError,
+    require_tia_workspace_domain_write,
+)
+from app.models.appointment import Appointment
+from app.models.clinic_inventory import LASER_DEVICE_NAMES
+from app.models.patient import Patient
+from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
+from app.models.pulse_billing import (
+    AppointmentPulseSettlement,
+    PatientPulsePack,
+    PulseBillingSettings,
+    PulsePackOffer,
+    PulseUsage,
+)
+from app.schemas.pulse_billing import (
+    AppointmentPulseSettlementRead,
+    PatientPulsePackRead,
+    PulseBalanceRead,
+    PulseBillingSettingsRead,
+    PulsePackOfferRead,
+)
+from app.services.activity import ActivityActorType, record_activity_event
+from app.services.payments import refresh_appointment_payment_snapshots
+
+
+class PulseBillingError(ValueError):
+    pass
+
+
+class PulseBillingNotFound(PulseBillingError):
+    pass
+def get_pulse_billing_settings(
+    db: Session,
+    *,
+    workspace_id: UUID,
+) -> PulseBillingSettingsRead:
+    row = db.scalar(
+        select(PulseBillingSettings).where(PulseBillingSettings.workspace_id == workspace_id)
+    )
+    if row is None:
+        return PulseBillingSettingsRead(overage_price_minor=None, currency="EGP")
+    return PulseBillingSettingsRead(
+        overage_price_minor=int(row.overage_price_minor),
+        currency=row.currency,
+    )
+
+
+def upsert_pulse_billing_settings(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    overage_price_minor: int,
+    currency: str,
+) -> PulseBillingSettings:
+    if overage_price_minor <= 0:
+        raise PulseBillingError("Pulse overage price must be greater than zero.")
+    row = db.scalar(
+        select(PulseBillingSettings)
+        .where(PulseBillingSettings.workspace_id == workspace_id)
+        .with_for_update()
+    )
+    if row is None:
+        row = PulseBillingSettings(
+            workspace_id=workspace_id,
+            overage_price_minor=overage_price_minor,
+            currency=currency.upper(),
+        )
+        db.add(row)
+    else:
+        row.overage_price_minor = overage_price_minor
+        row.currency = currency.upper()
+    db.flush()
+    return row
+
+
+def list_pulse_pack_offers(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    active_only: bool = False,
+) -> list[PulsePackOfferRead]:
+    stmt = select(PulsePackOffer).where(PulsePackOffer.workspace_id == workspace_id)
+    if active_only:
+        stmt = stmt.where(PulsePackOffer.is_active.is_(True))
+    rows = list(
+        db.scalars(
+            stmt.order_by(PulsePackOffer.device_key, PulsePackOffer.pulses_count)
+        ).all()
+    )
+    return [PulsePackOfferRead.model_validate(row) for row in rows]
+
+
+def upsert_pulse_pack_offer(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    device_key: str,
+    pulses_count: int,
+    price_minor: int,
+    currency: str,
+    is_active: bool,
+) -> PulsePackOffer:
+    if device_key not in LASER_DEVICE_NAMES:
+        raise PulseBillingError("Unsupported laser device.")
+    if pulses_count <= 0:
+        raise PulseBillingError("Pulse pack size must be positive.")
+    if price_minor < 0:
+        raise PulseBillingError("Pulse pack price cannot be negative.")
+    row = db.scalar(
+        select(PulsePackOffer).where(
+            PulsePackOffer.workspace_id == workspace_id,
+            PulsePackOffer.device_key == device_key,
+            PulsePackOffer.pulses_count == pulses_count,
+        )
+    )
+    if row is None:
+        row = PulsePackOffer(
+            workspace_id=workspace_id,
+            device_key=device_key,
+            device_name=LASER_DEVICE_NAMES[device_key],
+            pulses_count=pulses_count,
+            price_minor=price_minor,
+            currency=currency.upper(),
+            is_active=is_active,
+        )
+        db.add(row)
+    else:
+        row.device_name = LASER_DEVICE_NAMES[device_key]
+        row.price_minor = price_minor
+        row.currency = currency.upper()
+        row.is_active = is_active
+    db.flush()
+    return row
+def _effective_pack_status(pack: PatientPulsePack, *, on_date: date | None = None) -> str:
+    if pack.status == "cancelled":
+        return "cancelled"
+    on_date = on_date or datetime.now(UTC).date()
+    if pack.expires_at is not None and pack.expires_at < on_date:
+        return "expired"
+    return "active"
+
+
+def _consumed_for_pack(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    pack_id: UUID,
+) -> int:
+    return int(
+        db.scalar(
+            select(func.coalesce(func.sum(PulseUsage.pulses_used), 0)).where(
+                PulseUsage.workspace_id == workspace_id,
+                PulseUsage.patient_pulse_pack_id == pack_id,
+                PulseUsage.status == "consumed",
+            )
+        )
+        or 0
+    )
+
+
+def _pack_financial_rows(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    pack: PatientPulsePack,
+    for_update: bool = False,
+) -> tuple[list[PaymentTransaction], list[PaymentTransaction]]:
+    payment_filter = or_(
+        PaymentTransaction.patient_pulse_pack_id == pack.id,
+        (
+            PaymentTransaction.id == pack.purchase_transaction_id
+            if pack.purchase_transaction_id is not None
+            else False
+        ),
+    )
+    payment_stmt = (
+        select(PaymentTransaction)
+        .where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.transaction_type == "payment",
+            payment_filter,
+        )
+        .order_by(PaymentTransaction.created_at, PaymentTransaction.id)
+    )
+    if for_update:
+        payment_stmt = payment_stmt.with_for_update()
+    payments = list(db.scalars(payment_stmt).all())
+    payment_ids = [row.id for row in payments]
+    if not payment_ids:
+        return payments, []
+    refund_stmt = select(PaymentTransaction).where(
+        PaymentTransaction.workspace_id == workspace_id,
+        PaymentTransaction.transaction_type == "refund",
+        or_(
+            PaymentTransaction.patient_pulse_pack_id == pack.id,
+            PaymentTransaction.reference_transaction_id.in_(payment_ids),
+        ),
+    )
+    if for_update:
+        refund_stmt = refund_stmt.with_for_update()
+    refunds = list(db.scalars(refund_stmt).all())
+    return payments, refunds
+
+
+def pulse_pack_read(
+    db: Session,
+    pack: PatientPulsePack,
+    *,
+    include_financials: bool = False,
+) -> PatientPulsePackRead:
+    consumed = _consumed_for_pack(
+        db,
+        workspace_id=pack.workspace_id,
+        pack_id=pack.id,
+    )
+    remaining = max(int(pack.pulses_purchased) - consumed, 0)
+    effective = _effective_pack_status(pack)
+    if effective == "active" and remaining == 0:
+        effective = "exhausted"
+    paid = 0
+    refunded = 0
+    if include_financials:
+        payments, refunds = _pack_financial_rows(
+            db,
+            workspace_id=pack.workspace_id,
+            pack=pack,
+        )
+        paid = sum(int(row.amount_minor) for row in payments)
+        refunded = sum(int(row.amount_minor) for row in refunds)
+    return PatientPulsePackRead(
+        id=pack.id,
+        workspace_id=pack.workspace_id,
+        patient_id=pack.patient_id,
+        pulse_pack_offer_id=pack.pulse_pack_offer_id,
+        origin_appointment_id=pack.origin_appointment_id,
+        purchase_transaction_id=pack.purchase_transaction_id,
+        device_key=pack.device_key,
+        device_name=pack.device_name,
+        pulses_purchased=int(pack.pulses_purchased),
+        pulses_consumed=consumed,
+        pulses_remaining=remaining,
+        sale_price_minor=int(pack.sale_price_minor),
+        amount_paid_minor=paid,
+        amount_refunded_minor=refunded,
+        balance_due_minor=max(int(pack.sale_price_minor) - paid + refunded, 0),
+        standalone_pulse_price_minor_at_purchase=(
+            int(pack.standalone_pulse_price_minor_at_purchase)
+            if pack.standalone_pulse_price_minor_at_purchase is not None
+            else None
+        ),
+        currency=pack.currency,
+        purchased_at=pack.purchased_at,
+        expires_at=pack.expires_at,
+        status=pack.status,
+        effective_status=effective,
+        created_at=pack.created_at,
+        updated_at=pack.updated_at,
+    )
+
+
+def list_patient_pulse_packs(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    device_key: str | None = None,
+    include_financials: bool = False,
+) -> list[PatientPulsePackRead]:
+    stmt = select(PatientPulsePack).where(
+        PatientPulsePack.workspace_id == workspace_id,
+        PatientPulsePack.patient_id == patient_id,
+    )
+    if device_key is not None:
+        stmt = stmt.where(PatientPulsePack.device_key == device_key)
+    packs = list(
+        db.scalars(
+            stmt.order_by(PatientPulsePack.purchased_at.desc(), PatientPulsePack.id.desc())
+        ).all()
+    )
+    return [
+        pulse_pack_read(db, pack, include_financials=include_financials)
+        for pack in packs
+    ]
+
+
+def list_patient_pulse_balances(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+) -> list[PulseBalanceRead]:
+    reads = list_patient_pulse_packs(
+        db,
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        include_financials=False,
+    )
+    result: list[PulseBalanceRead] = []
+    for device_key, device_name in LASER_DEVICE_NAMES.items():
+        active = [
+            item
+            for item in reads
+            if item.device_key == device_key
+            and item.effective_status == "active"
+            and item.pulses_remaining > 0
+        ]
+        if not active:
+            continue
+        result.append(
+            PulseBalanceRead(
+                device_key=device_key,
+                device_name=device_name,
+                pulses_purchased=sum(item.pulses_purchased for item in active),
+                pulses_consumed=sum(item.pulses_consumed for item in active),
+                pulses_remaining=sum(item.pulses_remaining for item in active),
+                active_pack_count=len(active),
+            )
+        )
+    return result
+def _settings_price_snapshot(db: Session, *, workspace_id: UUID) -> int | None:
+    row = db.scalar(
+        select(PulseBillingSettings).where(PulseBillingSettings.workspace_id == workspace_id)
+    )
+    return int(row.overage_price_minor) if row is not None else None
+
+
+def _get_active_offer(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    offer_id: UUID,
+    for_update: bool = False,
+) -> PulsePackOffer:
+    stmt = select(PulsePackOffer).where(
+        PulsePackOffer.workspace_id == workspace_id,
+        PulsePackOffer.id == offer_id,
+        PulsePackOffer.is_active.is_(True),
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    offer = db.scalar(stmt)
+    if offer is None:
+        raise PulseBillingNotFound("Pulse pack offer not found or inactive.")
+    return offer
+
+
+def purchase_pulse_pack_offer(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    offer_id: UUID,
+    amount_paid_minor: int,
+    payment_method: str,
+    created_by_user_id: UUID | None,
+    external_reference: str | None = None,
+    idempotency_key: str | None = None,
+    actor_type: ActivityActorType = "staff",
+    origin_appointment_id: UUID | None = None,
+    expires_at: date | None = None,
+) -> PatientPulsePack:
+    offer = _get_active_offer(
+        db,
+        workspace_id=workspace_id,
+        offer_id=offer_id,
+        for_update=True,
+    )
+    if amount_paid_minor < 0 or amount_paid_minor > int(offer.price_minor):
+        raise PulseBillingError("Initial pulse pack payment is outside the pack price.")
+    if amount_paid_minor > 0 and (
+        payment_method not in PAYMENT_METHODS or payment_method == "unknown"
+    ):
+        raise PulseBillingError("A paid pulse pack requires a supported payment method.")
+    if idempotency_key:
+        existing = db.scalar(
+            select(PatientPulsePack).where(
+                PatientPulsePack.workspace_id == workspace_id,
+                PatientPulsePack.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.patient_id != patient_id or existing.pulse_pack_offer_id != offer_id:
+                raise PulseBillingError(
+                    "Idempotency key was already used for another pulse pack sale."
+                )
+            return existing
+
+    patient = db.scalar(
+        select(Patient)
+        .where(Patient.workspace_id == workspace_id, Patient.id == patient_id)
+        .with_for_update()
+    )
+    if patient is None:
+        raise PulseBillingNotFound("Patient not found.")
+    purchased_at = datetime.now(UTC)
+    if expires_at is not None and expires_at < purchased_at.date():
+        raise PulseBillingError("Pulse pack expiry cannot be before the purchase date.")
+
+    transaction: PaymentTransaction | None = None
+    if amount_paid_minor > 0:
+        try:
+            require_tia_workspace_domain_write(
+                db,
+                workspace_id=workspace_id,
+                domain="payments",
+            )
+        except ClinicIntegrationAuthorityError as exc:
+            raise PulseBillingError(str(exc)) from exc
+        transaction = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=origin_appointment_id,
+            origin_appointment_id=origin_appointment_id,
+            patient_id=patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=None,
+            patient_package_id=None,
+            patient_pulse_pack_id=None,
+            transaction_type="payment",
+            amount_minor=amount_paid_minor,
+            currency=offer.currency,
+            payment_method=payment_method,
+            source="staff" if actor_type == "staff" else "system",
+            external_reference=external_reference,
+            reason="Prepaid pulse pack purchase",
+            idempotency_key=(
+                f"pulse-payment:{idempotency_key}"[:128] if idempotency_key else None
+            ),
+            created_at=purchased_at,
+        )
+        db.add(transaction)
+        db.flush()
+
+    pack = PatientPulsePack(
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        pulse_pack_offer_id=offer.id,
+        origin_appointment_id=origin_appointment_id,
+        purchase_transaction_id=transaction.id if transaction is not None else None,
+        created_by_user_id=created_by_user_id,
+        device_key=offer.device_key,
+        device_name=offer.device_name,
+        pulses_purchased=int(offer.pulses_count),
+        sale_price_minor=int(offer.price_minor),
+        standalone_pulse_price_minor_at_purchase=_settings_price_snapshot(
+            db,
+            workspace_id=workspace_id,
+        ),
+        currency=offer.currency,
+        purchased_at=purchased_at,
+        expires_at=expires_at,
+        status="active",
+        idempotency_key=idempotency_key,
+    )
+    db.add(pack)
+    db.flush()
+    if transaction is not None:
+        transaction.patient_pulse_pack_id = pack.id
+        if origin_appointment_id is not None:
+            db.add(
+                PaymentAllocation(
+                    workspace_id=workspace_id,
+                    transaction_id=transaction.id,
+                    appointment_id=origin_appointment_id,
+                    amount_minor=amount_paid_minor,
+                    created_at=transaction.created_at,
+                )
+            )
+            db.flush()
+            refresh_appointment_payment_snapshots(
+                db,
+                workspace_id=workspace_id,
+                appointment_ids={origin_appointment_id},
+            )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type=actor_type,
+        actor_user_id=created_by_user_id,
+        action="pulse_pack.created",
+        entity_type="patient_pulse_pack",
+        entity_id=pack.id,
+        summary="Prepaid pulse pack created",
+        metadata={
+            "offer_id": offer.id,
+            "device_key": offer.device_key,
+            "pulses_purchased": int(offer.pulses_count),
+            "sale_price_minor": int(offer.price_minor),
+            "amount_paid_minor": amount_paid_minor,
+        },
+    )
+    return pack
+def record_pulse_pack_payment(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    pack_id: UUID,
+    amount_minor: int,
+    payment_method: str,
+    created_by_user_id: UUID | None,
+    external_reference: str | None = None,
+    idempotency_key: str | None = None,
+) -> PaymentTransaction:
+    if amount_minor <= 0:
+        raise PulseBillingError("Pulse pack payment amount must be positive.")
+    if payment_method not in PAYMENT_METHODS or payment_method == "unknown":
+        raise PulseBillingError("A pulse pack payment requires a supported payment method.")
+    try:
+        require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+    except ClinicIntegrationAuthorityError as exc:
+        raise PulseBillingError(str(exc)) from exc
+    if idempotency_key:
+        existing = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.patient_pulse_pack_id != pack_id
+                or existing.amount_minor != amount_minor
+                or existing.transaction_type != "payment"
+            ):
+                raise PulseBillingError(
+                    "Idempotency key was already used for another pulse pack payment."
+                )
+            return existing
+    pack = db.scalar(
+        select(PatientPulsePack)
+        .where(
+            PatientPulsePack.workspace_id == workspace_id,
+            PatientPulsePack.id == pack_id,
+        )
+        .with_for_update()
+    )
+    if pack is None:
+        raise PulseBillingNotFound("Pulse pack not found.")
+    if _effective_pack_status(pack) != "active":
+        raise PulseBillingError("Payments can only be added to an active pulse pack.")
+    payments, _refunds = _pack_financial_rows(
+        db,
+        workspace_id=workspace_id,
+        pack=pack,
+        for_update=True,
+    )
+    remaining_due = max(
+        int(pack.sale_price_minor) - sum(int(row.amount_minor) for row in payments),
+        0,
+    )
+    if amount_minor > remaining_due:
+        raise PulseBillingError(
+            f"Pulse pack payment exceeds remaining balance of {remaining_due} minor units."
+        )
+    transaction = PaymentTransaction(
+        workspace_id=workspace_id,
+        appointment_id=pack.origin_appointment_id,
+        origin_appointment_id=pack.origin_appointment_id,
+        patient_id=pack.patient_id,
+        created_by_user_id=created_by_user_id,
+        reference_transaction_id=None,
+        patient_package_id=None,
+        patient_pulse_pack_id=pack.id,
+        transaction_type="payment",
+        amount_minor=amount_minor,
+        currency=pack.currency,
+        payment_method=payment_method,
+        source="staff",
+        external_reference=external_reference,
+        reason="Prepaid pulse pack payment",
+        idempotency_key=idempotency_key,
+        created_at=datetime.now(UTC),
+    )
+    db.add(transaction)
+    db.flush()
+    if pack.origin_appointment_id is not None:
+        db.add(
+            PaymentAllocation(
+                workspace_id=workspace_id,
+                transaction_id=transaction.id,
+                appointment_id=pack.origin_appointment_id,
+                amount_minor=amount_minor,
+                created_at=transaction.created_at,
+            )
+        )
+        db.flush()
+        refresh_appointment_payment_snapshots(
+            db,
+            workspace_id=workspace_id,
+            appointment_ids={pack.origin_appointment_id},
+        )
+    if pack.purchase_transaction_id is None:
+        pack.purchase_transaction_id = transaction.id
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=created_by_user_id,
+        action="pulse_pack.payment_recorded",
+        entity_type="patient_pulse_pack",
+        entity_id=pack.id,
+        summary="Pulse pack payment recorded",
+        metadata={"amount_minor": amount_minor, "payment_method": payment_method},
+    )
+    return transaction
+def _available_pack_rows(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    device_key: str,
+    on_date: date | None = None,
+    for_update: bool = False,
+) -> list[tuple[PatientPulsePack, int]]:
+    on_date = on_date or datetime.now(UTC).date()
+    stmt = select(PatientPulsePack).where(
+        PatientPulsePack.workspace_id == workspace_id,
+        PatientPulsePack.patient_id == patient_id,
+        PatientPulsePack.device_key == device_key,
+        PatientPulsePack.status == "active",
+        or_(
+            PatientPulsePack.expires_at.is_(None),
+            PatientPulsePack.expires_at >= on_date,
+        ),
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    packs = list(
+        db.scalars(
+            stmt.order_by(
+                PatientPulsePack.expires_at.asc().nullslast(),
+                PatientPulsePack.purchased_at.asc(),
+                PatientPulsePack.id.asc(),
+            )
+        ).all()
+    )
+    result: list[tuple[PatientPulsePack, int]] = []
+    for pack in packs:
+        remaining = max(
+            int(pack.pulses_purchased)
+            - _consumed_for_pack(db, workspace_id=workspace_id, pack_id=pack.id),
+            0,
+        )
+        if remaining > 0:
+            result.append((pack, remaining))
+    return result
+def available_pulse_balance(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    device_key: str,
+    on_date: date | None = None,
+) -> int:
+    return sum(
+        remaining
+        for _pack, remaining in _available_pack_rows(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            device_key=device_key,
+            on_date=on_date,
+        )
+    )
+
+
+def validate_pulse_booking(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    device_key: str | None,
+    appointment_date: date,
+) -> None:
+    if device_key is None:
+        raise PulseBillingError("Pulse balance can only be used for a laser appointment.")
+    balance = available_pulse_balance(
+        db,
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        device_key=device_key,
+        on_date=appointment_date,
+    )
+    if balance <= 0:
+        raise PulseBillingError(
+            "The patient has no available pulse balance for the selected laser device."
+        )
+
+
+def _reverse_existing_appointment_usages(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+) -> None:
+    rows = list(
+        db.scalars(
+            select(PulseUsage)
+            .where(
+                PulseUsage.workspace_id == workspace_id,
+                PulseUsage.appointment_id == appointment_id,
+                PulseUsage.status == "consumed",
+            )
+            .with_for_update()
+        ).all()
+    )
+    for row in rows:
+        row.status = "reversed"
+    if rows:
+        db.flush()
+def _consume_from_available_packs(
+    db: Session,
+    *,
+    appointment: Appointment,
+    pulses_needed: int,
+    used_at: datetime,
+) -> int:
+    remaining_needed = max(int(pulses_needed), 0)
+    consumed = 0
+    for pack, available in _available_pack_rows(
+        db,
+        workspace_id=appointment.workspace_id,
+        patient_id=appointment.patient_id,
+        device_key=str(appointment.laser_device_key),
+        on_date=used_at.date(),
+        for_update=True,
+    ):
+        if remaining_needed <= 0:
+            break
+        quantity = min(available, remaining_needed)
+        db.add(
+            PulseUsage(
+                workspace_id=appointment.workspace_id,
+                patient_pulse_pack_id=pack.id,
+                appointment_id=appointment.id,
+                pulses_used=quantity,
+                status="consumed",
+                used_at=used_at,
+            )
+        )
+        consumed += quantity
+        remaining_needed -= quantity
+    db.flush()
+    return consumed
+
+
+def settle_appointment_pulses(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    pulses_used: int,
+    changed_by_user_id: UUID | None,
+) -> AppointmentPulseSettlement:
+    if pulses_used < 0:
+        raise PulseBillingError("Pulse usage cannot be negative.")
+    appointment = db.scalar(
+        select(Appointment)
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.id == appointment_id,
+        )
+        .with_for_update()
+    )
+    if appointment is None:
+        raise PulseBillingNotFound("Appointment not found.")
+    if appointment.billing_context != "pulse_prepaid":
+        raise PulseBillingError("This appointment is not billed from a pulse balance.")
+    if appointment.laser_device_key is None:
+        raise PulseBillingError("Pulse billing requires a laser device.")
+    if appointment.status == "completed":
+        raise PulseBillingError(
+            "Pulse usage cannot be changed after the appointment is completed."
+        )
+    settlement = db.scalar(
+        select(AppointmentPulseSettlement)
+        .where(
+            AppointmentPulseSettlement.workspace_id == workspace_id,
+            AppointmentPulseSettlement.appointment_id == appointment.id,
+        )
+        .with_for_update()
+    )
+    if settlement is not None and settlement.resolution in {"new_pack", "overage"}:
+        raise PulseBillingError(
+            "Pulse usage is already financially settled and needs admin correction."
+        )
+
+    _reverse_existing_appointment_usages(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment.id,
+    )
+    now = datetime.now(UTC)
+    consumed = _consume_from_available_packs(
+        db,
+        appointment=appointment,
+        pulses_needed=pulses_used,
+        used_at=now,
+    )
+    deficit = max(pulses_used - consumed, 0)
+    appointment.laser_pulses_used = pulses_used
+    if settlement is None:
+        settlement = AppointmentPulseSettlement(
+            workspace_id=workspace_id,
+            appointment_id=appointment.id,
+            pulses_used=pulses_used,
+            pulses_from_balance=consumed,
+            deficit_pulses=deficit,
+            resolution="pending" if deficit else "balance",
+            overage_charge_minor=0,
+            resolved_at=None if deficit else now,
+        )
+        db.add(settlement)
+    else:
+        settlement.pulses_used = pulses_used
+        settlement.pulses_from_balance = consumed
+        settlement.deficit_pulses = deficit
+        settlement.resolution = "pending" if deficit else "balance"
+        settlement.resolution_pulse_pack_id = None
+        settlement.overage_unit_price_minor = None
+        settlement.overage_charge_minor = 0
+        settlement.resolved_at = None if deficit else now
+    db.flush()
+    refresh_appointment_payment_snapshots(
+        db,
+        workspace_id=workspace_id,
+        appointment_ids={appointment.id},
+    )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=changed_by_user_id,
+        action="appointment.pulse_usage_settled",
+        entity_type="appointment",
+        entity_id=appointment.id,
+        summary="Laser pulse usage reconciled against patient balance",
+        metadata={
+            "pulses_used": pulses_used,
+            "pulses_from_balance": consumed,
+            "deficit_pulses": deficit,
+            "resolution": settlement.resolution,
+        },
+    )
+    return settlement
+def _locked_pending_settlement(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+) -> tuple[Appointment, AppointmentPulseSettlement]:
+    appointment = db.scalar(
+        select(Appointment)
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.id == appointment_id,
+        )
+        .with_for_update()
+    )
+    settlement = db.scalar(
+        select(AppointmentPulseSettlement)
+        .where(
+            AppointmentPulseSettlement.workspace_id == workspace_id,
+            AppointmentPulseSettlement.appointment_id == appointment_id,
+        )
+        .with_for_update()
+    )
+    if appointment is None or settlement is None:
+        raise PulseBillingNotFound("Pulse settlement not found.")
+    if appointment.billing_context != "pulse_prepaid":
+        raise PulseBillingError("This appointment is not billed from a pulse balance.")
+    if settlement.resolution != "pending" or settlement.deficit_pulses <= 0:
+        raise PulseBillingError("This pulse settlement has no unresolved deficit.")
+    return appointment, settlement
+
+
+def resolve_pulse_deficit_with_overage(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    changed_by_user_id: UUID | None,
+) -> AppointmentPulseSettlement:
+    appointment, settlement = _locked_pending_settlement(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment_id,
+    )
+    settings = db.scalar(
+        select(PulseBillingSettings)
+        .where(PulseBillingSettings.workspace_id == workspace_id)
+        .with_for_update()
+    )
+    if settings is None or int(settings.overage_price_minor) <= 0:
+        raise PulseBillingError(
+            "Set the clinic pulse price before charging extra pulses."
+        )
+    unit_price = int(settings.overage_price_minor)
+    settlement.resolution = "overage"
+    settlement.overage_unit_price_minor = unit_price
+    settlement.overage_charge_minor = int(settlement.deficit_pulses) * unit_price
+    settlement.resolved_at = datetime.now(UTC)
+    db.flush()
+    refresh_appointment_payment_snapshots(
+        db,
+        workspace_id=workspace_id,
+        appointment_ids={appointment.id},
+    )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=changed_by_user_id,
+        action="appointment.pulse_deficit_charged",
+        entity_type="appointment",
+        entity_id=appointment.id,
+        summary="Pulse deficit added to appointment charges",
+        metadata={
+            "deficit_pulses": int(settlement.deficit_pulses),
+            "unit_price_minor": unit_price,
+            "charge_minor": int(settlement.overage_charge_minor),
+        },
+    )
+    return settlement
+
+
+def resolve_pulse_deficit_with_pack(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    offer_id: UUID,
+    amount_paid_minor: int,
+    payment_method: str,
+    external_reference: str | None,
+    changed_by_user_id: UUID | None,
+    idempotency_key: str | None,
+) -> AppointmentPulseSettlement:
+    appointment, settlement = _locked_pending_settlement(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment_id,
+    )
+    offer = _get_active_offer(
+        db,
+        workspace_id=workspace_id,
+        offer_id=offer_id,
+        for_update=True,
+    )
+    if offer.device_key != appointment.laser_device_key:
+        raise PulseBillingError("Selected pulse pack is for a different laser device.")
+    if int(offer.pulses_count) < int(settlement.deficit_pulses):
+        raise PulseBillingError(
+            "Selected pulse pack does not contain enough pulses to cover the deficit."
+        )
+    pack = purchase_pulse_pack_offer(
+        db,
+        workspace_id=workspace_id,
+        patient_id=appointment.patient_id,
+        offer_id=offer.id,
+        amount_paid_minor=amount_paid_minor,
+        payment_method=payment_method,
+        external_reference=external_reference,
+        created_by_user_id=changed_by_user_id,
+        idempotency_key=idempotency_key,
+        actor_type="staff",
+        origin_appointment_id=appointment.id,
+    )
+    deficit = int(settlement.deficit_pulses)
+    db.add(
+        PulseUsage(
+            workspace_id=workspace_id,
+            patient_pulse_pack_id=pack.id,
+            appointment_id=appointment.id,
+            pulses_used=deficit,
+            status="consumed",
+            used_at=datetime.now(UTC),
+        )
+    )
+    settlement.pulses_from_balance = int(settlement.pulses_from_balance) + deficit
+    settlement.resolution = "new_pack"
+    settlement.resolution_pulse_pack_id = pack.id
+    settlement.overage_unit_price_minor = None
+    settlement.overage_charge_minor = 0
+    settlement.resolved_at = datetime.now(UTC)
+    db.flush()
+    refresh_appointment_payment_snapshots(
+        db,
+        workspace_id=workspace_id,
+        appointment_ids={appointment.id},
+    )
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=changed_by_user_id,
+        action="appointment.pulse_deficit_covered_by_pack",
+        entity_type="appointment",
+        entity_id=appointment.id,
+        summary="Pulse deficit covered by a new pulse pack",
+        metadata={
+            "deficit_pulses": deficit,
+            "patient_pulse_pack_id": pack.id,
+            "offer_id": offer.id,
+        },
+    )
+    return settlement
+
+
+def get_appointment_pulse_settlement(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+) -> AppointmentPulseSettlement | None:
+    return db.scalar(
+        select(AppointmentPulseSettlement).where(
+            AppointmentPulseSettlement.workspace_id == workspace_id,
+            AppointmentPulseSettlement.appointment_id == appointment_id,
+        )
+    )
+
+
+def pulse_settlement_read(
+    db: Session,
+    *,
+    settlement: AppointmentPulseSettlement,
+    appointment: Appointment,
+) -> AppointmentPulseSettlementRead:
+    balance = 0
+    if appointment.laser_device_key is not None:
+        balance = available_pulse_balance(
+            db,
+            workspace_id=appointment.workspace_id,
+            patient_id=appointment.patient_id,
+            device_key=appointment.laser_device_key,
+        )
+    settings = get_pulse_billing_settings(
+        db,
+        workspace_id=appointment.workspace_id,
+    )
+    return AppointmentPulseSettlementRead(
+        appointment_id=appointment.id,
+        pulses_used=int(settlement.pulses_used),
+        pulses_from_balance=int(settlement.pulses_from_balance),
+        deficit_pulses=int(settlement.deficit_pulses),
+        resolution=settlement.resolution,
+        resolution_pulse_pack_id=settlement.resolution_pulse_pack_id,
+        overage_unit_price_minor=settlement.overage_unit_price_minor,
+        overage_charge_minor=int(settlement.overage_charge_minor),
+        resolved_at=settlement.resolved_at,
+        available_balance_after=balance,
+        currency=settings.currency,
+    )
+
+
+def require_pulse_settlement_before_completion(
+    db: Session,
+    *,
+    appointment: Appointment,
+) -> None:
+    if appointment.billing_context != "pulse_prepaid":
+        return
+    if appointment.laser_pulses_used is None:
+        raise PulseBillingError(
+            "Record the actual laser pulses before completing a pulse-billed appointment."
+        )
+    settlement = get_appointment_pulse_settlement(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment_id=appointment.id,
+    )
+    if settlement is None or settlement.resolution == "pending":
+        raise PulseBillingError(
+            "Resolve the pulse balance deficit before completing this appointment."
+        )
+
+def release_appointment_pulse_usage(
+    db: Session,
+    *,
+    appointment: Appointment,
+    changed_by_user_id: UUID | None,
+    reason: str,
+) -> None:
+    if getattr(appointment, "billing_context", "standard") != "pulse_prepaid":
+        return
+    settlement = get_appointment_pulse_settlement(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment_id=appointment.id,
+    )
+    if settlement is None and appointment.laser_pulses_used is None:
+        return
+
+    rows = list(
+        db.scalars(
+            select(PulseUsage)
+            .where(
+                PulseUsage.workspace_id == appointment.workspace_id,
+                PulseUsage.appointment_id == appointment.id,
+                PulseUsage.status == "consumed",
+            )
+            .with_for_update()
+        ).all()
+    )
+    for row in rows:
+        row.status = "reversed"
+
+    if settlement is not None:
+        settlement.pulses_used = 0
+        settlement.pulses_from_balance = 0
+        settlement.deficit_pulses = 0
+        settlement.resolution = "balance"
+        settlement.resolution_pulse_pack_id = None
+        settlement.overage_unit_price_minor = None
+        settlement.overage_charge_minor = 0
+        settlement.resolved_at = datetime.now(UTC)
+    appointment.laser_pulses_used = 0
+    db.flush()
+    refresh_appointment_payment_snapshots(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment_ids={appointment.id},
+    )
+    record_activity_event(
+        db,
+        workspace_id=appointment.workspace_id,
+        actor_type="staff",
+        actor_user_id=changed_by_user_id,
+        action="appointment.pulse_usage_released",
+        entity_type="appointment",
+        entity_id=appointment.id,
+        summary="Pulse usage released from appointment",
+        metadata={"reason": reason, "reversed_usage_rows": len(rows)},
+    )

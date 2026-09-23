@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import type { Doctor, PatientPackage, Service, Staff } from "@/lib/types";
+import type { Doctor, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
 import {
   createManualAppointment,
   getManualAppointmentAvailability,
@@ -41,6 +41,7 @@ export function ManualAppointmentForm({
   doctors,
   staff,
   packages = [],
+  pulseBalances = [],
   fixedLaserDeviceKey,
   allowedOperationalCategory,
   windowStartMinutes,
@@ -59,6 +60,7 @@ export function ManualAppointmentForm({
   doctors: Doctor[];
   staff: Staff[];
   packages?: DevicePackage[];
+  pulseBalances?: PulseBalance[];
   fixedLaserDeviceKey?: string;
   allowedOperationalCategory?: "laser" | "dermatology" | "slimming";
   windowStartMinutes?: number;
@@ -72,6 +74,7 @@ export function ManualAppointmentForm({
   const [serviceId, setServiceId] = useState("");
   const [laserDeviceKey, setLaserDeviceKey] = useState(fixedLaserDeviceKey || "");
   const [packageId, setPackageId] = useState("");
+  const [usePulseBalance, setUsePulseBalance] = useState(false);
   const [startAt, setStartAt] = useState("");
   const [doctorId, setDoctorId] = useState("");
   const [slots, setSlots] = useState<ManualAvailabilitySlot[]>([]);
@@ -110,6 +113,15 @@ export function ManualAppointmentForm({
         return requiresLaserDevice && Boolean(laserDeviceKey) && item.laser_device_key === laserDeviceKey;
       }),
     [packages, serviceId, requiresLaserDevice, laserDeviceKey],
+  );
+  const pulseBalance = useMemo(
+    () =>
+      requiresLaserDevice
+        ? pulseBalances.find(
+            (item) => item.device_key === laserDeviceKey && item.pulses_remaining > 0,
+          ) || null
+        : null,
+    [pulseBalances, requiresLaserDevice, laserDeviceKey],
   );
 
   const timeOptions = useMemo(() => {
@@ -163,6 +175,7 @@ export function ManualAppointmentForm({
       <input type="hidden" name="clinic_timezone" value={timezone} />
       <input type="hidden" name="branch_id" value={branchId} />
       <input type="hidden" name="start_at" value={startAt} />
+      <input type="hidden" name="use_pulse_balance" value={usePulseBalance ? "true" : "false"} />
       {mode === "existing" && <input type="hidden" name="patient_id" value={patientId} />}
 
       {mode === "new" ? (
@@ -206,6 +219,7 @@ export function ManualAppointmentForm({
               setServiceId(nextServiceId);
               setLaserDeviceKey(nextDeviceKey);
               setPackageId("");
+              setUsePulseBalance(false);
               if (schedulingMode === "standard") void loadAvailability(nextServiceId, nextDeviceKey);
             }}
           >
@@ -233,6 +247,7 @@ export function ManualAppointmentForm({
                   const next = event.target.value;
                   setLaserDeviceKey(next);
                   setPackageId("");
+                  setUsePulseBalance(false);
                   if (schedulingMode === "standard") void loadAvailability(serviceId, next);
                 }}
               >
@@ -318,19 +333,53 @@ export function ManualAppointmentForm({
         </div>
       )}
 
-      {mode === "existing" && serviceId && compatiblePackages.length > 0 && (
-        <label className="block max-w-md">
-          <span className="mb-1.5 block text-xs font-bold text-slate-600">الباكدج (اختياري)</span>
-          <Select name="patient_package_id" value={packageId} onChange={(event) => setPackageId(event.target.value)}>
-            <option value="">بدون باكدج</option>
-            {compatiblePackages.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} · متبقي {item.sessions_remaining}
-                {item.laser_device_name ? ` · ${item.laser_device_name}` : ""}
-              </option>
-            ))}
-          </Select>
-        </label>
+      {mode === "existing" && serviceId && (compatiblePackages.length > 0 || pulseBalance) && (
+        <div className="max-w-xl rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+          <div className="text-xs font-black text-slate-700">طريقة الحساب</div>
+          <div className="mt-2 space-y-2">
+            {pulseBalance && (
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={usePulseBalance}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setUsePulseBalance(checked);
+                    if (checked) setPackageId("");
+                  }}
+                />
+                <span>
+                  <b>استخدام رصيد Pulses</b>
+                  <span className="mt-0.5 block text-xs text-[var(--muted)]">
+                    متبقي {pulseBalance.pulses_remaining.toLocaleString("ar-EG")} Pulse على {pulseBalance.device_name}. الخصم الفعلي يتم بعد الجلسة.
+                  </span>
+                </span>
+              </label>
+            )}
+            {compatiblePackages.length > 0 && (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-bold text-slate-600">أو باكيدج جلسات</span>
+                <Select
+                  name="patient_package_id"
+                  value={packageId}
+                  disabled={usePulseBalance}
+                  onChange={(event) => {
+                    setPackageId(event.target.value);
+                    if (event.target.value) setUsePulseBalance(false);
+                  }}
+                >
+                  <option value="">بدون باكدج جلسات</option>
+                  {compatiblePackages.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} · متبقي {item.sessions_remaining}
+                      {item.laser_device_name ? ` · ${item.laser_device_name}` : ""}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            )}
+          </div>
+        </div>
       )}
 
       {state.message && (

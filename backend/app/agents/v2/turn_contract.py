@@ -38,6 +38,7 @@ SafetySignal = Literal[
     "privacy_issue",
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
+PulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
@@ -210,6 +211,16 @@ class TurnOperation(StrictContractModel):
     entities: TurnEntities
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
+    pulse_usage: PulseUsage = Field(
+        default="unspecified",
+        description=(
+            "For laser appointment booking only: use_existing means the customer explicitly wants "
+            "the appointment billed from their existing prepaid pulse balance; avoid_existing means "
+            "the customer explicitly does not want to use pulse balance; unspecified means they did "
+            "not express a pulse-balance preference. Never infer use_existing merely because a pulse "
+            "balance may exist."
+        ),
+    )
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.

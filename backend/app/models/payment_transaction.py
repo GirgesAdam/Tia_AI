@@ -102,6 +102,12 @@ class PaymentTransaction(UUIDPrimaryKeyMixin, Base):
             ondelete="RESTRICT",
             name="fk_payment_transactions_patient_package",
         ),
+        ForeignKeyConstraint(
+            ["workspace_id", "patient_pulse_pack_id"],
+            ["patient_pulse_packs.workspace_id", "patient_pulse_packs.id"],
+            ondelete="RESTRICT",
+            name="fk_payment_transactions_patient_pulse_pack",
+        ),
         Index(
             "uq_payment_transactions_workspace_idempotency_key",
             "workspace_id",
@@ -145,6 +151,7 @@ class PaymentTransaction(UUIDPrimaryKeyMixin, Base):
     )
     reference_transaction_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     patient_package_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    patient_pulse_pack_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
 
     transaction_type: Mapped[str] = mapped_column(String(16), nullable=False)
     amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)

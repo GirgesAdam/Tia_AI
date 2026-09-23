@@ -84,6 +84,11 @@ from app.services.patient_packages import (
     reserve_package_usage,
     validate_package_for_booking,
 )
+from app.services.pulse_billing import (
+    PulseBillingError,
+    settle_appointment_pulses,
+    validate_pulse_booking,
+)
 
 router = APIRouter()
 
@@ -263,6 +268,7 @@ def make_appointment(
         currency=slot.currency,
         laser_device_key=slot.laser_device_key,
         laser_device_name=slot.laser_device_name,
+        billing_context="pulse_prepaid" if payload.use_pulse_balance else "standard",
         customer_note=payload.customer_note,
         idempotency_key=idempotency_key,
         confirmed_at=now if initial_status == "confirmed" else None,
@@ -357,6 +363,9 @@ def create_appointment(
     except (BookingRuleError, InventoryOperationError) as exc:
         raise booking_conflict(str(exc)) from exc
 
+    if payload.patient_package_id is not None and payload.use_pulse_balance:
+        raise booking_conflict("Choose either a session package or pulse balance, not both.")
+
     patient_package = None
     if payload.patient_package_id is not None:
         try:
@@ -370,6 +379,20 @@ def create_appointment(
                 laser_device_key=slot.laser_device_key,
             )
         except PackageOperationError as exc:
+            raise booking_conflict(str(exc)) from exc
+
+    if payload.use_pulse_balance:
+        try:
+            validate_pulse_booking(
+                db,
+                workspace_id=access.workspace.id,
+                patient_id=payload.patient_id,
+                device_key=slot.laser_device_key,
+                appointment_date=slot.start_at.astimezone(
+                    ZoneInfo(access.workspace.timezone or "UTC")
+                ).date(),
+            )
+        except PulseBillingError as exc:
             raise booking_conflict(str(exc)) from exc
 
     settings = get_effective_booking_settings(db, access.workspace.id)
@@ -491,6 +514,8 @@ def create_quick_appointment(
 
     start_at = payload.start_at.astimezone(UTC)
     end_at = start_at + timedelta(minutes=duration_minutes)
+    if payload.patient_package_id is not None and payload.use_pulse_balance:
+        raise booking_conflict("Choose either a session package or pulse balance, not both.")
     patient_package = None
     if payload.patient_package_id is not None:
         try:
@@ -502,6 +527,20 @@ def create_quick_appointment(
         except PackageOperationError as exc:
             raise booking_conflict(str(exc)) from exc
 
+    if payload.use_pulse_balance:
+        try:
+            validate_pulse_booking(
+                db,
+                workspace_id=access.workspace.id,
+                patient_id=payload.patient_id,
+                device_key=laser_device_key,
+                appointment_date=start_at.astimezone(
+                    ZoneInfo(access.workspace.timezone or "UTC")
+                ).date(),
+            )
+        except PulseBillingError as exc:
+            raise booking_conflict(str(exc)) from exc
+
     appointment = Appointment(
         workspace_id=access.workspace.id, patient_id=payload.patient_id, branch_id=branch.id,
         doctor_id=doctor.id, doctor_assignment_known=True, is_quick_booking=True,
@@ -510,6 +549,7 @@ def create_quick_appointment(
         start_at=start_at, end_at=end_at, busy_start_at=start_at, busy_end_at=end_at,
         duration_minutes=duration_minutes, price_minor=price_minor, currency=currency,
         laser_device_key=laser_device_key, laser_device_name=laser_device_name,
+        billing_context="pulse_prepaid" if payload.use_pulse_balance else "standard",
         customer_note=payload.customer_note, idempotency_key=idempotency_key,
         confirmed_at=datetime.now(UTC),
     )
@@ -949,15 +989,28 @@ def update_appointment_laser_usage(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="Laser pulses can only be recorded for a laser appointment.")
     previous = appointment.laser_pulses_used
-    appointment.laser_pulses_used = payload.pulses_used
-    record_activity_event(
-        db, workspace_id=access.workspace.id, actor_type="staff",
-        actor_user_id=access.user.id, action="appointment.laser_usage_updated",
-        entity_type="appointment", entity_id=appointment.id,
-        summary="Laser pulse usage updated",
-        metadata={"previous_pulses_used": previous, "pulses_used": payload.pulses_used},
-    )
-    db.commit()
+    try:
+        if appointment.billing_context == "pulse_prepaid":
+            settle_appointment_pulses(
+                db,
+                workspace_id=access.workspace.id,
+                appointment_id=appointment.id,
+                pulses_used=payload.pulses_used,
+                changed_by_user_id=access.user.id,
+            )
+        else:
+            appointment.laser_pulses_used = payload.pulses_used
+            record_activity_event(
+                db, workspace_id=access.workspace.id, actor_type="staff",
+                actor_user_id=access.user.id, action="appointment.laser_usage_updated",
+                entity_type="appointment", entity_id=appointment.id,
+                summary="Laser pulse usage updated",
+                metadata={"previous_pulses_used": previous, "pulses_used": payload.pulses_used},
+            )
+        db.commit()
+    except PulseBillingError as exc:
+        db.rollback()
+        raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
 

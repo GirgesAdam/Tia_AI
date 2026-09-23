@@ -29,6 +29,8 @@ def _same_package_scope(purchase: PlanStep, booking: PlanStep) -> bool:
     booking_params = _write_parameters(booking)
     if booking_params.get("package_usage") == "avoid_existing":
         return False
+    if booking_params.get("pulse_usage") == "use_existing":
+        return False
     purchase_service = purchase_params.get("service_id")
     booking_service = booking_params.get("service_id")
     if not purchase_service or str(purchase_service) != str(booking_service):

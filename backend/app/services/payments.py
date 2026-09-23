@@ -16,6 +16,7 @@ from app.models.appointment_additional_service import AppointmentAdditionalServi
 from app.models.clinic_inventory import AppointmentProductLine
 from app.models.patient_package import PatientPackage
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
+from app.models.pulse_billing import AppointmentPulseSettlement, PatientPulsePack
 from app.schemas.payments import AppointmentPaymentSummaryRead, PaymentTransactionRead
 from app.services.activity import record_activity_event
 
@@ -108,11 +109,11 @@ def _appointment_charge_breakdown(
     *,
     workspace_id: UUID,
     appointment: Appointment,
-) -> tuple[int, int, int, int, int]:
-    """Return primary service, products, extra services, package sales, and due.
+) -> tuple[int, int, int, int, int, int, int]:
+    """Return service, products, extra services, package/pulse sales, overage, and due.
 
-    A package-backed service does not charge its standalone session price. A
-    package purchased from this visit is charged once at its package sale price.
+    Prepaid package or pulse appointments do not charge their standalone service
+    price again. New packages/pulse packs bought during the visit are charged once.
     """
     products_total = int(
         db.scalar(
@@ -155,19 +156,54 @@ def _appointment_charge_breakdown(
         )
         or 0
     )
+    pulse_pack_sales_total = int(
+        db.scalar(
+            select(func.coalesce(func.sum(PatientPulsePack.sale_price_minor), 0)).where(
+                PatientPulsePack.workspace_id == workspace_id,
+                PatientPulsePack.origin_appointment_id == appointment.id,
+                PatientPulsePack.status != "cancelled",
+            )
+        )
+        or 0
+    )
+    pulse_overage_total = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(AppointmentPulseSettlement.overage_charge_minor),
+                    0,
+                )
+            ).where(
+                AppointmentPulseSettlement.workspace_id == workspace_id,
+                AppointmentPulseSettlement.appointment_id == appointment.id,
+                AppointmentPulseSettlement.resolution == "overage",
+            )
+        )
+        or 0
+    )
     service_price = int(appointment.price_minor)
     service_due = (
         0
-        if getattr(appointment, "billing_context", "standard") == "package_prepaid"
+        if getattr(appointment, "billing_context", "standard")
+        in {"package_prepaid", "pulse_prepaid"}
         else service_price
     )
-    subtotal = service_due + products_total + additional_services_total + package_sales_total
+    subtotal = (
+        service_due
+        + products_total
+        + additional_services_total
+        + package_sales_total
+        + pulse_pack_sales_total
+        + pulse_overage_total
+    )
     discount = max(int(getattr(appointment, "discount_minor", 0) or 0), 0)
     return (
         service_price,
         products_total,
         additional_services_total,
         package_sales_total,
+        pulse_pack_sales_total,
+        pulse_overage_total,
         max(subtotal - discount, 0),
     )
 
@@ -262,6 +298,7 @@ def _transaction_reads(
                 created_by_user_id=transaction.created_by_user_id,
                 reference_transaction_id=transaction.reference_transaction_id,
                 patient_package_id=transaction.patient_package_id,
+                patient_pulse_pack_id=transaction.patient_pulse_pack_id,
                 transaction_type=transaction.transaction_type,
                 amount_minor=transaction.amount_minor,
                 allocated_amount_minor=allocated_amount_minor,
@@ -340,7 +377,8 @@ def sync_appointment_payment_snapshot(
     totals = _payment_totals(appointment=appointment, rows=rows, due_minor=due_minor)
     appointment.payment_status = totals.payment_status
     if (
-        getattr(appointment, "billing_context", "standard") == "package_prepaid"
+        getattr(appointment, "billing_context", "standard")
+        in {"package_prepaid", "pulse_prepaid"}
         and totals.gross_paid_minor == 0
         and totals.refunded_minor == 0
         and (due_minor is None or due_minor == 0)
@@ -368,7 +406,15 @@ def refresh_appointment_payment_snapshots(
             appointment_id=appointment_id,
             for_update=True,
         )
-        _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+        (
+            _service_price,
+            _products_total,
+            _additional_services_total,
+            _package_sales_total,
+            _pulse_pack_sales_total,
+            _pulse_overage_total,
+            due,
+        ) = _appointment_charge_breakdown(
             db,
             workspace_id=workspace_id,
             appointment=appointment,
@@ -392,7 +438,15 @@ def get_appointment_payment_summary(
     if appointment is None:
         raise PaymentOperationNotFound("Appointment not found.")
     rows = _ledger_rows(db, workspace_id=workspace_id, appointment_id=appointment.id)
-    service_price, products_total, additional_services_total, package_sales_total, due = _appointment_charge_breakdown(
+    (
+        service_price,
+        products_total,
+        additional_services_total,
+        package_sales_total,
+        pulse_pack_sales_total,
+        pulse_overage_total,
+        due,
+    ) = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -411,6 +465,8 @@ def get_appointment_payment_summary(
         products_total_minor=products_total,
         additional_services_total_minor=additional_services_total,
         package_sales_total_minor=package_sales_total,
+        pulse_pack_sales_total_minor=pulse_pack_sales_total,
+        pulse_overage_total_minor=pulse_overage_total,
         gross_paid_minor=totals.gross_paid_minor,
         refunded_minor=totals.refunded_minor,
         net_paid_minor=totals.net_paid_minor,
@@ -506,6 +562,8 @@ def _set_discount_locked(
         _products_total,
         _additional_services_total,
         _package_sales_total,
+        _pulse_pack_sales_total,
+        _pulse_overage_total,
         current_due,
     ) = _appointment_charge_breakdown(
         db,
@@ -661,7 +719,15 @@ def record_payment(
             discount_minor=discount_minor,
             actor_user_id=created_by_user_id,
         )
-    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+    (
+        _service_price,
+        _products_total,
+        _additional_services_total,
+        _package_sales_total,
+        _pulse_pack_sales_total,
+        _pulse_overage_total,
+        due,
+    ) = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -910,7 +976,15 @@ def record_refund(
             allocated_amount_minor=amount_minor,
         )
     )
-    _service_price, _products_total, _additional_services_total, _package_sales_total, due = _appointment_charge_breakdown(
+    (
+        _service_price,
+        _products_total,
+        _additional_services_total,
+        _package_sales_total,
+        _pulse_pack_sales_total,
+        _pulse_overage_total,
+        due,
+    ) = _appointment_charge_breakdown(
         db,
         workspace_id=workspace_id,
         appointment=appointment,
@@ -982,7 +1056,10 @@ def seed_payment_ledger_from_appointment_snapshot(
         sync_appointment_payment_snapshot(appointment, list(rows))
         return
 
-    if getattr(appointment, "billing_context", "standard") == "package_prepaid":
+    if getattr(appointment, "billing_context", "standard") in {
+        "package_prepaid",
+        "pulse_prepaid",
+    }:
         sync_appointment_payment_snapshot(appointment, [], due_minor=0)
         return
 

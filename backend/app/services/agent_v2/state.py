@@ -5,7 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    PackageUsage,
+    PulseUsage,
+    TimeConstraint,
+)
 
 TaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
 ChoicePurpose = Literal[
@@ -46,6 +51,7 @@ class CustomerConstraints(StrictStateModel):
     date: DateConstraint | None = None
     time: TimeConstraint | None = None
     package_usage: PackageUsage = "unspecified"
+    pulse_usage: PulseUsage = "unspecified"
 
 
 class DerivedBookingState(StrictStateModel):

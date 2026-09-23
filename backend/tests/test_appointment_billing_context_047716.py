@@ -24,7 +24,7 @@ def test_appointment_model_persists_package_coverage_without_payment_fact() -> N
     model = (_backend() / "app/models/appointment.py").read_text(encoding="utf-8")
     assert 'billing_context: Mapped[str]' in model
     assert 'package_external_id: Mapped[str | None]' in model
-    assert "billing_context IN ('standard', 'package_prepaid')" in model
+    assert "billing_context IN ('standard', 'package_prepaid', 'pulse_prepaid')" in model
 
 
 def test_billing_context_migration_compiles_for_postgresql_without_live_db(monkeypatch) -> None:

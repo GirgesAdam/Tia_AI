@@ -145,3 +145,39 @@ export async function cancelPatientPackage(formData: FormData) {
   });
   revalidatePackageViews(patientId);
 }
+
+export async function purchasePatientPulsePack(formData: FormData) {
+  const patientId = String(formData.get("patient_id") || "").trim();
+  const offerId = String(formData.get("offer_id") || "").trim();
+  const amountPaid = moneyToMinor(String(formData.get("amount_paid") || "0"));
+  const paymentMethod = String(formData.get("payment_method") || "unknown");
+  if (!patientId || !offerId) return;
+
+  await tiaRequest("/booking/pulse-pack-offers/purchase", {
+    method: "POST",
+    headers: { "Idempotency-Key": `patient-pulse-pack:${randomUUID()}` },
+    body: JSON.stringify({
+      patient_id: patientId,
+      offer_id: offerId,
+      amount_paid_minor: amountPaid,
+      payment_method: amountPaid > 0 ? paymentMethod : "unknown",
+    }),
+  });
+  revalidatePackageViews(patientId);
+  revalidatePath("/appointments");
+}
+
+export async function recordPatientPulsePackPayment(formData: FormData) {
+  const patientId = String(formData.get("patient_id") || "").trim();
+  const packId = String(formData.get("pack_id") || "").trim();
+  const amountMinor = moneyToMinor(String(formData.get("amount") || ""));
+  const paymentMethod = String(formData.get("payment_method") || "cash");
+  if (!patientId || !packId || amountMinor <= 0) return;
+
+  await tiaRequest(`/booking/patient-pulse-packs/${packId}/payments`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `patient-pulse-payment:${randomUUID()}` },
+    body: JSON.stringify({ amount_minor: amountMinor, payment_method: paymentMethod }),
+  });
+  revalidatePackageViews(patientId);
+}

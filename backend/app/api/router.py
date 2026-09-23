@@ -29,6 +29,7 @@ from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.operations import router as operations_router
 from app.api.routes.package_offers import router as package_offers_router
 from app.api.routes.payments import router as payments_router
+from app.api.routes.pulse_billing import router as pulse_billing_router
 from app.api.routes.whatsapp_setup import router as whatsapp_setup_router
 
 api_router = APIRouter()
@@ -44,6 +45,7 @@ api_router.include_router(doctor_calendar_router, prefix="/booking", tags=["book
 api_router.include_router(appointment_edits_router, prefix="/booking", tags=["booking"])
 api_router.include_router(appointment_commerce_router, prefix="/booking", tags=["booking"])
 api_router.include_router(package_offers_router, prefix="/booking", tags=["booking"])
+api_router.include_router(pulse_billing_router, prefix="/booking", tags=["booking"])
 api_router.include_router(channels_router, prefix="/channels", tags=["channels"])
 api_router.include_router(
     whatsapp_setup_router,

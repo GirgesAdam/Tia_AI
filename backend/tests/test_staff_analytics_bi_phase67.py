@@ -85,7 +85,7 @@ def _schema(engine) -> None:
         CREATE TABLE payment_transactions (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), appointment_id CHAR(32),
             origin_appointment_id CHAR(32), patient_id CHAR(32), created_by_user_id CHAR(32),
-            reference_transaction_id CHAR(32), patient_package_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
+            reference_transaction_id CHAR(32), patient_package_id CHAR(32), patient_pulse_pack_id CHAR(32), transaction_type VARCHAR(16), amount_minor INTEGER,
             currency VARCHAR(3), payment_method VARCHAR(24), source VARCHAR(24),
             external_reference VARCHAR(128), reason TEXT, idempotency_key VARCHAR(128),
             created_at DATETIME

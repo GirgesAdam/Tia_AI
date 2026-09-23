@@ -345,6 +345,12 @@ def change_appointment_service(
             and package.laser_device_key != slot.laser_device_key
         )
 
+    if appointment.billing_context == "pulse_prepaid" and (service_changed or device_changed):
+        raise StaffAppointmentEditError(
+            "Pulse-billed appointments cannot change service or laser device after booking. "
+            "Switch billing back to a standard visit first."
+        )
+
     if package_incompatible and (
         appointment.patient_package_id is not None
         or appointment.billing_context == "package_prepaid"

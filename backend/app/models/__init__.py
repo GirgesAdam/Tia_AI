@@ -59,6 +59,13 @@ from app.models.patient_note import PatientNote
 from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.patient_tag import PatientTag, PatientTagAssignment
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
+from app.models.pulse_billing import (
+    AppointmentPulseSettlement,
+    PatientPulsePack,
+    PulseBillingSettings,
+    PulsePackOffer,
+    PulseUsage,
+)
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.models.staff import Staff
@@ -127,6 +134,11 @@ __all__ = [
     "PatientNote",
     "PatientPackage",
     "PackageUsage",
+    "PatientPulsePack",
+    "PulseBillingSettings",
+    "PulsePackOffer",
+    "PulseUsage",
+    "AppointmentPulseSettlement",
     "PatientTag",
     "PatientTagAssignment",
     "PaymentAllocation",

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
-import type { Appointment } from "@/lib/types";
+import type { Appointment, PulsePackOffer } from "@/lib/types";
 
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
@@ -21,11 +21,20 @@ export async function updateLaserPulses(formData: FormData) {
   const patientId = String(formData.get("patient_id") || "");
   const pulsesUsed = Number(String(formData.get("pulses_used") || ""));
   if (!appointmentId || !Number.isInteger(pulsesUsed) || pulsesUsed < 0) return;
-  await tiaRequest(`/booking/appointments/${appointmentId}/laser-usage`, {
-    method: "PUT",
-    body: JSON.stringify({ pulses_used: pulsesUsed }),
-  });
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/laser-usage`, {
+      method: "PUT",
+      body: JSON.stringify({ pulses_used: pulsesUsed }),
+    });
+  } catch (error) {
+    const message =
+      error instanceof TiaApiError
+        ? error.message
+        : "تعذر حفظ استهلاك الـPulses. حاول مرة أخرى.";
+    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(message)}`);
+  }
   refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=pulse_usage`);
 }
 
 export async function confirmAppointment(formData: FormData) {
@@ -307,4 +316,68 @@ export async function rescheduleAppointment(formData: FormData) {
   revalidatePath(`/patients/${replacement.patient_id}`);
   revalidatePath("/analytics");
   redirect(`/appointments/${replacement.id}`);
+}
+
+function pulseBillingError(error: unknown) {
+  if (!(error instanceof TiaApiError)) {
+    return error instanceof Error ? error.message : "تعذر تسوية رصيد الـPulses.";
+  }
+  const detail = (error.technicalMessage || "").toLowerCase();
+  if (detail.includes("set the clinic pulse price")) {
+    return "حدد سعر الـPulse الإضافية من إعدادات العيادة أولًا.";
+  }
+  if (detail.includes("different laser device")) {
+    return "الباقة المختارة مرتبطة بجهاز ليزر مختلف عن الموعد.";
+  }
+  if (detail.includes("does not contain enough pulses")) {
+    return "الباقة المختارة لا تحتوي على عدد Pulses كافٍ لتغطية العجز.";
+  }
+  if (detail.includes("no unresolved deficit")) {
+    return "عجز الـPulses في الموعد ده تمت تسويته بالفعل.";
+  }
+  if (detail.includes("already financially settled")) {
+    return "تمت تسوية الـPulses ماليًا بالفعل. أي تعديل بعد كده يحتاج مراجعة أدمن.";
+  }
+  return error.message;
+}
+
+export async function chargePulseDeficitAsOverage(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  if (!appointmentId) return;
+  try {
+    await tiaRequest(`/booking/appointments/${appointmentId}/pulse-settlement/overage`, {
+      method: "POST",
+    });
+  } catch (error) {
+    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(pulseBillingError(error))}`);
+  }
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=pulse_overage`);
+}
+
+export async function coverPulseDeficitWithPack(formData: FormData) {
+  const appointmentId = String(formData.get("appointment_id") || "");
+  const patientId = String(formData.get("patient_id") || "");
+  const offerId = String(formData.get("offer_id") || "");
+  const paymentMethod = String(formData.get("payment_method") || "");
+  if (!appointmentId || !offerId || !paymentMethod) return;
+  try {
+    const offers = await tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers?active_only=true");
+    const offer = offers.find((item) => item.id === offerId);
+    if (!offer) throw new Error("الباقة المختارة غير متاحة حاليًا.");
+    await tiaRequest(`/booking/appointments/${appointmentId}/pulse-settlement/purchase-pack`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `appointment-pulse-pack:${randomUUID()}` },
+      body: JSON.stringify({
+        offer_id: offerId,
+        amount_paid_minor: offer.price_minor,
+        payment_method: paymentMethod,
+      }),
+    });
+  } catch (error) {
+    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(pulseBillingError(error))}`);
+  }
+  refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=pulse_pack`);
 }

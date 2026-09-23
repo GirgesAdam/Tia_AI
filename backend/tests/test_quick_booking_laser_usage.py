@@ -101,15 +101,21 @@ def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
     assert "التداخل الزمني مسموح في الحجز السريع" in actions
 
 
-def test_laser_pulses_are_tracking_only_on_appointment_detail() -> None:
+def test_laser_pulses_support_post_session_wallet_settlement() -> None:
     root = _root()
     detail = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/page.tsx").read_text(encoding="utf-8")
     actions = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/actions.ts").read_text(encoding="utf-8")
     route = (root / "backend/app/api/routes/booking.py").read_text(encoding="utf-8")
-    assert "عدد الـ Pulses المستخدمة" in detail
-    assert "لا يغيّر سعر الجلسة أو مدتها" in detail
+    pulse_service = (root / "backend/app/services/pulse_billing.py").read_text(encoding="utf-8")
+    assert "عدد الـPulses المستخدمة فعليًا" in detail
+    assert "الخصم الفعلي يتم بعد الجلسة" in (
+        root / "frontend/src/app/(dashboard)/appointments/manual-appointment-form.tsx"
+    ).read_text(encoding="utf-8")
     assert "/laser-usage" in actions
-    assert "appointment.laser_usage_updated" in route
+    assert "settle_appointment_pulses" in route
+    assert "deficit_pulses" in pulse_service
+    assert "resolve_pulse_deficit_with_pack" in pulse_service
+    assert "resolve_pulse_deficit_with_overage" in pulse_service
 
 
 

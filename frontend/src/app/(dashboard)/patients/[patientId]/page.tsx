@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { addPatientNote, createPatientTask, setPatientWhatsappOptIn } from "../actions";
 import { PatientPackagePanel } from "./package-panel";
+import { PatientPulsePanel } from "./pulse-panel";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
@@ -309,6 +310,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
           </Card>
 
           <PatientPackagePanel patientId={patient.id} />
+          <PatientPulsePanel patientId={patient.id} />
 
           <Card>
             <CardHeader><CardTitle>ملاحظات العميل</CardTitle></CardHeader>
