@@ -1176,7 +1176,7 @@ def case_billing_ledger_question(
         not turn.write_attempted
         and not reads.intersection(forbidden_reads)
         and (
-            turn.handoff_required
+            turn.handoff_state is not None
             or "ريسبشن" in (turn.agent_response or "")
             or "reception" in (turn.agent_response or "").lower()
         )
@@ -1188,7 +1188,7 @@ def case_billing_ledger_question(
         verification={
             "verified_reads": turn.verified_reads,
             "write_attempted": turn.write_attempted,
-            "handoff_required": turn.handoff_required,
+            "handoff_state": turn.handoff_state,
         },
         ok=ok,
         issue_title="Agent expanded into Pulse payment-ledger ownership",
