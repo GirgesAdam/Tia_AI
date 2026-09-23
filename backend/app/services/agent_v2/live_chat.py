@@ -98,6 +98,32 @@ def _recent_verified_read_context(
     return dict(value) if isinstance(value, dict) else None
 
 
+def _recent_verified_action_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Return the immediately previous safe completed-action context, if any."""
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if previous is None or previous.sender_type != "ai" or previous.direction != "outbound":
+        return None
+    metadata = dict(previous.metadata_json or {})
+    if metadata.get("runtime") != "v2":
+        return None
+    value = metadata.get("v2_action_context")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _availability_option_count_for_step(
     turn: V2OrchestratedTurn,
     *,
@@ -172,6 +198,39 @@ def _verified_read_context_from_turn(
     return None
 
 
+def _verified_action_context_from_turn(
+    turn: V2OrchestratedTurn,
+) -> dict[str, Any] | None:
+    """Persist only minimal facts from the last verified completed Pulse-pack purchase."""
+    for trace in reversed(turn.traces):
+        outcome = trace.outcome
+        if (
+            outcome is None
+            or outcome.status != "completed"
+            or outcome.action_result.get("ok") is not True
+            or outcome.action_result.get("action") != "buy_pulse_pack"
+        ):
+            continue
+        for step in reversed(turn.plan.steps):
+            if step.operation_index != trace.operation_index or step.write_intent is None:
+                continue
+            if step.write_intent.kind != "buy_pulse_pack":
+                continue
+            parameters = step.write_intent.parameters
+            device_key = parameters.get("device_key")
+            pulse_count = parameters.get("pulse_count")
+            if device_key in (None, ""):
+                return None
+            context: dict[str, Any] = {
+                "operation_type": "buy_pulse_pack",
+                "device_key": str(device_key),
+            }
+            if isinstance(pulse_count, int) and not isinstance(pulse_count, bool) and pulse_count > 0:
+                context["pulse_count"] = pulse_count
+            return context
+    return None
+
+
 def _run_v2_after_inbound(
     *,
     db: Session,
@@ -208,6 +267,11 @@ def _run_v2_after_inbound(
         conversation=conversation,
         inbound=inbound,
     )
+    recent_action_context = _recent_verified_action_context(
+        db,
+        conversation=conversation,
+        inbound=inbound,
+    )
 
     def live_write(step):
         return execute_write_ready_step(
@@ -233,6 +297,7 @@ def _run_v2_after_inbound(
         turn_id=str(inbound.id),
         write_executor=live_write,
         recent_read_context=recent_read_context,
+        recent_action_context=recent_action_context,
     )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
@@ -288,6 +353,7 @@ def _run_v2_after_inbound(
         workspace=workspace,
         turn=turn,
     )
+    verified_action_context = _verified_action_context_from_turn(turn)
     outbound_now = datetime.now(UTC)
     outbound = Message(
         workspace_id=workspace.id,
@@ -309,6 +375,7 @@ def _run_v2_after_inbound(
             "dispatch_required": outbound_delivery_status == "queued",
             "handoff_ack": handoff_ack_allowed,
             "v2_read_context": verified_read_context,
+            "v2_action_context": verified_action_context,
         },
     )
     conversation.last_message_at = outbound_now
