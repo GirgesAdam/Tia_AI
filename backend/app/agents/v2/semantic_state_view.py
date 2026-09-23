@@ -53,7 +53,14 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
     doctor_refs = _entity_refs(value.get("doctor_ids"), kind="doctor", context=context)
     if doctor_refs:
         safe["doctor_refs"] = doctor_refs
-    for key in ("date", "time", "package_usage", "pulse_usage"):
+    for key in (
+        "date",
+        "time",
+        "package_usage",
+        "pulse_usage",
+        "pulse_count",
+        "requested_pulse_details",
+    ):
         item = value.get(key)
         if key == "pulse_usage" and item == "unspecified":
             continue
