@@ -477,7 +477,12 @@ def test_write_executor_buys_verified_pulse_pack_without_assumed_payment(monkeyp
         "app.services.agent_v2.write_executor.purchase_pulse_pack_offer",
         lambda _db, **kwargs: (
             captured.update(kwargs)
-            or SimpleNamespace(id=uuid4(), status="active")
+            or SimpleNamespace(
+                id=uuid4(),
+                status="active",
+                sale_price_minor=400_000,
+                currency="EGP",
+            )
         ),
     )
     db = SimpleNamespace(
