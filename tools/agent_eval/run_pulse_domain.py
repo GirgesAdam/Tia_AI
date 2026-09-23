@@ -919,7 +919,7 @@ def case_explicit_use_pulses_booking(
         and appointment.billing_context == "standard"
         and before_balance == after_balance
         and artifacts == {"usages": 0, "settlements": 0}
-        and ("ريسبشن" in reply or "reception" in reply)
+        and ("ريسبشن" in reply or "الاستقبال" in reply or "reception" in reply)
     )
     return _result(
         scenario_id="pulse_explicit_use_booking",
