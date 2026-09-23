@@ -376,6 +376,57 @@ def merge_verified_read_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_same_turn_pulse_device_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Carry one explicit Pulse-purchase device into a linked laser booking only.
+
+    This is device continuity, never billing continuity. An explicit booking device wins,
+    and non-laser bookings are never assigned a laser device.
+    """
+    purchase_devices = {
+        operation.entities.device.ref
+        for operation in turn.operations
+        if operation.type == "buy_pulse_pack"
+        and operation.entities.device is not None
+        and operation.entities.device.ref is not None
+    }
+    if len(purchase_devices) != 1:
+        return turn
+    purchase_device_ref = next(iter(purchase_devices))
+    purchase_device = EntityReference(
+        text=None,
+        ref=purchase_device_ref,
+        candidate_refs=[],
+        candidate_mode="ambiguous",
+    )
+
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        entities = operation.entities
+        service_ref = entities.service.ref if entities.service is not None else None
+        service_target = (
+            semantic_context.reference_map.get(service_ref)
+            if service_ref is not None
+            else None
+        )
+        if (
+            operation.type == "book"
+            and entities.device is None
+            and service_target is not None
+            and service_target.kind == "service"
+            and service_target.metadata.get("requires_laser_device") is True
+        ):
+            entities = entities.model_copy(update={"device": purchase_device})
+            operation = operation.model_copy(update={"entities": entities})
+            changed = True
+        operations.append(operation)
+
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def merge_verified_action_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -458,6 +509,7 @@ def interpret_customer_turn_v2(
     continued = merge_verified_read_context(invocation.value, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
+    grounded = merge_same_turn_pulse_device_context(grounded, semantic_context)
     normalized = normalize_semantic_invariants(grounded)
     resolved = resolve_turn_times_by_clinic_hours(normalized, semantic_context)
     return dedupe_exact_operations(resolved)
