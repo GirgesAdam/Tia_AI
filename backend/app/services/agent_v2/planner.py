@@ -182,7 +182,6 @@ def _base_parameters(
     if operation.entities.follow_up_at_local is not None:
         values["follow_up_at_local"] = operation.entities.follow_up_at_local
     values["package_usage"] = operation.package_usage
-    values["pulse_usage"] = operation.pulse_usage
     return values, ambiguous
 
 
@@ -564,16 +563,6 @@ def _plan_operation(
         )
 
     if operation.type == "book":
-        if (
-            operation.package_usage == "use_existing"
-            and operation.pulse_usage == "use_existing"
-        ):
-            return _clarify(
-                index=index,
-                operation=operation,
-                field="intent",
-                facts={"billing_choice_conflict": True},
-            )
         # A same-turn multi-service visit must select one common doctor deterministically.
         # Single-service bookings keep the existing explicit doctor-choice behavior.
         if "doctor_ids" in params and not compound_book:
