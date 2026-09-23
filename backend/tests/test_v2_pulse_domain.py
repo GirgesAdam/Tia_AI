@@ -56,6 +56,7 @@ def test_pulse_pack_pricing_normalizes_from_structured_semantics() -> None:
             pulse_count=1000,
         ),
         requested_service_details=["price"],
+        requested_pulse_details=["offers"],
         execution_intent="informational",
     )
 
@@ -70,6 +71,37 @@ def test_pulse_pack_pricing_normalizes_from_structured_semantics() -> None:
     assert result.requested_service_details == []
     assert result.requested_pulse_details == ["offers"]
     assert result.execution_intent == "informational"
+
+
+def test_counted_overage_semantics_are_not_normalized_to_pack_offer() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=1000,
+        ),
+        requested_service_details=["price"],
+        requested_pulse_details=["overage_price"],
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+    result = normalized.operations[0]
+
+    assert result.type == "pulse_info"
+    assert result.requested_pulse_details == ["overage_price"]
+    assert result.entities.pulse_count == 1000
+
+
+def test_new_turn_contract_has_no_pulse_billing_choice() -> None:
+    properties = TurnOperation.model_json_schema()["properties"]
+
+    assert "pulse_usage" not in properties
 
 
 def test_pulse_pricing_normalizer_does_not_override_service_pricing() -> None:
