@@ -272,7 +272,7 @@ def main() -> None:
             json.dumps(jsonable(payload), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(json.dumps(jsonable(payload), ensure_ascii=False, indent=2))
+        print(json.dumps(jsonable(payload), ensure_ascii=False, indent=2), flush=True)
     finally:
         db.close()
         if outer.is_active:
