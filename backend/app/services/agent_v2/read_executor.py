@@ -27,6 +27,12 @@ from app.services.package_offers import list_package_offers
 from app.services.package_refund_quotes import list_patient_package_refund_quotes
 from app.services.patient_history import build_patient_history_context
 from app.services.patient_packages import list_patient_packages
+from app.services.pulse_billing import (
+    list_patient_pulse_balances,
+    list_patient_pulse_packs,
+    list_pulse_billing_settings,
+    list_pulse_pack_offers,
+)
 
 _MAX_AVAILABILITY_DAYS = 14
 _ACTIONABLE_APPOINTMENT_STATUSES = frozenset({"pending", "confirmed"})
@@ -985,6 +991,104 @@ def _read_package_offers(
     )
 
 
+def _pulse_device_key(request: ReadRequest) -> str | None:
+    value = request.parameters.get("device_key")
+    return str(value) if value not in (None, "") else None
+
+
+def _read_pulse_balance(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
+    device_key = _pulse_device_key(request)
+    rows = list_patient_pulse_balances(
+        context.db,
+        workspace_id=context.workspace.id,
+        patient_id=context.patient.id,
+    )
+    if device_key is not None:
+        rows = [row for row in rows if row.device_key == device_key]
+    return ReadResult(
+        kind=request.kind,
+        ok=True,
+        payload={"balances": [row.model_dump(mode="json") for row in rows]},
+    )
+
+
+def _read_pulse_packs(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
+    device_key = _pulse_device_key(request)
+    rows = list_patient_pulse_packs(
+        context.db,
+        workspace_id=context.workspace.id,
+        patient_id=context.patient.id,
+        device_key=device_key,
+        include_financials=True,
+    )
+    return ReadResult(
+        kind=request.kind,
+        ok=True,
+        payload={"packs": [row.model_dump(mode="json") for row in rows]},
+    )
+
+
+def _read_pulse_pack_offers(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+) -> tuple[ReadResult, VerificationFacts]:
+    device_key = _pulse_device_key(request)
+    pulse_count = (
+        int(request.parameters["pulse_count"])
+        if request.parameters.get("pulse_count") is not None
+        else None
+    )
+    rows = list_pulse_pack_offers(
+        context.db,
+        workspace_id=context.workspace.id,
+        active_only=True,
+    )
+    if device_key is not None:
+        rows = [row for row in rows if row.device_key == device_key]
+    if pulse_count is not None:
+        rows = [row for row in rows if row.pulses_count == pulse_count]
+
+    verified: dict[str, object] = {}
+    if len(rows) == 1:
+        row = rows[0]
+        verified = {
+            "pulse_pack_offer_id": str(row.id),
+            "device_key": row.device_key,
+            "pulse_count": int(row.pulses_count),
+            "price_minor": int(row.price_minor),
+            "currency": row.currency,
+        }
+    return (
+        ReadResult(
+            kind=request.kind,
+            ok=True,
+            payload={"offers": [row.model_dump(mode="json") for row in rows]},
+        ),
+        VerificationFacts(
+            pulse_offer_match_count=len(rows),
+            verified_parameters=verified,
+        ),
+    )
+
+
+def _read_pulse_billing_settings(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+) -> ReadResult:
+    device_key = _pulse_device_key(request)
+    rows = list_pulse_billing_settings(
+        context.db,
+        workspace_id=context.workspace.id,
+    )
+    if device_key is not None:
+        rows = [row for row in rows if row.device_key == device_key]
+    return ReadResult(
+        kind=request.kind,
+        ok=True,
+        payload={"devices": [row.model_dump(mode="json") for row in rows]},
+    )
+
+
 def _read_package_refund_quote(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
     service_id, device_key, _sessions, package_id = _package_filters(request)
     quotes, unsafe = list_patient_package_refund_quotes(
@@ -1023,6 +1127,11 @@ def _merge_verification(base: VerificationFacts, extra: VerificationFacts) -> Ve
             extra.package_offer_match_count
             if extra.package_offer_match_count is not None
             else base.package_offer_match_count
+        ),
+        pulse_offer_match_count=(
+            extra.pulse_offer_match_count
+            if extra.pulse_offer_match_count is not None
+            else base.pulse_offer_match_count
         ),
         requires_human=base.requires_human or extra.requires_human,
         verified_parameters={**base.verified_parameters, **extra.verified_parameters},
@@ -1103,6 +1212,16 @@ def execute_step_reads(
             verification = _merge_verification(verification, verified)
         elif request.kind == "package_refund_quote":
             results.append(_read_package_refund_quote(request, context))
+        elif request.kind == "pulse_balance":
+            results.append(_read_pulse_balance(request, context))
+        elif request.kind == "pulse_packs":
+            results.append(_read_pulse_packs(request, context))
+        elif request.kind == "pulse_pack_offers":
+            result, verified = _read_pulse_pack_offers(request, context)
+            results.append(result)
+            verification = _merge_verification(verification, verified)
+        elif request.kind == "pulse_billing_settings":
+            results.append(_read_pulse_billing_settings(request, context))
         else:
             raise ReadExecutionError(f"Unsupported V2 read kind: {request.kind}")
 

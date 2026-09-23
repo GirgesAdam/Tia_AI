@@ -36,6 +36,8 @@ ResponseGoal = Literal[
     "active_task_cancelled",
     "package_information",
     "package_purchased",
+    "pulse_information",
+    "pulse_pack_purchased",
     "package_refund_quote",
     "follow_up_created",
     "marketing_updated",
@@ -50,6 +52,7 @@ _COMPLETED_RESPONSE_GOALS = frozenset(
         "cancellation_completed",
         "appointment_confirmed",
         "package_purchased",
+        "pulse_pack_purchased",
         "follow_up_created",
         "marketing_updated",
     }
@@ -60,6 +63,7 @@ _COMPLETED_ACTION_BY_GOAL = {
     "cancellation_completed": "cancel_appointment",
     "appointment_confirmed": "confirm_appointment",
     "package_purchased": "buy_package",
+    "pulse_pack_purchased": "buy_pulse_pack",
     "follow_up_created": "follow_up",
     "marketing_updated": "marketing_update",
 }

@@ -20,6 +20,8 @@ OperationType = Literal[
     "customer_history",
     "package_info",
     "buy_package",
+    "pulse_info",
+    "buy_pulse_pack",
     "refund_quote",
     "follow_up",
     "marketing_update",
@@ -40,6 +42,7 @@ SafetySignal = Literal[
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 PulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
+PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
@@ -181,6 +184,13 @@ class TurnEntities(StrictContractModel):
             "price. Do not calculate or invent a session count."
         ),
     )
+    pulse_count: int | None = Field(
+        default=None,
+        description=(
+            "Exact Pulse count explicitly attached to a prepaid Pulse pack or offer. "
+            "Preserve the stated count; never calculate or invent one."
+        ),
+    )
     marketing_consent: bool | None = None
     follow_up_at_local: str | None = None
 
@@ -188,6 +198,8 @@ class TurnEntities(StrictContractModel):
     def validate_follow_up_datetime(self) -> TurnEntities:
         if self.package_sessions is not None and self.package_sessions < 1:
             raise ValueError("package_sessions must be positive.")
+        if self.pulse_count is not None and self.pulse_count < 1:
+            raise ValueError("pulse_count must be positive.")
         if self.follow_up_at_local is not None:
             datetime.fromisoformat(self.follow_up_at_local)
         return self
@@ -203,9 +215,11 @@ class TurnOperation(StrictContractModel):
             "possible appointment options without requesting creation of a new appointment. Buying "
             "a package and creating an appointment are separate actions: a request to buy a package "
             "and book its first session requires a buy_package operation plus a separate book "
-            "operation; never encode the appointment only inside buy_package. Use pricing for cost "
-            "questions, including package-offer pricing; when a multi-session package price is asked "
-            "and its session count is explicit, preserve that count in entities.package_sessions."
+            "operation; never encode the appointment only inside buy_package. Use pricing for service "
+            "and session-package cost questions; when a multi-session session-package price is asked "
+            "and its session count is explicit, preserve that count in entities.package_sessions. "
+            "Pulse balance, Pulse-pack offers/prices, and per-device Pulse overage prices are pulse_info, "
+            "not pricing. A request to purchase a Pulse pack now is buy_pulse_pack."
         )
     )
     entities: TurnEntities
@@ -222,6 +236,13 @@ class TurnOperation(StrictContractModel):
         ),
     )
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    requested_pulse_details: list[PulseDetail] = Field(
+        default_factory=list,
+        description=(
+            "For pulse_info only, include exactly the Pulse facts requested: balance, owned_packs, "
+            "offers, and/or overage_price. Do not add unrelated Pulse data."
+        ),
+    )
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
     execution_intent: ExecutionIntent = "execute"

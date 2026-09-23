@@ -460,3 +460,138 @@ def test_booking_cannot_request_session_package_and_pulse_balance_together() -> 
     assert step.disposition == "clarify"
     assert step.clarification_field == "intent"
     assert step.facts["billing_choice_conflict"] is True
+
+
+def _pulse_context() -> PlannerContext:
+    semantic = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "laser-full-body",
+                    "name": "Full Body Laser",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                        },
+                        {
+                            "device_key": "prime_lase",
+                            "device_name": "Prime Lase",
+                        },
+                    ],
+                }
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    return PlannerContext(semantic_context=semantic, active_task=None, now=NOW)
+
+
+def test_pulse_balance_question_is_read_only() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(
+            device=EntityReference(text=None, ref="V1", candidate_refs=[]),
+        ),
+        requested_pulse_details=["balance"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _pulse_context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [item.kind for item in step.reads] == ["pulse_balance"]
+    assert step.facts["device_key"] == "candela_gentle"
+
+
+def test_pulse_info_reads_only_requested_facts() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(
+            device=EntityReference(text=None, ref="V2", candidate_refs=[]),
+        ),
+        requested_pulse_details=["offers", "overage_price"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _pulse_context(),
+    ).steps[0]
+
+    assert [item.kind for item in step.reads] == [
+        "pulse_pack_offers",
+        "pulse_billing_settings",
+    ]
+    assert "pulse_balance" not in [item.kind for item in step.reads]
+    assert "pulse_packs" not in [item.kind for item in step.reads]
+
+
+def test_informational_pulse_purchase_never_creates_write_intent() -> None:
+    operation = TurnOperation(
+        type="buy_pulse_pack",
+        entities=TurnEntities(
+            device=EntityReference(text=None, ref="V1", candidate_refs=[]),
+            pulse_count=2000,
+        ),
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _pulse_context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [item.kind for item in step.reads] == ["pulse_pack_offers"]
+
+
+def test_pulse_pack_purchase_requires_one_verified_offer() -> None:
+    operation = TurnOperation(
+        type="buy_pulse_pack",
+        entities=TurnEntities(
+            device=EntityReference(text=None, ref="V1", candidate_refs=[]),
+            pulse_count=2000,
+        ),
+        execution_intent="execute",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _pulse_context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is not None
+    assert step.write_intent.kind == "buy_pulse_pack"
+
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            pulse_offer_match_count=1,
+            verified_parameters={
+                "pulse_pack_offer_id": "11111111-1111-1111-1111-111111111111",
+                "device_key": "candela_gentle",
+                "pulse_count": 2000,
+                "price_minor": 400_000,
+                "currency": "EGP",
+            },
+        ),
+    )
+    assert ready.disposition == "write_ready"
+
+    blocked = advance_step_after_verification(
+        step,
+        VerificationFacts(pulse_offer_match_count=0),
+    )
+    assert blocked.disposition == "blocked"
+    assert blocked.response_goal == "pulse_information"
+
+    ambiguous = advance_step_after_verification(
+        step,
+        VerificationFacts(pulse_offer_match_count=2),
+    )
+    assert ambiguous.disposition == "clarify"

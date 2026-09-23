@@ -8,13 +8,19 @@ from uuid import uuid4
 import pytest
 
 from app.agents.v2.turn_contract import DateConstraint, TurnEntities, TurnOperation
+from app.schemas.pulse_billing import PulsePackOfferRead
 from app.services.agent_v2.package_booking_policy import (
     BookingPackagePolicyError,
     BookingPackageResolution,
     resolve_booking_package,
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
-from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
+from app.services.agent_v2.read_executor import (
+    ReadExecutionBundle,
+    ReadExecutionContext,
+    ReadResult,
+    execute_step_reads,
+)
 from app.services.agent_v2.state_executor import apply_step_state
 from app.services.agent_v2.write_executor import execute_write_ready_step
 
@@ -395,3 +401,125 @@ def test_write_executor_fails_closed_on_package_and_pulse_double_entitlement(mon
     assert result["ok"] is False
     assert result["error_code"] == "write_failed"
     assert "cannot use a session package and pulse balance" in str(result["detail"])
+
+
+def test_pulse_offer_read_filters_device_and_count(monkeypatch):
+    workspace_id, patient_id = uuid4(), uuid4()
+    rows = [
+        PulsePackOfferRead(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            pulses_count=2000,
+            price_minor=400_000,
+            currency="EGP",
+            is_active=True,
+            created_at=datetime(2026, 9, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        ),
+        PulsePackOfferRead(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            device_key="prime_lase",
+            device_name="Prime Lase",
+            pulses_count=2000,
+            price_minor=350_000,
+            currency="EGP",
+            is_active=True,
+            created_at=datetime(2026, 9, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_pack_offers",
+        lambda *_args, **_kwargs: rows,
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="buy_pulse_pack",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="pulse_pack_offers",
+                parameters={"device_key": "candela_gentle", "pulse_count": 2000},
+            )
+        ],
+        write_intent=WriteIntent(
+            kind="buy_pulse_pack",
+            authorized=True,
+            parameters={"device_key": "candela_gentle", "pulse_count": 2000},
+        ),
+        response_goal="pulse_pack_purchased",
+    )
+    context = ReadExecutionContext(
+        db=object(),
+        workspace=SimpleNamespace(id=workspace_id),
+        patient=SimpleNamespace(id=patient_id),
+        now=datetime(2026, 9, 23, tzinfo=UTC),
+    )
+
+    bundle = execute_step_reads(step, context)
+
+    assert bundle.verification.pulse_offer_match_count == 1
+    assert bundle.verification.verified_parameters["device_key"] == "candela_gentle"
+    assert bundle.verification.verified_parameters["pulse_count"] == 2000
+    assert bundle.verification.verified_parameters["price_minor"] == 400_000
+
+
+def test_write_executor_buys_verified_pulse_pack_without_assumed_payment(monkeypatch):
+    workspace = _workspace()
+    patient = _patient()
+    offer_id = uuid4()
+    captured = {}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.purchase_pulse_pack_offer",
+        lambda _db, **kwargs: (
+            captured.update(kwargs)
+            or SimpleNamespace(
+                id=uuid4(),
+                status="active",
+                sale_price_minor=400_000,
+                currency="EGP",
+            )
+        ),
+    )
+    db = SimpleNamespace(
+        begin_nested=lambda: nullcontext(),
+        commit=lambda: None,
+        rollback=lambda: None,
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="buy_pulse_pack",
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind="buy_pulse_pack",
+            authorized=True,
+            parameters={
+                "pulse_pack_offer_id": str(offer_id),
+                "device_key": "candela_gentle",
+                "pulse_count": 2000,
+                "price_minor": 400_000,
+                "currency": "EGP",
+            },
+        ),
+        response_goal="pulse_pack_purchased",
+    )
+
+    result = execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=step,
+        idempotency_key="pulse-v2-test",
+        commit=False,
+    )
+
+    assert result["ok"] is True
+    assert result["amount_paid_minor"] == 0
+    assert captured["offer_id"] == offer_id
+    assert captured["amount_paid_minor"] == 0
+    assert captured["payment_method"] == "unknown"
+    assert captured["actor_type"] == "ai"

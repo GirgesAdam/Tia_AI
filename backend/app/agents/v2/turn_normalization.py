@@ -55,12 +55,14 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         entities.date.model_dump_json() if entities.date is not None else None,
         entities.time.model_dump_json() if entities.time is not None else None,
         entities.package_sessions,
+        entities.pulse_count,
         entities.marketing_consent,
         entities.follow_up_at_local,
         operation.selection.model_dump_json() if operation.selection is not None else None,
         operation.package_usage,
         operation.pulse_usage,
         tuple(operation.requested_service_details),
+        tuple(operation.requested_pulse_details),
     )
 
 

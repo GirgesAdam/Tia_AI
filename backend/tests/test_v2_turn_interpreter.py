@@ -278,3 +278,51 @@ def test_device_followup_uses_canonical_ref_and_inherits_verified_service(monkey
     ).steps[0]
     assert step.facts["service_id"] == "11111111-1111-4111-8111-111111111111"
     assert step.facts["device_key"] == "candela_gentle"
+
+
+def test_pulse_followup_inherits_verified_count_and_requested_fact_scope() -> None:
+    base = build_semantic_context(_catalog())
+    context = SemanticContext(
+        model_input={
+            **base.model_input,
+            "recent_verified_read": {
+                "operation_type": "pulse_info",
+                "device_ref": "V1",
+                "pulse_count": 2000,
+                "requested_pulse_details": ["offers"],
+            },
+        },
+        reference_map=base.reference_map,
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pulse_info",
+                entities=TurnEntities(),
+                requested_pulse_details=[],
+                execution_intent="informational",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_read_context(turn, context)
+    operation = merged.operations[0]
+
+    assert operation.entities.device is not None
+    assert operation.entities.device.ref == "V1"
+    assert operation.entities.pulse_count == 2000
+    assert operation.requested_pulse_details == ["offers"]
+
+    step = plan_turn(
+        merged,
+        PlannerContext(
+            semantic_context=context,
+            active_task=None,
+            now=datetime(2026, 9, 23, 10, 0, tzinfo=UTC),
+        ),
+    ).steps[0]
+    assert [item.kind for item in step.reads] == ["pulse_pack_offers"]
+    assert step.facts["pulse_count"] == 2000
+    assert step.facts["device_key"] == "candela_gentle"

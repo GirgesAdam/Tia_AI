@@ -148,6 +148,15 @@ SEMANTIC PRINCIPLES
   Pulses/pulse balance for the appointment. Set avoid_existing only when they explicitly say not to
   use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
   customer may own Pulses. A booking cannot consume both a session package and pulse balance.
+- pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
+  Pulse-pack offers, or per-device overage price. Set requested_pulse_details to exactly what was
+  requested. Preserve an explicitly stated Pulse-pack size in entities.pulse_count and a clearly
+  referenced laser device in entities.device. Never estimate how many Pulses a future treatment will
+  consume unless verified clinic data explicitly supplies that fact.
+- buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. It is separate
+  from booking. A request to buy a Pulse pack and book a session requires separate buy_pulse_pack and
+  book operations. Never claim or infer that money was paid merely because the customer authorized
+  the purchase; payment truth is owned by backend/payment records.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
@@ -339,9 +348,25 @@ def merge_verified_read_context(
                     "start_time_ambiguity": previous_time.start_time_ambiguity,
                 }
             )
+        if operation.entities.pulse_count is None and isinstance(raw.get("pulse_count"), int):
+            updates["pulse_count"] = int(raw["pulse_count"])
+
         if updates:
             entities = entities.model_copy(update=updates)
-        operations.append(operation.model_copy(update={"entities": entities}))
+
+        operation_update: dict[str, object] = {"entities": entities}
+        if (
+            not operation.requested_pulse_details
+            and isinstance(raw.get("requested_pulse_details"), list)
+        ):
+            inherited_details = [
+                str(item)
+                for item in raw["requested_pulse_details"]
+                if str(item) in {"balance", "owned_packs", "offers", "overage_price"}
+            ]
+            if inherited_details:
+                operation_update["requested_pulse_details"] = inherited_details
+        operations.append(operation.model_copy(update=operation_update))
     return turn.model_copy(update={"operations": operations})
 
 
