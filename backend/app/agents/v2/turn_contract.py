@@ -215,9 +215,11 @@ class TurnOperation(StrictContractModel):
             "possible appointment options without requesting creation of a new appointment. Buying "
             "a package and creating an appointment are separate actions: a request to buy a package "
             "and book its first session requires a buy_package operation plus a separate book "
-            "operation; never encode the appointment only inside buy_package. Use pricing for cost "
-            "questions, including package-offer pricing; when a multi-session package price is asked "
-            "and its session count is explicit, preserve that count in entities.package_sessions."
+            "operation; never encode the appointment only inside buy_package. Use pricing for service "
+            "and session-package cost questions; when a multi-session session-package price is asked "
+            "and its session count is explicit, preserve that count in entities.package_sessions. "
+            "Pulse balance, Pulse-pack offers/prices, and per-device Pulse overage prices are pulse_info, "
+            "not pricing. A request to purchase a Pulse pack now is buy_pulse_pack."
         )
     )
     entities: TurnEntities
