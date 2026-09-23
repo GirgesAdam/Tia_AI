@@ -318,6 +318,7 @@ def build_semantic_context(
         "focused_context": {},
         "active_task": {},
         "pending_choice": {},
+        "recent_verified_action": {},
     }
     return SemanticContext(
         model_input=model_input,
