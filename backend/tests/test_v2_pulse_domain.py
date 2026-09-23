@@ -21,6 +21,7 @@ from app.agents.v2.turn_normalization import (
 from app.services.agent_v2.planner import (
     PlannerContext,
     PlanStep,
+    ReadRequest,
     VerificationFacts,
     WriteIntent,
     advance_step_after_verification,
@@ -530,3 +531,101 @@ def test_agent_pulse_purchase_never_assumes_payment(monkeypatch) -> None:
     assert result["currency"] == "EGP"
     assert captured["payment_method"] == "unknown"
     assert captured["actor_type"] == "ai"
+
+def test_owned_pulse_pack_read_hides_financial_ledger_fields(monkeypatch) -> None:
+    raw = {
+        "device_key": "candela_gentle",
+        "device_name": "Candela Gentle",
+        "pulses_purchased": 2000,
+        "pulses_consumed": 750,
+        "pulses_remaining": 1250,
+        "purchased_at": NOW.isoformat(),
+        "expires_at": None,
+        "status": "active",
+        "effective_status": "active",
+        "sale_price_minor": 250_000,
+        "amount_paid_minor": 100_000,
+        "balance_due_minor": 150_000,
+        "purchase_transaction_id": str(uuid4()),
+    }
+
+    def model_dump(*, mode, include):
+        assert mode == "json"
+        return {key: raw[key] for key in include if key in raw}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_patient_pulse_packs",
+        lambda *_args, **kwargs: (
+            [SimpleNamespace(model_dump=model_dump)]
+            if kwargs.get("include_financials") is False
+            else []
+        ),
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pulse_info",
+        disposition="read",
+        reads=[ReadRequest(kind="pulse_packs")],
+        response_goal="pulse_information",
+    )
+    context = ReadExecutionContext(
+        db=object(),
+        workspace=SimpleNamespace(id=uuid4()),
+        patient=SimpleNamespace(id=uuid4()),
+        now=NOW,
+    )
+
+    bundle = execute_step_reads(step, context)
+    pack = bundle.results[0].payload["packs"][0]
+
+    assert pack["pulses_remaining"] == 1250
+    assert pack["pulses_consumed"] == 750
+    assert "amount_paid_minor" not in pack
+    assert "balance_due_minor" not in pack
+    assert "purchase_transaction_id" not in pack
+    assert "sale_price_minor" not in pack
+
+
+def test_counted_overage_uses_verified_unit_price_math(monkeypatch) -> None:
+    row = SimpleNamespace(
+        device_key="candela_gentle",
+        device_name="Candela Gentle",
+        overage_price_minor=150,
+        currency="EGP",
+        model_dump=lambda **_kwargs: {
+            "device_key": "candela_gentle",
+            "device_name": "Candela Gentle",
+            "overage_price_minor": 150,
+            "currency": "EGP",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_billing_settings",
+        lambda *_args, **_kwargs: [row],
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pulse_info",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="pulse_billing_settings",
+                parameters={"device_key": "candela_gentle", "pulse_count": 1000},
+            )
+        ],
+        response_goal="pulse_information",
+    )
+    context = ReadExecutionContext(
+        db=object(),
+        workspace=SimpleNamespace(id=uuid4()),
+        patient=SimpleNamespace(id=uuid4()),
+        now=NOW,
+    )
+
+    bundle = execute_step_reads(step, context)
+    payload = bundle.results[0].payload
+
+    assert payload["requested_pulse_count"] == 1000
+    assert payload["overage_total_minor"] == 150_000
+    assert payload["currency"] == "EGP"
+
