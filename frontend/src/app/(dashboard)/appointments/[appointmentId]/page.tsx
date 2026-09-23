@@ -29,6 +29,7 @@ import type {
   AppointmentPaymentSummary,
   AppointmentPulseSettlement,
   Doctor,
+  PulseBalance,
   PulseBillingSettings,
   PulsePackOffer,
   Staff,
@@ -37,9 +38,7 @@ import {
   addAppointmentAdditionalService,
   addAppointmentProduct,
   cancelAppointment,
-  chargePulseDeficitAsOverage,
   confirmAppointment,
-  coverPulseDeficitWithPack,
   purchasePackageForAdditionalService,
   purchasePackageFromAppointment,
   refundAppointmentPayment,
@@ -159,12 +158,14 @@ export default async function AppointmentOperationsPage({
     tiaRequest<PackageOffer[]>("/booking/package-offers?active_only=true").catch(() => []),
     tiaRequest<AppointmentPulseSettlement | null>(`/booking/appointments/${appointmentId}/pulse-settlement`).catch(() => null),
     tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers?active_only=true").catch(() => []),
-    tiaRequest<PulseBillingSettings>("/booking/pulse-settings").catch(() => ({
-      overage_price_minor: null,
-      currency: "EGP",
-    })),
+    tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices").catch(() => []),
   ]);
   const { appointment } = detail;
+  const pulseBalances = appointment.laser_device_key
+    ? await tiaRequest<PulseBalance[]>(
+        `/booking/patients/${appointment.patient_id}/pulse-balance`,
+      ).catch(() => [])
+    : [];
   const allowed = new Set(detail.allowed_actions);
   const laserAppointment = appointment as typeof appointment & {
     laser_device_key?: string | null;
@@ -180,10 +181,19 @@ export default async function AppointmentOperationsPage({
   const prepaidBacked = packageBacked || pulseBacked;
   const pulseSettlementPending =
     pulseBacked && (!pulseSettlement || pulseSettlement.resolution === "pending");
+  const pulseDeviceSetting = pulseSettings.find(
+    (setting) => setting.device_key === laserAppointment.laser_device_key,
+  );
+  const patientPulseBalance =
+    pulseBalances.find((balance) => balance.device_key === laserAppointment.laser_device_key)
+      ?.pulses_remaining ?? 0;
+  const checkoutPulseDeficit = pulseSettlement
+    ? pulseSettlement.deficit_pulses
+    : Math.max((laserAppointment.laser_pulses_used ?? 0) - patientPulseBalance, 0);
   const compatiblePulsePackOffers = pulsePackOffers.filter(
     (offer) =>
       offer.device_key === laserAppointment.laser_device_key &&
-      (!pulseSettlement || offer.pulses_count >= pulseSettlement.deficit_pulses),
+      offer.pulses_count >= checkoutPulseDeficit,
   );
   const overpaidMinor = Math.max(payments.net_paid_minor - payments.price_minor, 0);
   const canEditVisitCharges = ["pending", "confirmed", "checked_in", "in_progress", "completed"].includes(appointment.status);
@@ -221,12 +231,14 @@ export default async function AppointmentOperationsPage({
             : feedback.visit_saved === "extra_package"
               ? "تمت إضافة الباكيدج للخدمة الإضافية واحتسابها كجلسة منها."
               : feedback.visit_saved === "pulse_usage"
-                ? "تم حفظ استهلاك الـPulses وتسوية الرصيد المتاح."
+                ? "تم حفظ استهلاك الـPulses الفعلي."
                 : feedback.visit_saved === "pulse_overage"
                   ? "تمت إضافة تكلفة الـPulses الزائدة إلى حساب الموعد."
                   : feedback.visit_saved === "pulse_pack"
                     ? "تمت إضافة باقة Pulses جديدة وتغطية العجز منها."
-                    : "تم تحديث خدمات الزيارة والحساب."}
+                    : feedback.visit_saved === "payment"
+                      ? "تم تسجيل الحساب والدفعة بنجاح."
+                      : "تم تحديث خدمات الزيارة والحساب."}
         </div>
       )}
 
@@ -307,78 +319,8 @@ export default async function AppointmentOperationsPage({
                             الرصيد لا يكفي — العجز {pulseSettlement.deficit_pulses.toLocaleString("ar-EG")} Pulse
                           </div>
                           <p className="mt-1 text-xs leading-5 text-amber-900">
-                            اختار طريقة واحدة لتسوية العجز قبل تسجيل اكتمال الجلسة.
+                            سوّي العجز من قسم المدفوعات بالأسفل: شراء باقة Pulses أو دفع الـPulses غير المغطاة.
                           </p>
-                          <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <div className="rounded-xl bg-white p-3">
-                              <div className="text-sm font-black">شراء باقة Pulses جديدة</div>
-                              {compatiblePulsePackOffers.length ? (
-                                <form action={coverPulseDeficitWithPack} className="mt-3 space-y-3">
-                                  <input type="hidden" name="appointment_id" value={appointment.id} />
-                                  <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                                  <label className="block text-xs font-bold">
-                                    الباقة
-                                    <select name="offer_id" required defaultValue="" className="form-control mt-1.5 h-10 min-h-10">
-                                      <option value="" disabled>اختار الباقة</option>
-                                      {compatiblePulsePackOffers.map((offer) => (
-                                        <option key={offer.id} value={offer.id}>
-                                          {offer.pulses_count.toLocaleString("ar-EG")} Pulse · {formatMoney(offer.price_minor, offer.currency)}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label className="block text-xs font-bold">
-                                    طريقة الدفع
-                                    <select name="payment_method" required defaultValue="cash" className="form-control mt-1.5 h-10 min-h-10">
-                                      <option value="cash">كاش</option>
-                                      <option value="visa">Visa</option>
-                                      <option value="instapay">InstaPay</option>
-                                    </select>
-                                  </label>
-                                  <p className="text-[11px] leading-5 text-[var(--muted)]">
-                                    يتم تسجيل سعر الباقة كاملًا كدفعة، ويُخصم منها العجز الحالي فقط والباقي يظل في رصيد العميل.
-                                  </p>
-                                  <Button size="sm"><PackagePlus size={14} /> شراء الباقة وتغطية العجز</Button>
-                                </form>
-                              ) : (
-                                <div className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                                  لا توجد باقة نشطة تكفي العجز على الجهاز ده.{" "}
-                                  <Link href="/setup#pulse-pricing" className="font-bold text-teal-700 underline underline-offset-2">
-                                    إضافة باقة من إعدادات العيادة
-                                  </Link>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="rounded-xl bg-white p-3">
-                              <div className="text-sm font-black">دفع قيمة الـPulses الزائدة</div>
-                              {pulseSettings.overage_price_minor ? (
-                                <>
-                                  <div className="mt-2 text-sm text-slate-700">
-                                    {pulseSettlement.deficit_pulses.toLocaleString("ar-EG")} × {formatMoney(pulseSettings.overage_price_minor, pulseSettings.currency)}
-                                  </div>
-                                  <div className="mt-1 text-lg font-black">
-                                    {formatMoney(
-                                      pulseSettlement.deficit_pulses * pulseSettings.overage_price_minor,
-                                      pulseSettings.currency,
-                                    )}
-                                  </div>
-                                  <form action={chargePulseDeficitAsOverage} className="mt-3">
-                                    <input type="hidden" name="appointment_id" value={appointment.id} />
-                                    <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                                    <Button size="sm" variant="outline">إضافة الزيادة إلى حساب الموعد</Button>
-                                  </form>
-                                </>
-                              ) : (
-                                <div className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                                  سعر الـPulse الإضافية غير محدد.{" "}
-                                  <Link href="/setup#pulse-pricing" className="font-bold text-teal-700 underline underline-offset-2">
-                                    تحديد السعر من إعدادات العيادة
-                                  </Link>
-                                </div>
-                              )}
-                            </div>
-                          </div>
                         </div>
                       )}
 
@@ -675,15 +617,41 @@ export default async function AppointmentOperationsPage({
 
               {payments.refunded_minor > 0 && <div className="text-xs text-[var(--muted)]">تم استرداد {formatMoney(payments.refunded_minor, payments.currency)} من المدفوعات المسجلة.</div>}
 
-              {payments.balance_minor > 0 && ["pending", "confirmed", "completed"].includes(appointment.status) && (
+              {(payments.balance_minor > 0 || pulseSettlementPending) && ["pending", "confirmed", "completed"].includes(appointment.status) && (
                 <AppointmentPaymentForm
                   appointmentId={appointment.id}
                   patientId={appointment.patient_id}
                   currency={payments.currency}
                   subtotalMinor={payments.subtotal_minor ?? payments.price_minor}
+                  servicePriceMinor={payments.service_price_minor ?? appointment.price_minor}
                   discountMinor={payments.discount_minor ?? 0}
                   netPaidMinor={payments.net_paid_minor}
                   balanceMinor={payments.balance_minor}
+                  pulseCheckout={
+                    laserAppointment.laser_device_key &&
+                    (laserAppointment.laser_pulses_used ?? 0) > 0 &&
+                    !packageBacked &&
+                    (!pulseBacked || pulseSettlementPending)
+                      ? {
+                          lockedToPulse: pulseBacked,
+                          deviceName: laserAppointment.laser_device_name || laserAppointment.laser_device_key,
+                          pulsesUsed: laserAppointment.laser_pulses_used ?? 0,
+                          availableBalance:
+                            pulseBacked && pulseSettlement
+                              ? pulseSettlement.available_balance_after
+                              : patientPulseBalance,
+                          deficitPulses: checkoutPulseDeficit,
+                          overagePriceMinor: pulseDeviceSetting?.overage_price_minor ?? null,
+                          overageCurrency: pulseDeviceSetting?.currency ?? payments.currency,
+                          offers: compatiblePulsePackOffers,
+                          canSwitchToPulse: pulseBacked || payments.net_paid_minor === 0,
+                          autoUsePulse:
+                            !pulseBacked &&
+                            payments.net_paid_minor === 0 &&
+                            patientPulseBalance > 0,
+                        }
+                      : null
+                  }
                 />
               )}
 

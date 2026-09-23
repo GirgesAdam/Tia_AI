@@ -10,11 +10,14 @@ LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
 
 
 class PulseBillingSettingsUpsert(BaseModel):
+    device_key: LaserDeviceKey = "candela_gentle"
     overage_price_minor: int = Field(gt=0)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
 
 
 class PulseBillingSettingsRead(BaseModel):
+    device_key: LaserDeviceKey
+    device_name: str
     overage_price_minor: int | None = None
     currency: str = "EGP"
 

@@ -180,7 +180,7 @@ export interface PatientPackage {
   created_at:string; updated_at:string;
 }
 export interface PulseBillingSettings {
-  overage_price_minor:number|null; currency:string;
+  device_key:"prime_lase"|"candela_gentle"; device_name:string; overage_price_minor:number|null; currency:string;
 }
 export interface PulsePackOffer {
   id:string; workspace_id:string; device_key:"prime_lase"|"candela_gentle"; device_name:string;

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PaymentMethod = Literal["cash", "visa", "instapay"]
 PaymentTransactionType = Literal["payment", "refund"]
@@ -23,6 +23,34 @@ class PaymentCreate(BaseModel):
             value = value.strip()
             return value or None
         return value
+
+
+
+
+
+class AppointmentCheckoutCreate(BaseModel):
+    amount_minor: int = Field(ge=0)
+    payment_method: PaymentMethod = "cash"
+    discount_minor: int = Field(default=0, ge=0)
+    external_reference: str | None = Field(default=None, max_length=128)
+    pulse_mode: Literal["none", "use_balance", "purchase_pack", "overage"] = "none"
+    pulse_pack_offer_id: UUID | None = None
+
+    @field_validator("external_reference", mode="before")
+    @classmethod
+    def normalize_checkout_reference(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_pulse_choice(self) -> AppointmentCheckoutCreate:
+        if self.pulse_mode == "purchase_pack" and self.pulse_pack_offer_id is None:
+            raise ValueError("A pulse pack must be selected for purchase_pack checkout.")
+        if self.pulse_mode != "purchase_pack" and self.pulse_pack_offer_id is not None:
+            raise ValueError("pulse_pack_offer_id is only valid with purchase_pack checkout.")
+        return self
 
 
 class AppointmentDiscountUpdate(BaseModel):

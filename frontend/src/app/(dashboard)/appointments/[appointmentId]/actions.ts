@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
-import type { Appointment, PulsePackOffer } from "@/lib/types";
+import type { Appointment } from "@/lib/types";
 
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
@@ -30,7 +30,7 @@ export async function updateLaserPulses(formData: FormData) {
     const message =
       error instanceof TiaApiError
         ? error.message
-        : "تعذر حفظ استهلاك الـPulses. حاول مرة أخرى.";
+        : "ØªØ¹Ø°Ø± Ø­ÙØ¸ Ø§Ø³ØªÙ‡Ù„Ø§Ùƒ Ø§Ù„Ù€Pulses. Ø­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
     redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(message)}`);
   }
   refreshAppointmentViews(appointmentId, patientId || undefined);
@@ -60,22 +60,22 @@ export async function updateAppointmentStatus(formData: FormData) {
 export type AppointmentServiceChangeState = { ok: boolean; error: string | null };
 
 function serviceChangeError(error: unknown) {
-  if (!(error instanceof TiaApiError)) return "تعذر تعديل الموعد. حاول مرة أخرى.";
+  if (!(error instanceof TiaApiError)) return "ØªØ¹Ø°Ø± ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù…ÙˆØ¹Ø¯. Ø­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
   const detail = error.technicalMessage || "";
   if (
     detail.includes("not available for the selected service/device with the selected doctor") ||
     detail.includes("Requested appointment time is not available")
   ) {
-    return "الخدمة أو الجهاز أو الدكتور مش متاحين في الوقت المختار. غيّر الوقت أو اختار دكتور تاني.";
+    return "Ø§Ù„Ø®Ø¯Ù…Ø© Ø£Ùˆ Ø§Ù„Ø¬Ù‡Ø§Ø² Ø£Ùˆ Ø§Ù„Ø¯ÙƒØªÙˆØ± Ù…Ø´ Ù…ØªØ§Ø­ÙŠÙ† ÙÙŠ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø®ØªØ§Ø±. ØºÙŠÙ‘Ø± Ø§Ù„ÙˆÙ‚Øª Ø£Ùˆ Ø§Ø®ØªØ§Ø± Ø¯ÙƒØªÙˆØ± ØªØ§Ù†ÙŠ.";
   }
   if (detail.includes("another appointment") || detail.includes("already booked at this time")) {
-    return "فيه تعارض مع موعد تاني للدكتور أو الجهاز في الوقت ده. اختار وقت مختلف.";
+    return "ÙÙŠÙ‡ ØªØ¹Ø§Ø±Ø¶ Ù…Ø¹ Ù…ÙˆØ¹Ø¯ ØªØ§Ù†ÙŠ Ù„Ù„Ø¯ÙƒØªÙˆØ± Ø£Ùˆ Ø§Ù„Ø¬Ù‡Ø§Ø² ÙÙŠ Ø§Ù„ÙˆÙ‚Øª Ø¯Ù‡. Ø§Ø®ØªØ§Ø± ÙˆÙ‚Øª Ù…Ø®ØªÙ„Ù.";
   }
   if (detail.includes("not assigned") || detail.includes("does not provide")) {
-    return "الدكتور المختار غير متاح لتنفيذ الخدمة دي. اختار دكتور تاني للخدمة.";
+    return "Ø§Ù„Ø¯ÙƒØªÙˆØ± Ø§Ù„Ù…Ø®ØªØ§Ø± ØºÙŠØ± Ù…ØªØ§Ø­ Ù„ØªÙ†ÙÙŠØ° Ø§Ù„Ø®Ø¯Ù…Ø© Ø¯ÙŠ. Ø§Ø®ØªØ§Ø± Ø¯ÙƒØªÙˆØ± ØªØ§Ù†ÙŠ Ù„Ù„Ø®Ø¯Ù…Ø©.";
   }
   if (detail.includes("device") && detail.includes("price")) {
-    return "سعر جهاز الليزر المختار غير مفعّل للخدمة دي.";
+    return "Ø³Ø¹Ø± Ø¬Ù‡Ø§Ø² Ø§Ù„Ù„ÙŠØ²Ø± Ø§Ù„Ù…Ø®ØªØ§Ø± ØºÙŠØ± Ù…ÙØ¹Ù‘Ù„ Ù„Ù„Ø®Ø¯Ù…Ø© Ø¯ÙŠ.";
   }
   return error.message;
 }
@@ -91,7 +91,7 @@ export async function changeAppointmentService(
   const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
   const startAt = String(formData.get("start_at") || "").trim();
   if (!appointmentId || !serviceId || !doctorId) {
-    return { ok: false, error: "اختار الخدمة والدكتور قبل الحفظ." };
+    return { ok: false, error: "Ø§Ø®ØªØ§Ø± Ø§Ù„Ø®Ø¯Ù…Ø© ÙˆØ§Ù„Ø¯ÙƒØªÙˆØ± Ù‚Ø¨Ù„ Ø§Ù„Ø­ÙØ¸." };
   }
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/service`, {
@@ -125,7 +125,7 @@ export async function cancelAppointment(formData: FormData) {
 
 function moneyToMinor(raw: string) {
   const normalized = raw.trim().replace(",", ".");
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) throw new Error("اكتب مبلغ صحيح بحد أقصى رقمين عشريين.");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) throw new Error("Ø§ÙƒØªØ¨ Ù…Ø¨Ù„Øº ØµØ­ÙŠØ­ Ø¨Ø­Ø¯ Ø£Ù‚ØµÙ‰ Ø±Ù‚Ù…ÙŠÙ† Ø¹Ø´Ø±ÙŠÙŠÙ†.");
   const [whole, fraction = ""] = normalized.split(".");
   return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
 }
@@ -137,27 +137,32 @@ export async function recordAppointmentPayment(formData: FormData) {
   const discount = String(formData.get("discount") || "0");
   const paymentMethod = String(formData.get("payment_method") || "");
   const externalReference = String(formData.get("external_reference") || "").trim();
+  const pulseMode = String(formData.get("pulse_mode") || "none");
+  const pulsePackOfferId = String(formData.get("pulse_pack_offer_id") || "").trim();
   if (!appointmentId || !paymentMethod) return;
-  const amountMinor = moneyToMinor(amount);
-  const discountMinor = moneyToMinor(discount);
-  if (amountMinor === 0) {
-    await tiaRequest(`/payments/appointments/${appointmentId}/discount`, {
-      method: "PUT",
-      body: JSON.stringify({ discount_minor: discountMinor }),
-    });
-  } else {
-    await tiaRequest(`/payments/appointments/${appointmentId}/payments`, {
+
+  try {
+    await tiaRequest(`/payments/appointments/${appointmentId}/checkout`, {
       method: "POST",
-      headers: { "Idempotency-Key": `dashboard-payment:${randomUUID()}` },
+      headers: { "Idempotency-Key": `dashboard-checkout:${randomUUID()}` },
       body: JSON.stringify({
-        amount_minor: amountMinor,
-        discount_minor: discountMinor,
+        amount_minor: moneyToMinor(amount),
+        discount_minor: moneyToMinor(discount),
         payment_method: paymentMethod,
         external_reference: externalReference || null,
+        pulse_mode: pulseMode,
+        pulse_pack_offer_id: pulsePackOfferId || null,
       }),
     });
+  } catch (error) {
+    const message =
+      error instanceof TiaApiError
+        ? error.message
+        : "ØªØ¹Ø°Ø± ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø­Ø³Ø§Ø¨. Ø±Ø§Ø¬Ø¹ Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„Ø­Ø³Ø§Ø¨ ÙˆØ§Ù„Ù…Ø¨Ù„Øº ÙˆØ­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
+    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(message)}`);
   }
   refreshAppointmentViews(appointmentId, patientId || undefined);
+  redirect(`/appointments/${appointmentId}?visit_saved=payment`);
 }
 
 export async function addAppointmentProduct(formData: FormData) {
@@ -188,15 +193,15 @@ export async function removeAppointmentProduct(formData: FormData) {
 }
 
 function appointmentCommerceError(error: unknown) {
-  if (!(error instanceof TiaApiError)) return "تعذر حفظ تعديل الزيارة. حاول مرة أخرى.";
+  if (!(error instanceof TiaApiError)) return "ØªØ¹Ø°Ø± Ø­ÙØ¸ ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ø²ÙŠØ§Ø±Ø©. Ø­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
   const detail = error.technicalMessage || "";
-  if (detail.includes("primary appointment service")) return "الخدمة الأساسية موجودة بالفعل في الموعد.";
-  if (detail.includes("already attached")) return "الخدمة الإضافية موجودة بالفعل في الزيارة.";
-  if (detail.includes("laser device")) return "اختار جهاز الليزر الصحيح للخدمة.";
-  if (detail.includes("existing appointment payment")) return "فيه دفعة مسجلة على الموعد. راجعها أو استردها أولًا قبل تحويل الجلسة لباكيدج.";
-  if (detail.includes("different service") || detail.includes("different laser device")) return "الباكيدج المختارة لا تطابق الخدمة أو جهاز الليزر في الموعد.";
-  if (detail.includes("already linked to a package")) return "الخدمة مرتبطة بباكيدج بالفعل.";
-  if (detail.includes("package-backed additional service")) return "الخدمة الإضافية مرتبطة بباكيدج، لذلك لا يمكن حذفها كخدمة عادية.";
+  if (detail.includes("primary appointment service")) return "Ø§Ù„Ø®Ø¯Ù…Ø© Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ© Ù…ÙˆØ¬ÙˆØ¯Ø© Ø¨Ø§Ù„ÙØ¹Ù„ ÙÙŠ Ø§Ù„Ù…ÙˆØ¹Ø¯.";
+  if (detail.includes("already attached")) return "Ø§Ù„Ø®Ø¯Ù…Ø© Ø§Ù„Ø¥Ø¶Ø§ÙÙŠØ© Ù…ÙˆØ¬ÙˆØ¯Ø© Ø¨Ø§Ù„ÙØ¹Ù„ ÙÙŠ Ø§Ù„Ø²ÙŠØ§Ø±Ø©.";
+  if (detail.includes("laser device")) return "Ø§Ø®ØªØ§Ø± Ø¬Ù‡Ø§Ø² Ø§Ù„Ù„ÙŠØ²Ø± Ø§Ù„ØµØ­ÙŠØ­ Ù„Ù„Ø®Ø¯Ù…Ø©.";
+  if (detail.includes("existing appointment payment")) return "ÙÙŠÙ‡ Ø¯ÙØ¹Ø© Ù…Ø³Ø¬Ù„Ø© Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙˆØ¹Ø¯. Ø±Ø§Ø¬Ø¹Ù‡Ø§ Ø£Ùˆ Ø§Ø³ØªØ±Ø¯Ù‡Ø§ Ø£ÙˆÙ„Ù‹Ø§ Ù‚Ø¨Ù„ ØªØ­ÙˆÙŠÙ„ Ø§Ù„Ø¬Ù„Ø³Ø© Ù„Ø¨Ø§ÙƒÙŠØ¯Ø¬.";
+  if (detail.includes("different service") || detail.includes("different laser device")) return "Ø§Ù„Ø¨Ø§ÙƒÙŠØ¯Ø¬ Ø§Ù„Ù…Ø®ØªØ§Ø±Ø© Ù„Ø§ ØªØ·Ø§Ø¨Ù‚ Ø§Ù„Ø®Ø¯Ù…Ø© Ø£Ùˆ Ø¬Ù‡Ø§Ø² Ø§Ù„Ù„ÙŠØ²Ø± ÙÙŠ Ø§Ù„Ù…ÙˆØ¹Ø¯.";
+  if (detail.includes("already linked to a package")) return "Ø§Ù„Ø®Ø¯Ù…Ø© Ù…Ø±ØªØ¨Ø·Ø© Ø¨Ø¨Ø§ÙƒÙŠØ¯Ø¬ Ø¨Ø§Ù„ÙØ¹Ù„.";
+  if (detail.includes("package-backed additional service")) return "Ø§Ù„Ø®Ø¯Ù…Ø© Ø§Ù„Ø¥Ø¶Ø§ÙÙŠØ© Ù…Ø±ØªØ¨Ø·Ø© Ø¨Ø¨Ø§ÙƒÙŠØ¯Ø¬ØŒ Ù„Ø°Ù„Ùƒ Ù„Ø§ ÙŠÙ…ÙƒÙ† Ø­Ø°ÙÙ‡Ø§ ÙƒØ®Ø¯Ù…Ø© Ø¹Ø§Ø¯ÙŠØ©.";
   return error.message;
 }
 
@@ -316,68 +321,4 @@ export async function rescheduleAppointment(formData: FormData) {
   revalidatePath(`/patients/${replacement.patient_id}`);
   revalidatePath("/analytics");
   redirect(`/appointments/${replacement.id}`);
-}
-
-function pulseBillingError(error: unknown) {
-  if (!(error instanceof TiaApiError)) {
-    return error instanceof Error ? error.message : "تعذر تسوية رصيد الـPulses.";
-  }
-  const detail = (error.technicalMessage || "").toLowerCase();
-  if (detail.includes("set the clinic pulse price")) {
-    return "حدد سعر الـPulse الإضافية من إعدادات العيادة أولًا.";
-  }
-  if (detail.includes("different laser device")) {
-    return "الباقة المختارة مرتبطة بجهاز ليزر مختلف عن الموعد.";
-  }
-  if (detail.includes("does not contain enough pulses")) {
-    return "الباقة المختارة لا تحتوي على عدد Pulses كافٍ لتغطية العجز.";
-  }
-  if (detail.includes("no unresolved deficit")) {
-    return "عجز الـPulses في الموعد ده تمت تسويته بالفعل.";
-  }
-  if (detail.includes("already financially settled")) {
-    return "تمت تسوية الـPulses ماليًا بالفعل. أي تعديل بعد كده يحتاج مراجعة أدمن.";
-  }
-  return error.message;
-}
-
-export async function chargePulseDeficitAsOverage(formData: FormData) {
-  const appointmentId = String(formData.get("appointment_id") || "");
-  const patientId = String(formData.get("patient_id") || "");
-  if (!appointmentId) return;
-  try {
-    await tiaRequest(`/booking/appointments/${appointmentId}/pulse-settlement/overage`, {
-      method: "POST",
-    });
-  } catch (error) {
-    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(pulseBillingError(error))}`);
-  }
-  refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=pulse_overage`);
-}
-
-export async function coverPulseDeficitWithPack(formData: FormData) {
-  const appointmentId = String(formData.get("appointment_id") || "");
-  const patientId = String(formData.get("patient_id") || "");
-  const offerId = String(formData.get("offer_id") || "");
-  const paymentMethod = String(formData.get("payment_method") || "");
-  if (!appointmentId || !offerId || !paymentMethod) return;
-  try {
-    const offers = await tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers?active_only=true");
-    const offer = offers.find((item) => item.id === offerId);
-    if (!offer) throw new Error("الباقة المختارة غير متاحة حاليًا.");
-    await tiaRequest(`/booking/appointments/${appointmentId}/pulse-settlement/purchase-pack`, {
-      method: "POST",
-      headers: { "Idempotency-Key": `appointment-pulse-pack:${randomUUID()}` },
-      body: JSON.stringify({
-        offer_id: offerId,
-        amount_paid_minor: offer.price_minor,
-        payment_method: paymentMethod,
-      }),
-    });
-  } catch (error) {
-    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(pulseBillingError(error))}`);
-  }
-  refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=pulse_pack`);
 }

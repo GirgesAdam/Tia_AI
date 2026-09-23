@@ -26,7 +26,15 @@ PULSE_SETTLEMENT_RESOLUTIONS = ("pending", "balance", "new_pack", "overage")
 class PulseBillingSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "pulse_billing_settings"
     __table_args__ = (
-        UniqueConstraint("workspace_id", name="uq_pulse_billing_settings_workspace"),
+        UniqueConstraint(
+            "workspace_id",
+            "device_key",
+            name="uq_pulse_billing_settings_workspace_device",
+        ),
+        CheckConstraint(
+            "device_key IN ('prime_lase', 'candela_gentle')",
+            name="pulse_billing_settings_device_valid",
+        ),
         CheckConstraint(
             "overage_price_minor > 0",
             name="pulse_billing_overage_price_positive",
@@ -38,6 +46,7 @@ class PulseBillingSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
         nullable=False,
     )
+    device_key: Mapped[str] = mapped_column(String(40), nullable=False)
     overage_price_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, default="EGP", server_default="EGP"
