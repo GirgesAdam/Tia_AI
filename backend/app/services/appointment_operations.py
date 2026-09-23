@@ -1,5 +1,3 @@
-[Reading 698 lines from start (total: 698 lines, 0 remaining)]
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -698,5 +696,3 @@ def update_operational_status_operation(
     )
     db.flush()
     return appointment
-
-[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
