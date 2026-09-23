@@ -36,6 +36,7 @@ def test_paid_or_package_booking_service_change_requires_human() -> None:
         {"payment_status": "partial"},
         {"amount_paid_minor": 100},
         {"billing_context": "package_prepaid"},
+        {"billing_context": "pulse_prepaid"},
         {"package_external_id": "PKG-1"},
         {"has_payment_allocation": True},
     ]
