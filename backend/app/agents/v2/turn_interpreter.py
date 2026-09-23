@@ -348,9 +348,25 @@ def merge_verified_read_context(
                     "start_time_ambiguity": previous_time.start_time_ambiguity,
                 }
             )
+        if operation.entities.pulse_count is None and isinstance(raw.get("pulse_count"), int):
+            updates["pulse_count"] = int(raw["pulse_count"])
+
         if updates:
             entities = entities.model_copy(update=updates)
-        operations.append(operation.model_copy(update={"entities": entities}))
+
+        operation_update: dict[str, object] = {"entities": entities}
+        if (
+            not operation.requested_pulse_details
+            and isinstance(raw.get("requested_pulse_details"), list)
+        ):
+            inherited_details = [
+                str(item)
+                for item in raw["requested_pulse_details"]
+                if str(item) in {"balance", "owned_packs", "offers", "overage_price"}
+            ]
+            if inherited_details:
+                operation_update["requested_pulse_details"] = inherited_details
+        operations.append(operation.model_copy(update=operation_update))
     return turn.model_copy(update={"operations": operations})
 
 
