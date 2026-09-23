@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.semantic_state_view import with_safe_read_context
-from app.services.agent_v2.live_chat import _availability_option_count_for_step
+from app.services.agent_v2.live_chat import (
+    _availability_option_count_for_step,
+    _verified_action_context_from_turn,
+)
 
 
 def test_safe_read_context_exposes_only_verified_availability_summary() -> None:
@@ -64,3 +67,62 @@ def test_live_context_reads_option_count_from_matching_outcome_only() -> None:
 
     assert _availability_option_count_for_step(turn, operation_index=0) == 7
     assert _availability_option_count_for_step(turn, operation_index=1) is None
+
+
+
+def test_completed_pulse_purchase_produces_minimal_verified_action_context() -> None:
+    turn = SimpleNamespace(
+        traces=(
+            SimpleNamespace(
+                operation_index=0,
+                outcome=SimpleNamespace(
+                    status="completed",
+                    action_result={
+                        "ok": True,
+                        "action": "buy_pulse_pack",
+                    },
+                ),
+            ),
+        ),
+        plan=SimpleNamespace(
+            steps=(
+                SimpleNamespace(
+                    operation_index=0,
+                    write_intent=SimpleNamespace(
+                        kind="buy_pulse_pack",
+                        parameters={
+                            "device_key": "candela_gentle",
+                            "pulse_count": 1000,
+                            "pulse_pack_offer_id": "internal-offer",
+                        },
+                    ),
+                ),
+            )
+        ),
+    )
+
+    assert _verified_action_context_from_turn(turn) == {
+        "operation_type": "buy_pulse_pack",
+        "device_key": "candela_gentle",
+        "pulse_count": 1000,
+    }
+
+
+def test_failed_pulse_purchase_does_not_produce_verified_action_context() -> None:
+    turn = SimpleNamespace(
+        traces=(
+            SimpleNamespace(
+                operation_index=0,
+                outcome=SimpleNamespace(
+                    status="blocked",
+                    action_result={
+                        "ok": False,
+                        "action": "buy_pulse_pack",
+                    },
+                ),
+            ),
+        ),
+        plan=SimpleNamespace(steps=()),
+    )
+
+    assert _verified_action_context_from_turn(turn) is None

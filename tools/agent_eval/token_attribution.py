@@ -10,7 +10,12 @@ from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from langchain_core.messages import BaseMessage
 
 _ENCODING = tiktoken.get_encoding("o200k_base")
-_STATE_KEYS = ("active_task", "pending_choice", "recent_verified_read")
+_STATE_KEYS = (
+    "active_task",
+    "pending_choice",
+    "recent_verified_read",
+    "recent_verified_action",
+)
 
 
 def estimate_text_tokens(value: object) -> int:
@@ -77,6 +82,11 @@ def interpreter_attribution(
         )
         if model_input.get("recent_verified_read") not in (None, {}, [])
         else 0,
+        "recent_verified_action_tokens_estimated": estimate_json_tokens(
+            model_input.get("recent_verified_action")
+        )
+        if model_input.get("recent_verified_action") not in (None, {}, [])
+        else 0,
         "grounded_outcome_tokens_estimated": 0,
         "structured_schema_tokens_estimated": schema_tokens,
         "message_tokens_estimated": message_tokens,
@@ -106,6 +116,7 @@ def responder_attribution(
         "active_task_tokens_estimated": 0,
         "pending_choice_tokens_estimated": 0,
         "recent_verified_read_tokens_estimated": 0,
+        "recent_verified_action_tokens_estimated": 0,
         "grounded_outcome_tokens_estimated": estimate_text_tokens(outcome_message.content),
         "structured_schema_tokens_estimated": schema_tokens,
         "message_tokens_estimated": message_tokens,

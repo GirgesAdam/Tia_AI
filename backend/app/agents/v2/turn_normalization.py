@@ -41,6 +41,32 @@ def _default_read_availability_date(operation: TurnOperation) -> TurnOperation:
     return operation.model_copy(update={"entities": entities})
 
 
+def _normalize_pulse_pack_pricing(operation: TurnOperation) -> TurnOperation:
+    """Repair structured Pulse-pack pricing that was misclassified as service pricing."""
+    if (
+        operation.type != "pricing"
+        or operation.entities.service is not None
+        or operation.entities.pulse_count is None
+    ):
+        return operation
+    return operation.model_copy(
+        update={
+            "type": "pulse_info",
+            "requested_service_details": [],
+            "requested_pulse_details": ["offers"],
+            "execution_intent": "informational",
+        }
+    )
+
+
+def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
+    """Repair contradictions using only structured model output, never raw customer text."""
+    operations = [_normalize_pulse_pack_pricing(operation) for operation in turn.operations]
+    if operations == turn.operations:
+        return turn
+    return turn.model_copy(update={"operations": operations})
+
+
 def _operation_identity(operation: TurnOperation) -> Hashable:
     entities = operation.entities
     return (
@@ -55,12 +81,14 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         entities.date.model_dump_json() if entities.date is not None else None,
         entities.time.model_dump_json() if entities.time is not None else None,
         entities.package_sessions,
+        entities.pulse_count,
         entities.marketing_consent,
         entities.follow_up_at_local,
         operation.selection.model_dump_json() if operation.selection is not None else None,
         operation.package_usage,
         operation.pulse_usage,
         tuple(operation.requested_service_details),
+        tuple(operation.requested_pulse_details),
     )
 
 

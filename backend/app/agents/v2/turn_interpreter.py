@@ -19,7 +19,10 @@ from app.agents.v2.turn_contract import (
     TiaTurnUnderstanding,
     TimeConstraint,
 )
-from app.agents.v2.turn_normalization import dedupe_exact_operations
+from app.agents.v2.turn_normalization import (
+    dedupe_exact_operations,
+    normalize_semantic_invariants,
+)
 from app.core.config import settings
 
 
@@ -117,9 +120,14 @@ SEMANTIC PRINCIPLES
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
-- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read when
-  it is supplied because that scope was verified by Python. Do not reconstruct stale constraints
-  from assistant prose when a verified read scope exists.
+- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read and
+  recent_verified_action when supplied because those scopes were verified by Python. Do not
+  reconstruct stale constraints from assistant prose when a verified structured scope exists.
+- recent_verified_action describes only the immediately previous completed action when Python exposes
+  one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
+  added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
+  verified device reference instead of asking for that device again. Do not inherit it when the
+  customer starts an unrelated request or names a different device.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -148,6 +156,24 @@ SEMANTIC PRINCIPLES
   Pulses/pulse balance for the appointment. Set avoid_existing only when they explicitly say not to
   use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
   customer may own Pulses. A booking cannot consume both a session package and pulse balance.
+- pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
+  Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
+  pulse_info with requested_pulse_details=[offers]; it does not require a service. Do not add
+  overage_price to a Pulse-pack price question unless the customer separately asks about extra,
+  excess, or overage Pulses. Set requested_pulse_details to exactly what was requested. Preserve an
+  explicitly stated Pulse-pack
+  size in entities.pulse_count and a clearly referenced laser device in entities.device. Never
+  estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
+  supplies that fact.
+- buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. A direct
+  imperative request to obtain/add/provision a Pulse pack now is a purchase action even when phrased
+  colloquially and without the literal word "buy"; use execution_intent=execute. Questions about
+  whether a pack exists, what it costs, or what options are available remain pulse_info and
+  informational. Never upgrade a hypothetical, comparison, or "should I" question into a purchase.
+  Pulse-pack purchase is separate from booking. A request to purchase a Pulse pack and book a session
+  requires separate buy_pulse_pack and book operations. Never claim or infer that money was paid
+  merely because the customer authorized the purchase; payment truth is owned by backend/payment
+  records.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
@@ -345,6 +371,35 @@ def merge_verified_read_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_verified_action_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Inherit only facts the model explicitly links to the previous verified action."""
+    raw = semantic_context.model_input.get("recent_verified_action")
+    if not isinstance(raw, dict) or raw.get("operation_type") != "buy_pulse_pack":
+        return turn
+
+    device = _reference_from_verified(raw, single_key="device_ref")
+    operations = []
+    for operation in turn.operations:
+        entities = operation.entities
+        if (
+            operation.continues_previous
+            and operation.type == "book"
+            and operation.pulse_usage == "use_existing"
+            and entities.device is None
+            and device is not None
+        ):
+            entities = entities.model_copy(update={"device": device})
+            operation = operation.model_copy(update={"entities": entities})
+        operations.append(operation)
+
+    if operations == turn.operations:
+        return turn
+    return turn.model_copy(update={"operations": operations})
+
+
 def interpret_customer_turn_v2(
     *,
     history: list[BaseMessage],
@@ -397,6 +452,8 @@ def interpret_customer_turn_v2(
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
     continued = merge_verified_read_context(invocation.value, semantic_context)
+    continued = merge_verified_action_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
-    resolved = resolve_turn_times_by_clinic_hours(grounded, semantic_context)
+    normalized = normalize_semantic_invariants(grounded)
+    resolved = resolve_turn_times_by_clinic_hours(normalized, semantic_context)
     return dedupe_exact_operations(resolved)

@@ -53,6 +53,9 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
     doctor_refs = _entity_refs(value.get("doctor_ids"), kind="doctor", context=context)
     if doctor_refs:
         safe["doctor_refs"] = doctor_refs
+    pulse_count = value.get("pulse_count")
+    if isinstance(pulse_count, int) and not isinstance(pulse_count, bool) and pulse_count > 0:
+        safe["pulse_count"] = pulse_count
     for key in ("date", "time", "package_usage", "pulse_usage"):
         item = value.get(key)
         if key == "pulse_usage" and item == "unspecified":
@@ -182,6 +185,22 @@ def verified_read_semantic_view(
     return safe
 
 
+def verified_action_semantic_view(
+    action_context: dict[str, Any] | None,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
+    """Expose a minimal immediately previous completed action scope."""
+    if not isinstance(action_context, dict):
+        return {}
+    operation_type = action_context.get("operation_type")
+    if operation_type != "buy_pulse_pack":
+        return {}
+    safe: dict[str, object] = {"operation_type": operation_type}
+    safe.update(_safe_constraints(action_context, context))
+    return safe
+
+
 def pending_choice_semantic_view(
     value: dict[str, Any] | None,
     *,
@@ -264,7 +283,12 @@ def _apply_verified_focus(
         )
 
     refs: set[str] = set()
-    for key in ("active_task", "pending_choice", "recent_verified_read"):
+    for key in (
+        "active_task",
+        "pending_choice",
+        "recent_verified_read",
+        "recent_verified_action",
+    ):
         refs.update(_collect_verified_refs(model_input.get(key), context=context))
 
     if not refs:
@@ -340,4 +364,20 @@ def with_safe_read_context(
         context=context,
     )
     stale = _state_has_stale_refs(read_context, context=context)
+    return _apply_verified_focus(context, model_input, block_focus=stale)
+
+
+def with_safe_action_context(
+    context: SemanticContext,
+    *,
+    action_context: dict[str, Any] | None = None,
+) -> SemanticContext:
+    if action_context is None:
+        return context
+    model_input = dict(context.model_input)
+    model_input["recent_verified_action"] = verified_action_semantic_view(
+        action_context,
+        context=context,
+    )
+    stale = _state_has_stale_refs(action_context, context=context)
     return _apply_verified_focus(context, model_input, block_focus=stale)
