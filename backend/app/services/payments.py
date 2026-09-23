@@ -501,6 +501,64 @@ def _visit_packages(
     return list(db.scalars(stmt).all())
 
 
+def _visit_pulse_packs(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    for_update: bool = False,
+) -> list[PatientPulsePack]:
+    stmt = (
+        select(PatientPulsePack)
+        .where(
+            PatientPulsePack.workspace_id == workspace_id,
+            PatientPulsePack.origin_appointment_id == appointment_id,
+            PatientPulsePack.status != "cancelled",
+        )
+        .order_by(PatientPulsePack.purchased_at, PatientPulsePack.id)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list(db.scalars(stmt).all())
+
+
+def _pulse_pack_net_paid_minor(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    pulse_pack_id: UUID,
+) -> int:
+    payments = list(
+        db.scalars(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.patient_pulse_pack_id == pulse_pack_id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        ).all()
+    )
+    payment_ids = [row.id for row in payments]
+    refunds: list[PaymentTransaction] = []
+    if payment_ids:
+        refunds = list(
+            db.scalars(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == workspace_id,
+                    PaymentTransaction.transaction_type == "refund",
+                    (
+                        PaymentTransaction.patient_pulse_pack_id == pulse_pack_id
+                    )
+                    | PaymentTransaction.reference_transaction_id.in_(payment_ids),
+                )
+            ).all()
+        )
+    return max(
+        sum(int(row.amount_minor) for row in payments)
+        - sum(int(row.amount_minor) for row in refunds),
+        0,
+    )
+
+
 def _package_net_paid_minor(
     db: Session,
     *,
@@ -794,6 +852,65 @@ def record_payment(
         )
         if package.purchase_transaction_id is None:
             package.purchase_transaction_id = transaction.id
+        rows.append(
+            AppointmentLedgerEntry(
+                transaction=transaction,
+                allocated_amount_minor=allocated,
+            )
+        )
+        created_transactions.append(transaction)
+        transaction_index += 1
+        remaining -= allocated
+
+    for pulse_pack in _visit_pulse_packs(
+        db,
+        workspace_id=workspace_id,
+        appointment_id=appointment.id,
+        for_update=True,
+    ):
+        if remaining <= 0:
+            break
+        pulse_pack_balance = max(
+            int(pulse_pack.sale_price_minor)
+            - _pulse_pack_net_paid_minor(
+                db,
+                workspace_id=workspace_id,
+                pulse_pack_id=pulse_pack.id,
+            ),
+            0,
+        )
+        if pulse_pack_balance <= 0:
+            continue
+        allocated = min(remaining, pulse_pack_balance)
+        transaction = PaymentTransaction(
+            workspace_id=workspace_id,
+            appointment_id=appointment.id,
+            origin_appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            created_by_user_id=created_by_user_id,
+            reference_transaction_id=None,
+            patient_package_id=None,
+            patient_pulse_pack_id=pulse_pack.id,
+            transaction_type="payment",
+            amount_minor=allocated,
+            currency=appointment.currency,
+            payment_method=payment_method,
+            source=source,
+            external_reference=external_reference,
+            reason="Pulse pack payment from appointment checkout",
+            idempotency_key=_payment_part_key(idempotency_key, transaction_index),
+            created_at=now,
+        )
+        db.add(transaction)
+        db.flush()
+        _add_single_appointment_allocation(
+            db,
+            transaction=transaction,
+            appointment_id=appointment.id,
+            amount_minor=allocated,
+        )
+        if pulse_pack.purchase_transaction_id is None:
+            pulse_pack.purchase_transaction_id = transaction.id
         rows.append(
             AppointmentLedgerEntry(
                 transaction=transaction,

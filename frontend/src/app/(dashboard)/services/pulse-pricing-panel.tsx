@@ -30,7 +30,7 @@ export function PulsePricingPanel({
   settings,
   offers,
 }: {
-  settings: PulseBillingSettings;
+  settings: PulseBillingSettings[];
   offers: PulsePackOffer[];
 }) {
   return (
@@ -38,28 +38,44 @@ export function PulsePricingPanel({
       <CardHeader>
         <CardTitle>تسعير الـPulses</CardTitle>
         <CardDescription>
-          حدد سعر الـPulse الإضافية والباقات المسبقة الدفع. سعر الزيادة يُستخدم فقط لما الجلسة تستهلك أكثر من رصيد العميل.
+          سعر الـPulse الإضافية مستقل لكل جهاز. الباقات كمان مرتبطة بالجهاز ومابتتستخدمش على جهاز مختلف.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <form action={savePulsePriceFormAction} className="grid items-end gap-3 rounded-xl border border-[var(--border)] p-4 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <label className="grid gap-1.5 text-sm font-medium">
-            <span>سعر الـPulse الإضافية</span>
-            <Input
-              name="overage_price"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-              defaultValue={settings.overage_price_minor === null ? "" : (settings.overage_price_minor / 100).toFixed(2)}
-              placeholder="مثال: 3.00"
-            />
-            <span className="text-xs font-normal text-[var(--muted)]">
-              بالجنيه المصري لكل Pulse عند تسوية عجز الرصيد بعد الجلسة.
-            </span>
-          </label>
-          <Button type="submit">حفظ السعر</Button>
-        </form>
+        <div className="grid gap-3 md:grid-cols-2">
+          {settings.map((setting) => (
+            <form
+              key={setting.device_key}
+              action={savePulsePriceFormAction}
+              className="grid items-end gap-3 rounded-xl border border-[var(--border)] p-4"
+            >
+              <input type="hidden" name="device_key" value={setting.device_key} />
+              <div className="font-black text-slate-900">{setting.device_name}</div>
+              <label className="grid gap-1.5 text-sm font-medium">
+                <span>سعر الـPulse الإضافية</span>
+                <Input
+                  name="overage_price"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  required
+                  defaultValue={
+                    setting.overage_price_minor === null
+                      ? ""
+                      : (setting.overage_price_minor / 100).toFixed(2)
+                  }
+                  placeholder="مثال: 3.00"
+                />
+                <span className="text-xs font-normal text-[var(--muted)]">
+                  بالجنيه المصري لكل Pulse غير مغطاة من رصيد {setting.device_name}.
+                </span>
+              </label>
+              <div>
+                <Button type="submit" size="sm">حفظ سعر {setting.device_name}</Button>
+              </div>
+            </form>
+          ))}
+        </div>
 
         <div>
           <div className="mb-2 text-sm font-black">باقات الـPulses</div>

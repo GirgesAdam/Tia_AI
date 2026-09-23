@@ -30,6 +30,7 @@ from app.services.pulse_billing import (
     get_pulse_billing_settings,
     list_patient_pulse_balances,
     list_patient_pulse_packs,
+    list_pulse_billing_settings,
     list_pulse_pack_offers,
     pulse_pack_read,
     pulse_settlement_read,
@@ -58,7 +59,12 @@ def read_pulse_settings(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PulseBillingSettingsRead:
-    return get_pulse_billing_settings(db, workspace_id=access.workspace.id)
+    """Backward-compatible default price; new clients use /pulse-device-prices."""
+    return get_pulse_billing_settings(
+        db,
+        workspace_id=access.workspace.id,
+        device_key="candela_gentle",
+    )
 
 
 @router.put("/pulse-settings", response_model=PulseBillingSettingsRead)
@@ -67,10 +73,12 @@ def save_pulse_settings(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PulseBillingSettingsRead:
+    """Backward-compatible endpoint that updates the requested device."""
     try:
         upsert_pulse_billing_settings(
             db,
             workspace_id=access.workspace.id,
+            device_key=payload.device_key,
             overage_price_minor=payload.overage_price_minor,
             currency=payload.currency,
         )
@@ -78,7 +86,52 @@ def save_pulse_settings(
     except PulseBillingError as exc:
         db.rollback()
         _raise(exc)
-    return get_pulse_billing_settings(db, workspace_id=access.workspace.id)
+    return get_pulse_billing_settings(
+        db,
+        workspace_id=access.workspace.id,
+        device_key=payload.device_key,
+    )
+
+
+@router.get(
+    "/pulse-device-prices",
+    response_model=list[PulseBillingSettingsRead],
+)
+def pulse_device_prices(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PulseBillingSettingsRead]:
+    return list_pulse_billing_settings(
+        db,
+        workspace_id=access.workspace.id,
+    )
+
+
+@router.put(
+    "/pulse-device-prices",
+    response_model=list[PulseBillingSettingsRead],
+)
+def save_pulse_device_price(
+    payload: PulseBillingSettingsUpsert,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PulseBillingSettingsRead]:
+    try:
+        upsert_pulse_billing_settings(
+            db,
+            workspace_id=access.workspace.id,
+            device_key=payload.device_key,
+            overage_price_minor=payload.overage_price_minor,
+            currency=payload.currency,
+        )
+        db.commit()
+    except PulseBillingError as exc:
+        db.rollback()
+        _raise(exc)
+    return list_pulse_billing_settings(
+        db,
+        workspace_id=access.workspace.id,
+    )
 
 
 @router.get("/pulse-pack-offers", response_model=list[PulsePackOfferRead])

@@ -204,9 +204,14 @@ export async function updatePackageOffer(formData: FormData) {
 }
 
 export async function savePulsePriceFormAction(formData: FormData) {
-  await tiaRequest("/booking/pulse-settings", {
+  const deviceKey = String(formData.get("device_key") || "").trim();
+  if (!["prime_lase", "candela_gentle"].includes(deviceKey)) {
+    throw new Error("اختار جهاز ليزر صحيح.");
+  }
+  await tiaRequest("/booking/pulse-device-prices", {
     method: "PUT",
     body: JSON.stringify({
+      device_key: deviceKey,
       overage_price_minor: pulseMoneyMinor(formData.get("overage_price")),
       currency: "EGP",
     }),

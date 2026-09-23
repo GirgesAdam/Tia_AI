@@ -62,7 +62,7 @@ export default async function ServicesPage() {
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<DevicePrice[]>("/inventory/laser-prices").catch(() => []),
     tiaRequest<PackageOffer[]>("/booking/package-offers").catch(() => []),
-    tiaRequest<PulseBillingSettings>("/booking/pulse-settings"),
+    tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices"),
     tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers"),
   ]);
   const isAdmin = workspace.role === "admin";

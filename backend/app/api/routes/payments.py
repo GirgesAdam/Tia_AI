@@ -13,10 +13,15 @@ from app.api.dependencies.security import (
 )
 from app.database.session import get_db
 from app.schemas.payments import (
+    AppointmentCheckoutCreate,
     AppointmentDiscountUpdate,
     AppointmentPaymentSummaryRead,
     PaymentCreate,
     RefundCreate,
+)
+from app.services.appointment_checkout import (
+    AppointmentCheckoutError,
+    checkout_appointment,
 )
 from app.services.payments import (
     PaymentOperationError,
@@ -89,6 +94,50 @@ def create_payment(
     except PaymentOperationError as exc:
         db.rollback()
         raise _conflict(str(exc)) from exc
+
+    return get_appointment_payment_summary(
+        db,
+        workspace_id=access.workspace.id,
+        appointment_id=appointment_id,
+        can_refund=access.membership.role == "admin",
+    )
+
+
+@router.post(
+    "/appointments/{appointment_id}/checkout",
+    response_model=AppointmentPaymentSummaryRead,
+)
+def checkout_appointment_payment(
+    appointment_id: UUID,
+    payload: AppointmentCheckoutCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", max_length=128),
+    ] = None,
+) -> AppointmentPaymentSummaryRead:
+    try:
+        checkout_appointment(
+            db,
+            workspace_id=access.workspace.id,
+            appointment_id=appointment_id,
+            amount_minor=payload.amount_minor,
+            payment_method=payload.payment_method,
+            discount_minor=payload.discount_minor,
+            external_reference=payload.external_reference,
+            pulse_mode=payload.pulse_mode,
+            pulse_pack_offer_id=payload.pulse_pack_offer_id,
+            created_by_user_id=access.user.id,
+            idempotency_key=idempotency_key,
+        )
+        db.commit()
+    except AppointmentCheckoutError as exc:
+        db.rollback()
+        detail = str(exc)
+        if detail == "Appointment not found.":
+            raise _not_found(detail) from exc
+        raise _conflict(detail) from exc
 
     return get_appointment_payment_summary(
         db,
