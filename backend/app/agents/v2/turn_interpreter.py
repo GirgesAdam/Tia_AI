@@ -126,8 +126,11 @@ SEMANTIC PRINCIPLES
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
-  verified device reference instead of asking for that device again. Do not inherit it when the
-  customer starts an unrelated request or names a different device.
+  verified device reference instead of asking for that device again. A Pulse pack is not a session
+  package: this continuity may inherit the verified device, but must not set package_usage or imply
+  session-package consumption unless the customer separately and explicitly refers to a session
+  package. Do not inherit the Pulse purchase when the customer starts an unrelated request or names
+  a different device.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -155,7 +158,9 @@ SEMANTIC PRINCIPLES
   appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
   mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
-  Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
+  Pulse-pack offers, or per-device overage price. Use balance for an aggregate remaining Pulse balance
+  by device. Use owned_packs when the customer asks about a particular pack they own, including that
+  pack's purchased/used/remaining Pulses, status, or expiry. A cost/price question about a prepaid Pulse pack is
   pulse_info with requested_pulse_details=[offers]; it does not require a service. A question about
   extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
   the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can
