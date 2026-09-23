@@ -569,8 +569,8 @@ def case_purchase_and_book_standard(db: Session, workspace: Workspace) -> Scenar
         and after_packs == before_packs + 1
         and after_payments == before_payments
         and appointment is not None
-        and appointment.service_id == slot.service_id
-        and appointment.doctor_id == slot.doctor_id
+        and str(appointment.service_id) == slot.service_id
+        and str(appointment.doctor_id) == slot.doctor_id
         and appointment.laser_device_key == offer.device_key
         and appointment.billing_context == "standard"
     )
@@ -676,8 +676,8 @@ def case_purchase_and_book_with_new_pulses(
         and after_payments == before_payments
         and bool(after_balance)
         and appointment is not None
-        and appointment.service_id == slot.service_id
-        and appointment.doctor_id == slot.doctor_id
+        and str(appointment.service_id) == slot.service_id
+        and str(appointment.doctor_id) == slot.doctor_id
         and appointment.laser_device_key == offer.device_key
         and appointment.billing_context == "pulse_prepaid"
         and appointment.patient_package_id is None
@@ -779,8 +779,8 @@ def case_purchase_then_book_with_pulses(
         and after_packs == before_packs + 1
         and after_payments == before_payments
         and appointment is not None
-        and appointment.service_id == slot.service_id
-        and appointment.doctor_id == slot.doctor_id
+        and str(appointment.service_id) == slot.service_id
+        and str(appointment.doctor_id) == slot.doctor_id
         and appointment.laser_device_key == offer.device_key
         and appointment.billing_context == "pulse_prepaid"
         and appointment.patient_package_id is None
