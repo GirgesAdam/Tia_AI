@@ -1134,7 +1134,8 @@ def main() -> None:
             },
             ensure_ascii=False,
             indent=2,
-        )
+        ),
+        flush=True,
     )
 
 
