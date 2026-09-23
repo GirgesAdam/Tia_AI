@@ -41,19 +41,23 @@ def _default_read_availability_date(operation: TurnOperation) -> TurnOperation:
     return operation.model_copy(update={"entities": entities})
 
 
-def _normalize_pulse_pack_pricing(operation: TurnOperation) -> TurnOperation:
-    """Repair structured Pulse-pack pricing that was misclassified as service pricing."""
-    if (
-        operation.type != "pricing"
-        or operation.entities.service is not None
-        or operation.entities.pulse_count is None
-    ):
+def _normalize_pulse_pricing(operation: TurnOperation) -> TurnOperation:
+    """Repair only an explicit structured Pulse-price classification contradiction.
+
+    Pulse count alone is intentionally insufficient: "1000 extra Pulses" is overage semantics,
+    while "1000-Pulse pack" is offer semantics. The LLM owns that semantic distinction; Python only
+    normalizes it when requested_pulse_details already states the intended Pulse price surface.
+    """
+    if operation.type != "pricing" or operation.entities.service is not None:
+        return operation
+    details = list(dict.fromkeys(operation.requested_pulse_details))
+    if not details or not set(details).issubset({"offers", "overage_price"}):
         return operation
     return operation.model_copy(
         update={
             "type": "pulse_info",
             "requested_service_details": [],
-            "requested_pulse_details": ["offers"],
+            "requested_pulse_details": details,
             "execution_intent": "informational",
         }
     )
@@ -61,7 +65,7 @@ def _normalize_pulse_pack_pricing(operation: TurnOperation) -> TurnOperation:
 
 def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
     """Repair contradictions using only structured model output, never raw customer text."""
-    operations = [_normalize_pulse_pack_pricing(operation) for operation in turn.operations]
+    operations = [_normalize_pulse_pricing(operation) for operation in turn.operations]
     if operations == turn.operations:
         return turn
     return turn.model_copy(update={"operations": operations})
@@ -86,7 +90,6 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         entities.follow_up_at_local,
         operation.selection.model_dump_json() if operation.selection is not None else None,
         operation.package_usage,
-        operation.pulse_usage,
         tuple(operation.requested_service_details),
         tuple(operation.requested_pulse_details),
     )
