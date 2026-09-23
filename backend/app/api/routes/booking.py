@@ -1,3 +1,5 @@
+[Reading 1148 lines from start (total: 1148 lines, 0 remaining)]
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
@@ -1102,6 +1104,7 @@ def reschedule_appointment(
             doctor_id=payload.doctor_id,
             reason=payload.reason or "appointment_rescheduled",
             idempotency_key=idempotency_key,
+            minimum_notice_minutes_override=0,
         )
         db.commit()
     except AppointmentOperationNotFound as exc:
@@ -1145,3 +1148,5 @@ def update_operational_status(
         raise booking_conflict(str(exc)) from exc
     db.refresh(appointment)
     return appointment
+
+[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
