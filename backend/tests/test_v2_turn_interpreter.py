@@ -195,6 +195,130 @@ def test_unconditional_nearest_request_is_not_suppressed_by_previous_success() -
     assert date.mode == "next_available"
 
 
+def test_same_turn_pulse_purchase_device_carries_to_laser_booking_only(monkeypatch) -> None:
+    context = build_semantic_context(_catalog())
+    semantic_result = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_pulse_pack",
+                entities=TurnEntities(
+                    device=EntityReference(
+                        text="Candela Gentle",
+                        ref="V1",
+                        candidate_refs=[],
+                    ),
+                    pulse_count=1000,
+                ),
+                execution_intent="execute",
+            ),
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        text="ليزر إبط",
+                        ref="S1",
+                        candidate_refs=[],
+                    ),
+                    date=DateConstraint(
+                        mode="exact",
+                        start_date="2026-09-25",
+                    ),
+                ),
+                package_usage="unspecified",
+                execution_intent="execute",
+            ),
+        ],
+        safety_signals=[],
+    )
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(
+        interpreter,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=semantic_result,
+            model_name="test-model",
+        ),
+    )
+
+    turn = interpret_customer_turn_v2(
+        history=[
+            HumanMessage(
+                content=(
+                    "اشتريلي باقة 1000 Pulse على Candela Gentle "
+                    "واحجزيلي ليزر الإبط يوم 25 سبتمبر"
+                )
+            )
+        ],
+        semantic_context=context,
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+    )
+
+    booking = turn.operations[1]
+    assert booking.entities.device is not None
+    assert booking.entities.device.ref == "V1"
+    assert booking.package_usage == "unspecified"
+
+
+def test_same_turn_explicit_booking_device_overrides_pulse_purchase_device(monkeypatch) -> None:
+    catalog = _catalog()
+    catalog["services"][0]["laser_devices"].append(
+        {"device_key": "prime_lase", "device_name": "Prime Lase"}
+    )
+    context = build_semantic_context(catalog)
+    semantic_result = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_pulse_pack",
+                entities=TurnEntities(
+                    device=EntityReference(text="Candela Gentle", ref="V1"),
+                    pulse_count=1000,
+                ),
+                execution_intent="execute",
+            ),
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(text="ليزر إبط", ref="S1"),
+                    device=EntityReference(text="Prime Lase", ref="V2"),
+                    date=DateConstraint(mode="exact", start_date="2026-09-25"),
+                ),
+                package_usage="unspecified",
+                execution_intent="execute",
+            ),
+        ],
+        safety_signals=[],
+    )
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(
+        interpreter,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=semantic_result,
+            model_name="test-model",
+        ),
+    )
+
+    turn = interpret_customer_turn_v2(
+        history=[
+            HumanMessage(
+                content=(
+                    "اشتريلي باقة 1000 Pulse على Candela Gentle "
+                    "واحجزيلي ليزر الإبط على Prime Lase يوم 25 سبتمبر"
+                )
+            )
+        ],
+        semantic_context=context,
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+    )
+
+    booking = turn.operations[1]
+    assert booking.entities.device is not None
+    assert booking.entities.device.ref == "V2"
+    assert booking.package_usage == "unspecified"
+
+
 def test_device_followup_uses_canonical_ref_and_inherits_verified_service(monkeypatch) -> None:
     catalog = {
         "services": [
