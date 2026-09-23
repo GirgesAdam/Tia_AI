@@ -15,9 +15,8 @@ from app.services.pulse_billing import (
     list_patient_pulse_balances,
     list_pulse_billing_settings,
 )
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine
 
 from tools.agent_eval.harness import (
     ScenarioResult,
