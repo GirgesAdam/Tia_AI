@@ -126,8 +126,11 @@ SEMANTIC PRINCIPLES
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
-  verified device reference instead of asking for that device again. Do not inherit it when the
-  customer starts an unrelated request or names a different device.
+  verified device reference instead of asking for that device again. A Pulse pack is not a session
+  package: this continuity may inherit the verified device, but must not set package_usage or imply
+  session-package consumption unless the customer separately and explicitly refers to a session
+  package. Do not inherit the Pulse purchase when the customer starts an unrelated request or names
+  a different device.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -151,20 +154,20 @@ SEMANTIC PRINCIPLES
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
   whether an appointment should consume an existing session package, avoid an existing package, or
   leaves that question unspecified.
-- pulse_usage is independent from session-package usage and applies only to laser appointment
-  booking. Set pulse_usage=use_existing only when the customer explicitly asks to use their prepaid
-  Pulses/pulse balance for the appointment. Set avoid_existing only when they explicitly say not to
-  use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
-  customer may own Pulses. A booking cannot consume both a session package and pulse balance.
+- Pulse balance/payment selection is not part of appointment booking. Reception handles
+  appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
+  mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
-  Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
-  pulse_info with requested_pulse_details=[offers]; it does not require a service. Do not add
-  overage_price to a Pulse-pack price question unless the customer separately asks about extra,
-  excess, or overage Pulses. Set requested_pulse_details to exactly what was requested. Preserve an
-  explicitly stated Pulse-pack
-  size in entities.pulse_count and a clearly referenced laser device in entities.device. Never
-  estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
-  supplies that fact.
+  Pulse-pack offers, or per-device overage price. Use balance for an aggregate remaining Pulse balance
+  by device. Use owned_packs when the customer asks about a particular pack they own, including that
+  pack's purchased/used/remaining Pulses, status, or expiry. A cost/price question about a prepaid Pulse pack is
+  pulse_info with requested_pulse_details=[offers]; it does not require a service. A question about
+  extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
+  the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can
+  calculate from the verified unit price. If both pack price and overage unit price are requested,
+  include both offers and overage_price. Set requested_pulse_details to exactly what was requested.
+  Preserve a clearly referenced laser device in entities.device. Never estimate how many Pulses a
+  future treatment will consume unless verified clinic data explicitly supplies that fact.
 - buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. A direct
   imperative request to obtain/add/provision a Pulse pack now is a purchase action even when phrased
   colloquially and without the literal word "buy"; use execution_intent=execute. Questions about
@@ -173,7 +176,9 @@ SEMANTIC PRINCIPLES
   Pulse-pack purchase is separate from booking. A request to purchase a Pulse pack and book a session
   requires separate buy_pulse_pack and book operations. Never claim or infer that money was paid
   merely because the customer authorized the purchase; payment truth is owned by backend/payment
-  records.
+  records. Questions about amounts already paid, balance due, payment transactions, refunds, or
+  checkout/settlement for an owned Pulse pack are receptionist-owned; use human_support unless the
+  customer is disputing a payment, which remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
@@ -371,6 +376,57 @@ def merge_verified_read_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_same_turn_pulse_device_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Carry one explicit Pulse-purchase device into a linked laser booking only.
+
+    This is device continuity, never billing continuity. An explicit booking device wins,
+    and non-laser bookings are never assigned a laser device.
+    """
+    purchase_devices = {
+        operation.entities.device.ref
+        for operation in turn.operations
+        if operation.type == "buy_pulse_pack"
+        and operation.entities.device is not None
+        and operation.entities.device.ref is not None
+    }
+    if len(purchase_devices) != 1:
+        return turn
+    purchase_device_ref = next(iter(purchase_devices))
+    purchase_device = EntityReference(
+        text=None,
+        ref=purchase_device_ref,
+        candidate_refs=[],
+        candidate_mode="ambiguous",
+    )
+
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        entities = operation.entities
+        service_ref = entities.service.ref if entities.service is not None else None
+        service_target = (
+            semantic_context.reference_map.get(service_ref)
+            if service_ref is not None
+            else None
+        )
+        if (
+            operation.type == "book"
+            and entities.device is None
+            and service_target is not None
+            and service_target.kind == "service"
+            and service_target.metadata.get("requires_laser_device") is True
+        ):
+            entities = entities.model_copy(update={"device": purchase_device})
+            operation = operation.model_copy(update={"entities": entities})
+            changed = True
+        operations.append(operation)
+
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def merge_verified_action_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -387,7 +443,6 @@ def merge_verified_action_context(
         if (
             operation.continues_previous
             and operation.type == "book"
-            and operation.pulse_usage == "use_existing"
             and entities.device is None
             and device is not None
         ):
@@ -454,6 +509,7 @@ def interpret_customer_turn_v2(
     continued = merge_verified_read_context(invocation.value, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
+    grounded = merge_same_turn_pulse_device_context(grounded, semantic_context)
     normalized = normalize_semantic_invariants(grounded)
     resolved = resolve_turn_times_by_clinic_hours(normalized, semantic_context)
     return dedupe_exact_operations(resolved)

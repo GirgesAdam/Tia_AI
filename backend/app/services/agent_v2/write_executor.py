@@ -176,16 +176,7 @@ def execute_write_ready_step(
                     str(parameters["device_key"]) if parameters.get("device_key") else None
                 )
                 package_usage = str(parameters.get("package_usage") or "unspecified")
-                pulse_usage = str(parameters.get("pulse_usage") or "unspecified")
-                if pulse_usage not in {"unspecified", "use_existing", "avoid_existing"}:
-                    raise WriteExecutionError("Unsupported pulse usage policy for booking.")
                 requested_package_id = _optional_uuid(parameters, "package_id")
-                if pulse_usage == "use_existing" and (
-                    package_usage == "use_existing" or requested_package_id is not None
-                ):
-                    raise WriteExecutionError(
-                        "A booking cannot use a session package and pulse balance at the same time."
-                    )
                 package_resolution = resolve_booking_package(
                     db,
                     workspace=workspace,
@@ -193,9 +184,7 @@ def execute_write_ready_step(
                     service_id=service_id,
                     start_at=start_at,
                     device_key=device_key,
-                    package_usage=(
-                        "avoid_existing" if pulse_usage == "use_existing" else package_usage
-                    ),
+                    package_usage=package_usage,
                     requested_package_id=requested_package_id,
                 )
                 appointment = create_appointment_operation(
@@ -208,7 +197,10 @@ def execute_write_ready_step(
                     requested_start_at=start_at,
                     created_by_user_id=None,
                     patient_package_id=package_resolution.package_id,
-                    use_pulse_balance=pulse_usage == "use_existing",
+                    # Hard Agent boundary: checkout/Pulse billing is always Reception-owned.
+                    # Ignore any stale/legacy pulse_usage parameter that may still exist in an
+                    # old persisted state or option snapshot.
+                    use_pulse_balance=False,
                     visit_group_id=_optional_uuid(parameters, "visit_group_id"),
                     source="ai",
                     laser_device_key=device_key,
@@ -225,10 +217,6 @@ def execute_write_ready_step(
                     result["package_used"] = True
                     if package_resolution.package_name:
                         result["package_name"] = package_resolution.package_name
-                if pulse_usage == "use_existing":
-                    result["pulse_billing_selected"] = True
-                    result["pulse_consumption_recorded"] = False
-                    result["billing_context"] = "pulse_prepaid"
             elif intent.kind == "confirm_appointment":
                 appointment = confirm_appointment_operation(
                     db,

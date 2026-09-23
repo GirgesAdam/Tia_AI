@@ -403,7 +403,7 @@ def test_laser_device_requirement_stays_deterministic_outside_model_input() -> N
     assert clarified.clarification_field == "device"
 
 
-def test_booking_carries_explicit_pulse_balance_policy_to_verified_write() -> None:
+def test_booking_planner_never_carries_pulse_billing_policy() -> None:
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(
@@ -413,7 +413,6 @@ def test_booking_carries_explicit_pulse_balance_policy_to_verified_write() -> No
         ),
         selection=None,
         package_usage="unspecified",
-        pulse_usage="use_existing",
     )
     step = plan_turn(
         TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
@@ -422,7 +421,7 @@ def test_booking_carries_explicit_pulse_balance_policy_to_verified_write() -> No
 
     assert step.disposition == "read"
     assert step.write_intent is not None
-    assert step.write_intent.parameters["pulse_usage"] == "use_existing"
+    assert "pulse_usage" not in step.write_intent.parameters
 
     ready = advance_step_after_verification(
         step,
@@ -438,10 +437,10 @@ def test_booking_carries_explicit_pulse_balance_policy_to_verified_write() -> No
     )
     assert ready.disposition == "write_ready"
     assert ready.write_intent is not None
-    assert ready.write_intent.parameters["pulse_usage"] == "use_existing"
+    assert "pulse_usage" not in ready.write_intent.parameters
 
 
-def test_booking_cannot_request_session_package_and_pulse_balance_together() -> None:
+def test_session_package_booking_is_independent_from_pulse_billing() -> None:
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(
@@ -450,13 +449,13 @@ def test_booking_cannot_request_session_package_and_pulse_balance_together() -> 
         ),
         selection=None,
         package_usage="use_existing",
-        pulse_usage="use_existing",
     )
     step = plan_turn(
         TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
         _context(),
     ).steps[0]
 
-    assert step.disposition == "clarify"
-    assert step.clarification_field == "intent"
-    assert step.facts["billing_choice_conflict"] is True
+    assert step.disposition == "read"
+    assert step.write_intent is not None
+    assert step.write_intent.parameters["package_usage"] == "use_existing"
+    assert "pulse_usage" not in step.write_intent.parameters

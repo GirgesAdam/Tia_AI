@@ -182,3 +182,18 @@ def test_stale_db_version_is_rejected_before_transition() -> None:
             run_id=uuid4(),
             expected=expected,
         )
+
+def test_legacy_pulse_usage_loads_and_normalizes_to_unspecified() -> None:
+    task = _booking_task(status="awaiting_choice")
+    flow = _flow_for_task(task)
+    namespace = flow.entity_state["agent_core_v2"]
+    namespace["active_task"]["constraints"]["pulse_usage"] = "use_existing"
+    namespace["active_task"]["option_snapshot"]["options"][0]["payload"]["pulse_usage"] = "use_existing"
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.task_type == "booking"
+    assert restored.constraints.pulse_usage == "unspecified"
+    assert restored.option_snapshot is not None
+    assert restored.option_snapshot.options[0].payload["pulse_usage"] == "use_existing"

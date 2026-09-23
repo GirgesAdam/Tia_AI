@@ -1019,12 +1019,30 @@ def _read_pulse_packs(request: ReadRequest, context: ReadExecutionContext) -> Re
         workspace_id=context.workspace.id,
         patient_id=context.patient.id,
         device_key=device_key,
-        include_financials=True,
+        include_financials=False,
     )
     return ReadResult(
         kind=request.kind,
         ok=True,
-        payload={"packs": [row.model_dump(mode="json") for row in rows]},
+        payload={
+            "packs": [
+                row.model_dump(
+                    mode="json",
+                    include={
+                        "device_key",
+                        "device_name",
+                        "pulses_purchased",
+                        "pulses_consumed",
+                        "pulses_remaining",
+                        "purchased_at",
+                        "expires_at",
+                        "status",
+                        "effective_status",
+                    },
+                )
+                for row in rows
+            ]
+        },
     )
 
 
@@ -1082,10 +1100,26 @@ def _read_pulse_billing_settings(
     )
     if device_key is not None:
         rows = [row for row in rows if row.device_key == device_key]
+    payload: dict[str, object] = {
+        "devices": [row.model_dump(mode="json") for row in rows]
+    }
+    pulse_count = request.parameters.get("pulse_count")
+    if (
+        isinstance(pulse_count, int)
+        and not isinstance(pulse_count, bool)
+        and pulse_count > 0
+        and len(rows) == 1
+        and rows[0].overage_price_minor is not None
+    ):
+        payload.update(
+            requested_pulse_count=pulse_count,
+            overage_total_minor=pulse_count * int(rows[0].overage_price_minor),
+            currency=rows[0].currency,
+        )
     return ReadResult(
         kind=request.kind,
         ok=True,
-        payload={"devices": [row.model_dump(mode="json") for row in rows]},
+        payload=payload,
     )
 
 

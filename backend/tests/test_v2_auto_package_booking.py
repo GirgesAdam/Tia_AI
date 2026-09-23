@@ -286,7 +286,7 @@ def test_write_executor_passes_auto_resolved_package_to_canonical_booking(monkey
     assert captured["patient_package_id"] == package_id
 
 
-def test_write_executor_uses_pulse_balance_without_auto_consuming_session_package(monkeypatch):
+def test_write_executor_ignores_legacy_pulse_usage_parameter(monkeypatch):
     service_id, branch_id, doctor_id = uuid4(), uuid4(), uuid4()
     workspace, patient = _workspace(), _patient()
     captured_resolver = {}
@@ -349,21 +349,39 @@ def test_write_executor_uses_pulse_balance_without_auto_consuming_session_packag
     )
 
     assert result["ok"] is True
-    assert result["pulse_billing_selected"] is True
-    assert result["pulse_consumption_recorded"] is False
-    assert "pulse_balance_used" not in result
-    assert result["billing_context"] == "pulse_prepaid"
-    assert captured_resolver["package_usage"] == "avoid_existing"
+    assert captured_resolver["package_usage"] == "unspecified"
     assert captured_create["patient_package_id"] is None
-    assert captured_create["use_pulse_balance"] is True
+    assert captured_create["use_pulse_balance"] is False
+    assert "pulse_billing_selected" not in result
+    assert "billing_context" not in result
 
 
-def test_write_executor_fails_closed_on_package_and_pulse_double_entitlement(monkeypatch):
-    service_id, branch_id, doctor_id = uuid4(), uuid4(), uuid4()
+def test_session_package_booking_wins_over_stale_legacy_pulse_parameter(monkeypatch):
+    service_id, branch_id, doctor_id, package_id = uuid4(), uuid4(), uuid4(), uuid4()
     workspace, patient = _workspace(), _patient()
+    captured_create = {}
+
     monkeypatch.setattr(
         "app.services.agent_v2.write_executor.require_tia_workspace_domain_write",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.resolve_booking_package",
+        lambda *_args, **_kwargs: BookingPackageResolution(
+            package_id=package_id,
+            package_name="Laser package",
+            package_used=True,
+            usage_mode="use_existing",
+        ),
+    )
+
+    def fake_create(_db, **kwargs):
+        captured_create.update(kwargs)
+        return SimpleNamespace(id=uuid4(), status="confirmed")
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.create_appointment_operation",
+        fake_create,
     )
     db = SimpleNamespace(begin_nested=lambda: nullcontext(), commit=lambda: None, rollback=lambda: None)
     step = PlanStep(
@@ -394,6 +412,7 @@ def test_write_executor_fails_closed_on_package_and_pulse_double_entitlement(mon
         commit=False,
     )
 
-    assert result["ok"] is False
-    assert result["error_code"] == "write_failed"
-    assert "cannot use a session package and pulse balance" in str(result["detail"])
+    assert result["ok"] is True
+    assert result["package_used"] is True
+    assert captured_create["patient_package_id"] == package_id
+    assert captured_create["use_pulse_balance"] is False

@@ -382,3 +382,40 @@ def test_reschedule_state_requires_exactly_one_verified_target() -> None:
     assert unique.active_task.task_type == "reschedule"
     assert unique.active_task.target.appointment_id == "apt-1"
     assert unique.active_task.replacement.date == operation.entities.date
+
+def test_new_booking_snapshot_never_persists_pulse_billing_choice() -> None:
+    operation = _operation(date=DateConstraint(mode="exact", start_date="2026-09-12"))
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="start_booking",
+        reads=[ReadRequest(kind="availability")],
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters={"service_id": "svc-underarm"},
+        ),
+        facts={
+            "service_id": "svc-underarm",
+            "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+            "exact_time_requested": False,
+        },
+    )
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=operation,
+        reads=_availability_bundle(),
+        now=NOW,
+        turn_id="turn-no-pulse-billing",
+    )
+
+    state = transition.active_task
+    assert isinstance(state, BookingTaskState)
+    assert state.constraints.pulse_usage == "unspecified"
+    assert state.option_snapshot is not None
+    assert all(
+        "pulse_usage" not in option.payload for option in state.option_snapshot.options
+    )

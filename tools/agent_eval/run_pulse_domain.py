@@ -14,10 +14,16 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
-from app.models.pulse_billing import PatientPulsePack, PulsePackOffer
+from app.models.pulse_billing import (
+    AppointmentPulseSettlement,
+    PatientPulsePack,
+    PulsePackOffer,
+    PulseUsage,
+)
 from app.models.workspace import Workspace
 from app.services.pulse_billing import (
     list_patient_pulse_balances,
+    list_patient_pulse_packs,
     list_pulse_billing_settings,
 )
 from sqlalchemy import create_engine, func, select
@@ -335,6 +341,101 @@ def _payment_count(db: Session, workspace: Workspace, patient: Patient) -> int:
     )
 
 
+def _active_offer_for_device(
+    db: Session,
+    workspace: Workspace,
+    *,
+    device_key: str,
+) -> PulsePackOffer:
+    row = db.scalar(
+        select(PulsePackOffer)
+        .where(
+            PulsePackOffer.workspace_id == workspace.id,
+            PulsePackOffer.device_key == device_key,
+            PulsePackOffer.is_active.is_(True),
+        )
+        .order_by(PulsePackOffer.pulses_count)
+        .limit(1)
+    )
+    if row is None:
+        raise RuntimeError(
+            f"EVAL_INFRA_ERROR: no active Pulse-pack offer for {device_key}"
+        )
+    return row
+
+
+def _distinct_device_offers(
+    db: Session,
+    workspace: Workspace,
+) -> tuple[PulsePackOffer, PulsePackOffer]:
+    rows = list(
+        db.scalars(
+            select(PulsePackOffer)
+            .where(
+                PulsePackOffer.workspace_id == workspace.id,
+                PulsePackOffer.is_active.is_(True),
+            )
+            .order_by(PulsePackOffer.device_key, PulsePackOffer.pulses_count)
+        )
+    )
+    by_device: dict[str, PulsePackOffer] = {}
+    for row in rows:
+        by_device.setdefault(row.device_key, row)
+    if len(by_device) < 2:
+        raise RuntimeError("EVAL_INFRA_ERROR: demo needs active Pulse offers on two devices")
+    values = list(by_device.values())
+    return values[0], values[1]
+
+
+def _device_balance(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    *,
+    device_key: str,
+) -> int:
+    return next(
+        (
+            int(row.pulses_remaining)
+            for row in list_patient_pulse_balances(
+                db,
+                workspace_id=workspace.id,
+                patient_id=patient.id,
+            )
+            if row.device_key == device_key
+        ),
+        0,
+    )
+
+
+def _appointment_pulse_artifacts(
+    db: Session,
+    workspace: Workspace,
+    appointment: Appointment | None,
+) -> dict[str, int]:
+    if appointment is None:
+        return {"usages": 0, "settlements": 0}
+    usages = int(
+        db.scalar(
+            select(func.count(PulseUsage.id)).where(
+                PulseUsage.workspace_id == workspace.id,
+                PulseUsage.appointment_id == appointment.id,
+            )
+        )
+        or 0
+    )
+    settlements = int(
+        db.scalar(
+            select(func.count(AppointmentPulseSettlement.id)).where(
+                AppointmentPulseSettlement.workspace_id == workspace.id,
+                AppointmentPulseSettlement.appointment_id == appointment.id,
+            )
+        )
+        or 0
+    )
+    return {"usages": usages, "settlements": settlements}
+
+
 def _result(
     *,
     scenario_id: str,
@@ -404,6 +505,53 @@ def case_balance(db: Session, workspace: Workspace) -> ScenarioResult:
         ok=grounded,
         issue_title="Pulse balance answer was not canonically grounded",
         issue_detail=f"Expected one of remaining balances {expected} from pulse_balance read.",
+    )
+
+
+def case_owned_pack_remaining(db: Session, workspace: Workspace) -> ScenarioResult:
+    patient = _patient_with_pulse_balance(db, workspace)
+    packs = [
+        row
+        for row in list_patient_pulse_packs(
+            db,
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            include_financials=False,
+        )
+        if row.effective_status == "active"
+    ]
+    if not packs:
+        raise RuntimeError("EVAL_INFRA_ERROR: patient has no active Pulse pack")
+    target = packs[0]
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_owned_pack_remaining",
+        1,
+        f"الباقة اللي عندي على {target.device_name} فاضل فيها كام Pulse؟",
+        None,
+    )
+    reply = (turn.agent_response or "").replace(",", "")
+    ok = (
+        "pulse_packs" in turn.verified_reads
+        and not turn.write_attempted
+        and str(target.pulses_remaining) in reply
+    )
+    return _result(
+        scenario_id="pulse_owned_pack_remaining",
+        purpose="Read owned Pulse-pack usage/remaining facts without exposing the payment ledger.",
+        turns=[turn],
+        verification={
+            "device": target.device_name,
+            "pulses_purchased": target.pulses_purchased,
+            "pulses_consumed": target.pulses_consumed,
+            "pulses_remaining": target.pulses_remaining,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Owned Pulse-pack remaining amount was not grounded",
+        issue_detail="Expected pulse_packs read and canonical remaining Pulse count.",
     )
 
 
@@ -482,6 +630,53 @@ def case_overage_price(db: Session, workspace: Workspace) -> ScenarioResult:
         issue_title="Pulse overage price was not grounded",
         issue_detail=f"Expected verified overage price {expected_price} EGP.",
     )
+
+
+def case_counted_overage(db: Session, workspace: Workspace) -> ScenarioResult:
+    patient = _active_patient(db, workspace)
+    settings = [
+        row
+        for row in list_pulse_billing_settings(db, workspace_id=workspace.id)
+        if row.overage_price_minor is not None
+    ]
+    if not settings:
+        raise RuntimeError("EVAL_INFRA_ERROR: no configured Pulse overage price")
+    row = settings[0]
+    count = 1000
+    expected_total_minor = count * int(row.overage_price_minor or 0)
+    expected_total = f"{expected_total_minor / 100:g}"
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_counted_overage",
+        1,
+        f"لو احتجت {count} Pulse زيادة على {row.device_name} هتكلف كام؟",
+        None,
+    )
+    reply = (turn.agent_response or "").replace(",", "")
+    ok = (
+        "pulse_billing_settings" in turn.verified_reads
+        and "pulse_pack_offers" not in turn.verified_reads
+        and not turn.write_attempted
+        and expected_total in reply
+    )
+    return _result(
+        scenario_id="pulse_counted_overage",
+        purpose="Interpret an exact count of extra Pulses as overage and use deterministic unit-price math.",
+        turns=[turn],
+        verification={
+            "device": row.device_name,
+            "pulse_count": count,
+            "overage_unit_price_minor": row.overage_price_minor,
+            "expected_total_minor": expected_total_minor,
+            "verified_reads": turn.verified_reads,
+        },
+        ok=ok,
+        issue_title="Counted Pulse overage was confused with a Pulse-pack offer",
+        issue_detail="Expected only pulse_billing_settings and deterministic overage total.",
+    )
+
 
 
 def case_purchase_without_payment(db: Session, workspace: Workspace) -> ScenarioResult:
@@ -665,25 +860,24 @@ def case_purchase_and_book_standard(db: Session, workspace: Workspace) -> Scenar
     )
 
 
-def case_purchase_and_book_with_new_pulses(
+def case_explicit_use_pulses_booking(
     db: Session,
     workspace: Workspace,
 ) -> ScenarioResult:
-    offer = _active_offer(db, workspace)
-    patient = _patient_without_device_balance(
-        db,
-        workspace,
-        device_key=offer.device_key,
-    )
-    before_balance = [
+    patient = _patient_with_pulse_balance(db, workspace)
+    balances = [
         row
         for row in list_patient_pulse_balances(
             db,
             workspace_id=workspace.id,
             patient_id=patient.id,
         )
-        if row.device_key == offer.device_key and row.pulses_remaining > 0
+        if row.pulses_remaining > 0
     ]
+    if not balances:
+        raise RuntimeError("EVAL_INFRA_ERROR: no usable Pulse balance")
+    balance = balances[0]
+    offer = _active_offer_for_device(db, workspace, device_key=balance.device_key)
     _catalog, service, doctor, available, slot = _laser_booking_fixture(
         db,
         workspace,
@@ -691,93 +885,58 @@ def case_purchase_and_book_with_new_pulses(
     )
     local = slot.start_at.astimezone(ZoneInfo(available.timezone))
     before_appointments = _appointment_ids(db, workspace, patient)
-    before_packs = _pulse_pack_count(db, workspace, patient)
-    before_payments = _payment_count(db, workspace, patient)
+    before_balance = _device_balance(
+        db, workspace, patient, device_key=offer.device_key
+    )
 
     _, turn = send_turn(
         db,
         workspace,
         patient,
-        "pulse_purchase_and_booking_use_new_balance",
+        "pulse_explicit_use_booking",
         1,
         (
-            f"اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name} "
-            f"واحجزيلي {service['name']} مع {doctor['name']} "
+            f"احجزيلي {service['name']} مع {doctor['name']} "
             f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
-            "واستخدمي الـ pulse balance الجديدة للجلسة دي، من غير باكيدج جلسات."
+            f"على جهاز {offer.device_name} واستخدمي الـPulses اللي عندي."
         ),
         None,
     )
 
     created = _created_appointments(
-        db,
-        workspace,
-        patient,
-        before_ids=before_appointments,
+        db, workspace, patient, before_ids=before_appointments
     )
-    after_packs = _pulse_pack_count(db, workspace, patient)
-    after_payments = _payment_count(db, workspace, patient)
-    after_balance = [
-        row
-        for row in list_patient_pulse_balances(
-            db,
-            workspace_id=workspace.id,
-            patient_id=patient.id,
-        )
-        if row.device_key == offer.device_key and row.pulses_remaining > 0
-    ]
     appointment = created[0] if len(created) == 1 else None
+    after_balance = _device_balance(
+        db, workspace, patient, device_key=offer.device_key
+    )
+    artifacts = _appointment_pulse_artifacts(db, workspace, appointment)
+    reply = (turn.agent_response or "").lower()
     ok = (
-        not before_balance
-        and "pulse_pack_offers" in turn.verified_reads
-        and "availability" in turn.verified_reads
+        "availability" in turn.verified_reads
         and turn.write_attempted
-        and after_packs == before_packs + 1
-        and after_payments == before_payments
-        and bool(after_balance)
         and appointment is not None
-        and str(appointment.service_id) == slot.service_id
-        and str(appointment.doctor_id) == slot.doctor_id
-        and appointment.laser_device_key == offer.device_key
-        and appointment.billing_context == "pulse_prepaid"
-        and appointment.patient_package_id is None
+        and appointment.billing_context == "standard"
+        and before_balance == after_balance
+        and artifacts == {"usages": 0, "settlements": 0}
+        and ("ريسبشن" in reply or "الاستقبال" in reply or "reception" in reply)
     )
     return _result(
-        scenario_id="pulse_purchase_and_booking_use_new_balance",
-        purpose=(
-            "Buy a Pulse pack and immediately use the newly created balance for the "
-            "laser appointment in the same customer turn."
-        ),
+        scenario_id="pulse_explicit_use_booking",
+        purpose="Explicit customer Pulse billing preference must not mutate booking billing; Reception owns checkout.",
         turns=[turn],
         verification={
-            "preexisting_device_balance": bool(before_balance),
-            "new_device_balance": [
-                row.model_dump(mode="json") for row in after_balance
-            ],
-            "appointment_count_created": len(created),
-            "appointment_id": str(appointment.id) if appointment is not None else None,
-            "billing_context": (
-                appointment.billing_context if appointment is not None else None
-            ),
-            "patient_package_id": (
-                str(appointment.patient_package_id)
-                if appointment is not None and appointment.patient_package_id
-                else None
-            ),
-            "pack_count_delta": after_packs - before_packs,
-            "payment_count_delta": after_payments - before_payments,
+            "billing_context": appointment.billing_context if appointment is not None else None,
+            "balance_before": before_balance,
+            "balance_after": after_balance,
+            "pulse_artifacts": artifacts,
             "verified_reads": turn.verified_reads,
         },
         ok=ok,
-        issue_title="New Pulse balance was not correctly used for same-turn booking",
-        issue_detail=(
-            "Fixture starts with no Pulse balance for the device. Expected the verified "
-            "purchase to create balance first, then one pulse_prepaid booking, with no "
-            "session package and no fictional PaymentTransaction."
-        ),
+        issue_title="Agent applied or claimed a Pulse billing decision during booking",
+        issue_detail="Expected standard booking, unchanged balance, no Pulse usage/settlement, and Reception guidance.",
         action=True,
     )
-
 
 def case_purchase_then_book_with_pulses(
     db: Session,
@@ -805,7 +964,7 @@ def case_purchase_then_book_with_pulses(
         patient,
         "pulse_purchase_then_booking",
         1,
-        f"اشتريلي باقة {offer.pulses_count} pulse على {offer.device_name}",
+        f"اشتريلي باقة {offer.pulses_count} Pulse على {offer.device_name}",
         None,
     )
     _, second_turn = send_turn(
@@ -815,22 +974,20 @@ def case_purchase_then_book_with_pulses(
         "pulse_purchase_then_booking",
         2,
         (
-            f"دلوقتي احجزيلي {service['name']} مع {doctor['name']} "
+            f"طب احجزيلي {service['name']} مع {doctor['name']} "
             f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
-            "واستخدمي الـPulses اللي لسه اشتريتها، من غير باكيدج جلسات."
+            "على نفس الجهاز."
         ),
         first_response.conversation_id,
     )
 
     created = _created_appointments(
-        db,
-        workspace,
-        patient,
-        before_ids=before_appointments,
+        db, workspace, patient, before_ids=before_appointments
     )
+    appointment = created[0] if len(created) == 1 else None
     after_packs = _pulse_pack_count(db, workspace, patient)
     after_payments = _payment_count(db, workspace, patient)
-    appointment = created[0] if len(created) == 1 else None
+    artifacts = _appointment_pulse_artifacts(db, workspace, appointment)
     ok = (
         "pulse_pack_offers" in first_turn.verified_reads
         and first_turn.write_attempted
@@ -839,37 +996,203 @@ def case_purchase_then_book_with_pulses(
         and after_packs == before_packs + 1
         and after_payments == before_payments
         and appointment is not None
-        and str(appointment.service_id) == slot.service_id
-        and str(appointment.doctor_id) == slot.doctor_id
         and appointment.laser_device_key == offer.device_key
-        and appointment.billing_context == "pulse_prepaid"
-        and appointment.patient_package_id is None
+        and appointment.billing_context == "standard"
+        and artifacts == {"usages": 0, "settlements": 0}
     )
     return _result(
         scenario_id="pulse_purchase_then_booking",
-        purpose=(
-            "Validate multi-turn continuity: purchase Pulses first, then book a laser "
-            "appointment and explicitly consume that Pulse balance."
-        ),
+        purpose="A verified Pulse purchase may carry device continuity, never Pulse billing continuity.",
         turns=[first_turn, second_turn],
         verification={
-            "appointment_count_created": len(created),
-            "appointment_id": str(appointment.id) if appointment is not None else None,
-            "billing_context": (
-                appointment.billing_context if appointment is not None else None
-            ),
+            "expected_device_key": offer.device_key,
+            "booked_device_key": appointment.laser_device_key if appointment is not None else None,
+            "billing_context": appointment.billing_context if appointment is not None else None,
             "pack_count_delta": after_packs - before_packs,
             "payment_count_delta": after_payments - before_payments,
-            "first_turn_reads": first_turn.verified_reads,
-            "second_turn_reads": second_turn.verified_reads,
+            "pulse_artifacts": artifacts,
         },
         ok=ok,
-        issue_title="Pulse purchase → booking continuity failed",
-        issue_detail=(
-            "Expected a verified Pulse purchase on turn 1 and a separate verified "
-            "pulse_prepaid laser booking on turn 2 without creating payment records."
-        ),
+        issue_title="Verified purchase continuity leaked into appointment billing",
+        issue_detail="Expected inherited device only, standard billing, and no Pulse settlement.",
         action=True,
+    )
+
+def case_existing_balance_normal_booking(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    patient = _patient_with_pulse_balance(db, workspace)
+    balance = next(
+        row
+        for row in list_patient_pulse_balances(
+            db,
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+        )
+        if row.pulses_remaining > 0
+    )
+    offer = _active_offer_for_device(db, workspace, device_key=balance.device_key)
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db, workspace, offer=offer
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+    before_balance = _device_balance(
+        db, workspace, patient, device_key=offer.device_key
+    )
+
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_existing_balance_normal_booking",
+        1,
+        (
+            f"احجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
+            f"على جهاز {offer.device_name}."
+        ),
+        None,
+    )
+
+    created = _created_appointments(
+        db, workspace, patient, before_ids=before_appointments
+    )
+    appointment = created[0] if len(created) == 1 else None
+    after_balance = _device_balance(
+        db, workspace, patient, device_key=offer.device_key
+    )
+    artifacts = _appointment_pulse_artifacts(db, workspace, appointment)
+    ok = (
+        "availability" in turn.verified_reads
+        and turn.write_attempted
+        and appointment is not None
+        and appointment.billing_context == "standard"
+        and before_balance == after_balance
+        and artifacts == {"usages": 0, "settlements": 0}
+    )
+    return _result(
+        scenario_id="pulse_existing_balance_normal_booking",
+        purpose="Existing Pulse entitlement must never auto-select Pulse billing on an Agent booking.",
+        turns=[turn],
+        verification={
+            "billing_context": appointment.billing_context if appointment is not None else None,
+            "balance_before": before_balance,
+            "balance_after": after_balance,
+            "pulse_artifacts": artifacts,
+        },
+        ok=ok,
+        issue_title="Existing Pulse balance changed Agent booking billing",
+        issue_detail="Expected standard booking with unchanged Pulse balance and no settlement.",
+        action=True,
+    )
+
+
+def case_purchase_then_different_device_override(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    purchased_offer, booking_offer = _distinct_device_offers(db, workspace)
+    patient = _active_patient(db, workspace)
+    _catalog, service, doctor, available, slot = _laser_booking_fixture(
+        db, workspace, offer=booking_offer
+    )
+    local = slot.start_at.astimezone(ZoneInfo(available.timezone))
+    before_appointments = _appointment_ids(db, workspace, patient)
+
+    first_response, first_turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_different_device_override",
+        1,
+        f"اشتريلي باقة {purchased_offer.pulses_count} Pulse على {purchased_offer.device_name}",
+        None,
+    )
+    _, second_turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_different_device_override",
+        2,
+        (
+            f"طب احجزيلي {service['name']} مع {doctor['name']} "
+            f"يوم {local.date().isoformat()} الساعة {local.strftime('%H:%M')} "
+            f"على {booking_offer.device_name}."
+        ),
+        first_response.conversation_id,
+    )
+
+    created = _created_appointments(
+        db, workspace, patient, before_ids=before_appointments
+    )
+    appointment = created[0] if len(created) == 1 else None
+    artifacts = _appointment_pulse_artifacts(db, workspace, appointment)
+    ok = (
+        first_turn.write_attempted
+        and "availability" in second_turn.verified_reads
+        and second_turn.write_attempted
+        and appointment is not None
+        and appointment.laser_device_key == booking_offer.device_key
+        and appointment.laser_device_key != purchased_offer.device_key
+        and appointment.billing_context == "standard"
+        and artifacts == {"usages": 0, "settlements": 0}
+    )
+    return _result(
+        scenario_id="pulse_different_device_override",
+        purpose="An explicit booking device must override the device from a previous verified Pulse purchase.",
+        turns=[first_turn, second_turn],
+        verification={
+            "purchased_device": purchased_offer.device_key,
+            "explicit_booking_device": booking_offer.device_key,
+            "booked_device": appointment.laser_device_key if appointment is not None else None,
+            "billing_context": appointment.billing_context if appointment is not None else None,
+        },
+        ok=ok,
+        issue_title="Previous Pulse purchase incorrectly overrode explicit booking device",
+        issue_detail="Expected explicit booking device to win and billing to remain standard.",
+        action=True,
+    )
+
+
+def case_billing_ledger_question(
+    db: Session,
+    workspace: Workspace,
+) -> ScenarioResult:
+    patient = _patient_with_pulse_balance(db, workspace)
+    _, turn = send_turn(
+        db,
+        workspace,
+        patient,
+        "pulse_billing_ledger_question",
+        1,
+        "فاضل عليا كام فلوس في باقة الـPulse؟",
+        None,
+    )
+    reads = set(turn.verified_reads)
+    forbidden_reads = {"payments", "payment_ledger", "pulse_payments"}
+    ok = (
+        not turn.write_attempted
+        and not reads.intersection(forbidden_reads)
+        and (
+            turn.handoff_state is not None
+            or "ريسبشن" in (turn.agent_response or "")
+            or "reception" in (turn.agent_response or "").lower()
+        )
+    )
+    return _result(
+        scenario_id="pulse_billing_ledger_question",
+        purpose="Owned Pulse-pack payment-ledger questions stay receptionist-owned.",
+        turns=[turn],
+        verification={
+            "verified_reads": turn.verified_reads,
+            "write_attempted": turn.write_attempted,
+            "handoff_state": turn.handoff_state,
+        },
+        ok=ok,
+        issue_title="Agent expanded into Pulse payment-ledger ownership",
+        issue_detail="Expected no invented financial ledger answer and Reception/handoff guidance.",
     )
 
 
@@ -1042,16 +1365,18 @@ def case_book_service_and_buy_pulses_for_retouch(
 
 CASES = [
     case_balance,
+    case_owned_pack_remaining,
     case_offer_price,
     case_overage_price,
+    case_counted_overage,
     case_purchase_without_payment,
     case_purchase_and_book_standard,
-    case_purchase_and_book_with_new_pulses,
+    case_existing_balance_normal_booking,
+    case_explicit_use_pulses_booking,
     case_purchase_then_book_with_pulses,
-    case_book_service_and_buy_pulses_for_other_unspecified_use,
-    case_book_service_and_buy_pulses_for_retouch,
+    case_purchase_then_different_device_override,
+    case_billing_ledger_question,
 ]
-
 
 def run_case(engine, workspace_slug: str, case_fn) -> ScenarioResult:
     connection = engine.connect()

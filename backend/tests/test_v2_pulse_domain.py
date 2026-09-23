@@ -21,6 +21,7 @@ from app.agents.v2.turn_normalization import (
 from app.services.agent_v2.planner import (
     PlannerContext,
     PlanStep,
+    ReadRequest,
     VerificationFacts,
     WriteIntent,
     advance_step_after_verification,
@@ -56,6 +57,7 @@ def test_pulse_pack_pricing_normalizes_from_structured_semantics() -> None:
             pulse_count=1000,
         ),
         requested_service_details=["price"],
+        requested_pulse_details=["offers"],
         execution_intent="informational",
     )
 
@@ -70,6 +72,37 @@ def test_pulse_pack_pricing_normalizes_from_structured_semantics() -> None:
     assert result.requested_service_details == []
     assert result.requested_pulse_details == ["offers"]
     assert result.execution_intent == "informational"
+
+
+def test_counted_overage_semantics_are_not_normalized_to_pack_offer() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=1000,
+        ),
+        requested_service_details=["price"],
+        requested_pulse_details=["overage_price"],
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+    result = normalized.operations[0]
+
+    assert result.type == "pulse_info"
+    assert result.requested_pulse_details == ["overage_price"]
+    assert result.entities.pulse_count == 1000
+
+
+def test_new_turn_contract_has_no_pulse_billing_choice() -> None:
+    properties = TurnOperation.model_json_schema()["properties"]
+
+    assert "pulse_usage" not in properties
 
 
 def test_pulse_pricing_normalizer_does_not_override_service_pricing() -> None:
@@ -120,7 +153,7 @@ def test_pulse_dedupe_identity_preserves_distinct_counts_and_details() -> None:
     assert normalized.operations == [first, second, third]
 
 
-def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) -> None:
+def test_agent_booking_ignores_legacy_pulse_billing_parameter(monkeypatch) -> None:
     workspace = SimpleNamespace(id=uuid4())
     patient = SimpleNamespace(id=uuid4(), status="active")
     captured = {}
@@ -182,11 +215,11 @@ def test_pulse_booking_reports_billing_selection_not_consumption(monkeypatch) ->
     )
 
     assert result["ok"] is True
-    assert result["pulse_billing_selected"] is True
-    assert result["pulse_consumption_recorded"] is False
-    assert result["billing_context"] == "pulse_prepaid"
+    assert "pulse_billing_selected" not in result
+    assert "pulse_consumption_recorded" not in result
+    assert "billing_context" not in result
     assert "pulse_balance_used" not in result
-    assert captured["use_pulse_balance"] is True
+    assert captured["use_pulse_balance"] is False
 
 
 def test_explicit_pulse_purchase_continuation_inherits_verified_device() -> None:
@@ -220,7 +253,6 @@ def test_explicit_pulse_purchase_continuation_inherits_verified_device() -> None
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(),
-        pulse_usage="use_existing",
         continues_previous=True,
         execution_intent="execute",
     )
@@ -265,7 +297,6 @@ def test_unrelated_pulse_booking_does_not_inherit_previous_purchase_device() -> 
     operation = TurnOperation(
         type="book",
         entities=TurnEntities(),
-        pulse_usage="use_existing",
         continues_previous=False,
         execution_intent="execute",
     )
@@ -289,7 +320,6 @@ def test_pulse_purchase_and_booking_remain_independent_ordered_steps() -> None:
         entities=TurnEntities(
             service=None,
         ),
-        pulse_usage="use_existing",
         execution_intent="execute",
     )
     turn = TiaTurnUnderstanding(
@@ -340,6 +370,33 @@ def test_pulse_info_reads_only_requested_facts() -> None:
         _planner_context(),
     ).steps[0]
 
+    assert [read.kind for read in step.reads] == [
+        "pulse_pack_offers",
+        "pulse_billing_settings",
+    ]
+
+
+def test_compound_pack_and_overage_info_plans_both_verified_reads() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=1000,
+        ),
+        requested_pulse_details=["offers", "overage_price"],
+        execution_intent="informational",
+    )
+
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is None
     assert [read.kind for read in step.reads] == [
         "pulse_pack_offers",
         "pulse_billing_settings",
@@ -501,3 +558,101 @@ def test_agent_pulse_purchase_never_assumes_payment(monkeypatch) -> None:
     assert result["currency"] == "EGP"
     assert captured["payment_method"] == "unknown"
     assert captured["actor_type"] == "ai"
+
+def test_owned_pulse_pack_read_hides_financial_ledger_fields(monkeypatch) -> None:
+    raw = {
+        "device_key": "candela_gentle",
+        "device_name": "Candela Gentle",
+        "pulses_purchased": 2000,
+        "pulses_consumed": 750,
+        "pulses_remaining": 1250,
+        "purchased_at": NOW.isoformat(),
+        "expires_at": None,
+        "status": "active",
+        "effective_status": "active",
+        "sale_price_minor": 250_000,
+        "amount_paid_minor": 100_000,
+        "balance_due_minor": 150_000,
+        "purchase_transaction_id": str(uuid4()),
+    }
+
+    def model_dump(*, mode, include):
+        assert mode == "json"
+        return {key: raw[key] for key in include if key in raw}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_patient_pulse_packs",
+        lambda *_args, **kwargs: (
+            [SimpleNamespace(model_dump=model_dump)]
+            if kwargs.get("include_financials") is False
+            else []
+        ),
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pulse_info",
+        disposition="read",
+        reads=[ReadRequest(kind="pulse_packs")],
+        response_goal="pulse_information",
+    )
+    context = ReadExecutionContext(
+        db=object(),
+        workspace=SimpleNamespace(id=uuid4()),
+        patient=SimpleNamespace(id=uuid4()),
+        now=NOW,
+    )
+
+    bundle = execute_step_reads(step, context)
+    pack = bundle.results[0].payload["packs"][0]
+
+    assert pack["pulses_remaining"] == 1250
+    assert pack["pulses_consumed"] == 750
+    assert "amount_paid_minor" not in pack
+    assert "balance_due_minor" not in pack
+    assert "purchase_transaction_id" not in pack
+    assert "sale_price_minor" not in pack
+
+
+def test_counted_overage_uses_verified_unit_price_math(monkeypatch) -> None:
+    row = SimpleNamespace(
+        device_key="candela_gentle",
+        device_name="Candela Gentle",
+        overage_price_minor=150,
+        currency="EGP",
+        model_dump=lambda **_kwargs: {
+            "device_key": "candela_gentle",
+            "device_name": "Candela Gentle",
+            "overage_price_minor": 150,
+            "currency": "EGP",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_billing_settings",
+        lambda *_args, **_kwargs: [row],
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pulse_info",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="pulse_billing_settings",
+                parameters={"device_key": "candela_gentle", "pulse_count": 1000},
+            )
+        ],
+        response_goal="pulse_information",
+    )
+    context = ReadExecutionContext(
+        db=object(),
+        workspace=SimpleNamespace(id=uuid4()),
+        patient=SimpleNamespace(id=uuid4()),
+        now=NOW,
+    )
+
+    bundle = execute_step_reads(step, context)
+    payload = bundle.results[0].payload
+
+    assert payload["requested_pulse_count"] == 1000
+    assert payload["overage_total_minor"] == 150_000
+    assert payload["currency"] == "EGP"
+

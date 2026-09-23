@@ -40,7 +40,6 @@ SafetySignal = Literal[
     "privacy_issue",
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
-PulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
@@ -187,8 +186,8 @@ class TurnEntities(StrictContractModel):
     pulse_count: int | None = Field(
         default=None,
         description=(
-            "Exact Pulse count explicitly attached to a prepaid Pulse pack or offer. "
-            "Preserve the stated count; never calculate or invent one."
+            "Exact Pulse count explicitly attached to a prepaid Pulse pack/offer or to a counted "
+            "overage-information question. Preserve the stated count; never calculate or invent one."
         ),
     )
     marketing_consent: bool | None = None
@@ -225,16 +224,6 @@ class TurnOperation(StrictContractModel):
     entities: TurnEntities
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
-    pulse_usage: PulseUsage = Field(
-        default="unspecified",
-        description=(
-            "For laser appointment booking only: use_existing means the customer explicitly wants "
-            "the appointment billed from their existing prepaid pulse balance; avoid_existing means "
-            "the customer explicitly does not want to use pulse balance; unspecified means they did "
-            "not express a pulse-balance preference. Never infer use_existing merely because a pulse "
-            "balance may exist."
-        ),
-    )
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
     requested_pulse_details: list[PulseDetail] = Field(
         default_factory=list,
