@@ -151,20 +151,18 @@ SEMANTIC PRINCIPLES
 - package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
   whether an appointment should consume an existing session package, avoid an existing package, or
   leaves that question unspecified.
-- pulse_usage is independent from session-package usage and applies only to laser appointment
-  booking. Set pulse_usage=use_existing only when the customer explicitly asks to use their prepaid
-  Pulses/pulse balance for the appointment. Set avoid_existing only when they explicitly say not to
-  use that pulse balance. Otherwise use unspecified. Never infer pulse-balance use just because the
-  customer may own Pulses. A booking cannot consume both a session package and pulse balance.
+- Pulse balance/payment selection is not part of appointment booking. Reception handles
+  appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
+  mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
   Pulse-pack offers, or per-device overage price. A cost/price question about a prepaid Pulse pack is
-  pulse_info with requested_pulse_details=[offers]; it does not require a service. Do not add
-  overage_price to a Pulse-pack price question unless the customer separately asks about extra,
-  excess, or overage Pulses. Set requested_pulse_details to exactly what was requested. Preserve an
-  explicitly stated Pulse-pack
-  size in entities.pulse_count and a clearly referenced laser device in entities.device. Never
-  estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
-  supplies that fact.
+  pulse_info with requested_pulse_details=[offers]; it does not require a service. A question about
+  extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
+  the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can
+  calculate from the verified unit price. If both pack price and overage unit price are requested,
+  include both offers and overage_price. Set requested_pulse_details to exactly what was requested.
+  Preserve a clearly referenced laser device in entities.device. Never estimate how many Pulses a
+  future treatment will consume unless verified clinic data explicitly supplies that fact.
 - buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. A direct
   imperative request to obtain/add/provision a Pulse pack now is a purchase action even when phrased
   colloquially and without the literal word "buy"; use execution_intent=execute. Questions about
@@ -173,7 +171,9 @@ SEMANTIC PRINCIPLES
   Pulse-pack purchase is separate from booking. A request to purchase a Pulse pack and book a session
   requires separate buy_pulse_pack and book operations. Never claim or infer that money was paid
   merely because the customer authorized the purchase; payment truth is owned by backend/payment
-  records.
+  records. Questions about amounts already paid, balance due, payment transactions, refunds, or
+  checkout/settlement for an owned Pulse pack are receptionist-owned; use human_support unless the
+  customer is disputing a payment, which remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
@@ -387,7 +387,6 @@ def merge_verified_action_context(
         if (
             operation.continues_previous
             and operation.type == "book"
-            and operation.pulse_usage == "use_existing"
             and entities.device is None
             and device is not None
         ):
