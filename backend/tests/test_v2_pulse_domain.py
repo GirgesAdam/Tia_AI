@@ -19,7 +19,10 @@ from app.services.agent_v2.planner import (
     advance_step_after_verification,
     plan_turn,
 )
-from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
+from app.services.agent_v2.read_executor import (
+    ReadExecutionContext,
+    execute_step_reads,
+)
 from app.services.agent_v2.write_executor import execute_write_ready_step
 
 
