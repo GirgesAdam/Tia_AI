@@ -169,3 +169,22 @@ def test_verified_pulse_purchase_action_view_uses_ephemeral_device_ref() -> None
     assert "candela_gentle" not in encoded
     assert "internal-pack-id" not in encoded
     assert "amount_paid_minor" not in encoded
+
+def test_legacy_pulse_usage_is_not_exposed_to_the_model() -> None:
+    context = _context()
+    active = {
+        "task_type": "booking",
+        "status": "collecting",
+        "constraints": {
+            "service_id": SERVICE_ID,
+            "device_key": "candela_gentle",
+            "package_usage": "unspecified",
+            "pulse_usage": "use_existing",
+        },
+    }
+
+    safe = with_safe_task_context(context, active_task=active)
+    payload = json.dumps(safe.model_input, ensure_ascii=False, default=str)
+
+    assert "pulse_usage" not in payload
+    assert "use_existing" not in payload
