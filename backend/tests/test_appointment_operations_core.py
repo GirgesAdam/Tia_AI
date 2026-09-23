@@ -1,5 +1,3 @@
-[Reading 285 lines from start (total: 285 lines, 0 remaining)]
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -285,5 +283,3 @@ def test_staff_reschedule_uses_immediate_booking_window() -> None:
     assert "minimum_notice_minutes_override=0" in route
     assert "minimum_notice_minutes_override=minimum_notice_minutes_override" in service
     assert 'allow_immediate: "true"' in page
-
-[executed on device: DESKTOP-RL942A5 (3ff1194e-df64-46b5-a280-442d6c5d0b36)]
