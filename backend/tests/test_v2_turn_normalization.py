@@ -83,3 +83,32 @@ def test_compound_turn_preserves_reads_and_one_identical_write() -> None:
         "availability",
         "book",
     ]
+
+
+def test_distinct_pulse_counts_and_fact_requests_are_never_deduped() -> None:
+    first = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=1000),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    second = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=2000),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    third = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=2000),
+        requested_pulse_details=["overage_price"],
+        execution_intent="informational",
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[first, second, third],
+        safety_signals=[],
+    )
+
+    normalized = dedupe_exact_operations(turn)
+
+    assert normalized.operations == [first, second, third]
