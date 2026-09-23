@@ -6,15 +6,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.turn_normalization import (
-    dedupe_exact_operations,
-    normalize_semantic_invariants,
-)
 from app.agents.v2.turn_contract import (
     EntityReference,
     TiaTurnUnderstanding,
     TurnEntities,
     TurnOperation,
+)
+from app.agents.v2.turn_normalization import (
+    dedupe_exact_operations,
+    normalize_semantic_invariants,
 )
 from app.services.agent_v2.planner import (
     PlannerContext,
