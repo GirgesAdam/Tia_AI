@@ -215,6 +215,7 @@ def _purchase_then_bill_paraphrases(
                 "purchase_and_booking_are_separate_actions": True,
                 "billing_source": "pulse_balance",
                 "consumption_recorded_at_booking": False,
+                "inherits_verified_purchase_device": True,
             },
             "turns": [_turn_payload(first_turn), _turn_payload(second_turn)],
         },
