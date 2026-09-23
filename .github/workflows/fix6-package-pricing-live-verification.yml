@@ -1,17 +1,6 @@
 name: Fix6 Package Pricing Live Verification
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/fix6-package-pricing-live-verification.yml
-      - backend/app/agents/v2/turn_contract.py
-      - backend/app/agents/v2/turn_interpreter.py
-      - backend/app/services/agent_v2/planner.py
-      - backend/app/services/agent_v2/read_executor.py
-      - backend/app/services/agent_v2/outcome_builder.py
-      - backend/scripts/run_fix6_package_pricing_live_verification.py
   workflow_dispatch:
 
 permissions:

@@ -1,13 +1,6 @@
 name: V2 Compound Occupied Review
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/v2-compound-occupied-review.yml
-      - backend/scripts/run_v2_compound_occupied_review.py
-      - backend/app/services/agent_v2/**
   workflow_dispatch:
 
 permissions:
