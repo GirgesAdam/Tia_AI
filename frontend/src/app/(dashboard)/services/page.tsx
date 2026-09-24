@@ -38,8 +38,8 @@ type PackageOffer = {
   id: string;
   service_id: string;
   service_name: string;
-  device_key: "prime_lase" | "candela_gentle";
-  device_name: string;
+  device_key: "prime_lase" | "candela_gentle" | null;
+  device_name: string | null;
   sessions_count: number;
   price_minor: number;
   currency: string;
@@ -54,6 +54,118 @@ function categoryLabel(value: Service["operational_category"]) {
 
 function major(minor: number | null) {
   return minor == null ? "" : String(minor / 100);
+}
+
+function PackageOffersEditor({
+  serviceId,
+  deviceKey,
+  offers,
+  isAdmin,
+  enabled = true,
+  disabledMessage,
+}: {
+  serviceId: string;
+  deviceKey: "prime_lase" | "candela_gentle" | null;
+  offers: PackageOffer[];
+  isAdmin: boolean;
+  enabled?: boolean;
+  disabledMessage?: string;
+}) {
+  if (!enabled) {
+    return (
+      <div className="rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+        {disabledMessage || "حدد سعر الخدمة أولًا قبل تفعيل باكيدجاتها."}
+      </div>
+    );
+  }
+
+  const sortedOffers = [...offers].sort((left, right) => left.sessions_count - right.sessions_count);
+  const activeOffers = sortedOffers.filter((offer) => offer.is_active);
+
+  if (!isAdmin) {
+    return activeOffers.length ? (
+      <div className="space-y-2">
+        {activeOffers.map((offer) => (
+          <div key={offer.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
+            <b>{offer.sessions_count} جلسات</b>
+            <span>{formatMoney(offer.price_minor, offer.currency)}</span>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+        لا توجد باكيدجات مفعلة حاليًا.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sortedOffers.map((offer) => (
+        <form
+          key={offer.id}
+          action={updatePackageOffer}
+          className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto]"
+        >
+          <input type="hidden" name="service_id" value={serviceId} />
+          {deviceKey ? <input type="hidden" name="device_key" value={deviceKey} /> : null}
+          <input type="hidden" name="sessions_count" value={offer.sessions_count} />
+          <label className="flex h-10 items-center gap-2 text-xs font-black">
+            <input type="checkbox" name="is_active" value="1" defaultChecked={offer.is_active} />
+            {offer.sessions_count} جلسات
+          </label>
+          <label>
+            <span className="mb-1 block text-[11px] font-bold text-slate-600">سعر الباكيدج</span>
+            <Input
+              name="price"
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              defaultValue={major(offer.price_minor)}
+            />
+          </label>
+          <Button type="submit" size="sm" variant="outline"><Save size={13} /> حفظ</Button>
+          {offer.is_active && (
+            <div className="text-[11px] font-semibold text-slate-500 sm:col-span-3">
+              {offer.savings_minor > 0
+                ? `توفير ${formatMoney(offer.savings_minor, offer.currency)} مقارنة بـ ${offer.sessions_count} جلسات منفصلة.`
+                : "لا يوجد خصم مقارنة بسعر الجلسات المنفصلة."}
+            </div>
+          )}
+        </form>
+      ))}
+
+      <form
+        action={updatePackageOffer}
+        className="grid gap-2 rounded-xl border border-dashed border-slate-300 bg-white p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto_auto]"
+      >
+        <input type="hidden" name="service_id" value={serviceId} />
+        {deviceKey ? <input type="hidden" name="device_key" value={deviceKey} /> : null}
+        <label>
+          <span className="mb-1 block text-[11px] font-bold text-slate-600">عدد الجلسات</span>
+          <Input
+            name="sessions_count"
+            type="number"
+            min="1"
+            step="1"
+            inputMode="numeric"
+            required
+            placeholder="مثلاً 4"
+          />
+        </label>
+        <label>
+          <span className="mb-1 block text-[11px] font-bold text-slate-600">سعر الباكيدج</span>
+          <Input name="price" type="number" min="0" step="0.01" required placeholder="السعر الإجمالي" />
+        </label>
+        <label className="flex h-10 items-center gap-2 text-xs font-black">
+          <input type="checkbox" name="is_active" value="1" defaultChecked />
+          مفعلة
+        </label>
+        <Button type="submit" size="sm"><Save size={13} /> إضافة</Button>
+      </form>
+    </div>
+  );
 }
 
 export default async function ServicesPage() {
@@ -93,6 +205,9 @@ export default async function ServicesPage() {
       <div className="space-y-4">
         {services.map((service) => {
           const prices = byService.get(service.id) || [];
+          const serviceOffers = packageOffers.filter(
+            (offer) => offer.service_id === service.id && offer.device_key === null,
+          );
           return (
             <Card key={service.id}>
               <CardHeader className="flex-row items-start justify-between gap-3">
@@ -133,90 +248,32 @@ export default async function ServicesPage() {
 
                           <div className="mt-4 border-t border-slate-100 pt-4">
                             <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><PackageCheck size={16} /> الباكيدجات</div>
-                            {!configured ? (
-                              <div className="rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-900">حدد سعر الجلسة على الجهاز أولًا قبل تفعيل باكيدجاته.</div>
-                            ) : isAdmin ? (
-                              <div className="space-y-3">
-                                {deviceOffers.map((offer) => (
-                                  <form
-                                    key={offer.id}
-                                    action={updatePackageOffer}
-                                    className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto]"
-                                  >
-                                    <input type="hidden" name="service_id" value={service.id} />
-                                    <input type="hidden" name="device_key" value={deviceKey} />
-                                    <input type="hidden" name="sessions_count" value={offer.sessions_count} />
-                                    <label className="flex h-10 items-center gap-2 text-xs font-black">
-                                      <input type="checkbox" name="is_active" value="1" defaultChecked={offer.is_active} />
-                                      {offer.sessions_count} جلسات
-                                    </label>
-                                    <label>
-                                      <span className="mb-1 block text-[11px] font-bold text-slate-600">سعر الباكيدج</span>
-                                      <Input
-                                        name="price"
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
-                                        required
-                                        defaultValue={major(offer.price_minor)}
-                                      />
-                                    </label>
-                                    <Button type="submit" size="sm" variant="outline"><Save size={13} /> حفظ</Button>
-                                    {offer.is_active && (
-                                      <div className="text-[11px] font-semibold text-slate-500 sm:col-span-3">
-                                        {offer.savings_minor > 0
-                                          ? `توفير ${formatMoney(offer.savings_minor, offer.currency)} مقارنة بـ ${offer.sessions_count} جلسات منفصلة.`
-                                          : "لا يوجد خصم مقارنة بسعر الجلسات المنفصلة."}
-                                      </div>
-                                    )}
-                                  </form>
-                                ))}
-
-                                <form
-                                  action={updatePackageOffer}
-                                  className="grid gap-2 rounded-xl border border-dashed border-slate-300 bg-white p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto_auto]"
-                                >
-                                  <input type="hidden" name="service_id" value={service.id} />
-                                  <input type="hidden" name="device_key" value={deviceKey} />
-                                  <label>
-                                    <span className="mb-1 block text-[11px] font-bold text-slate-600">عدد الجلسات</span>
-                                    <Input
-                                      name="sessions_count"
-                                      type="number"
-                                      min="1"
-                                      step="1"
-                                      inputMode="numeric"
-                                      required
-                                      placeholder="مثلاً 4"
-                                    />
-                                  </label>
-                                  <label>
-                                    <span className="mb-1 block text-[11px] font-bold text-slate-600">سعر الباكيدج</span>
-                                    <Input name="price" type="number" min="0" step="0.01" required placeholder="السعر الإجمالي" />
-                                  </label>
-                                  <label className="flex h-10 items-center gap-2 text-xs font-black">
-                                    <input type="checkbox" name="is_active" value="1" defaultChecked />
-                                    مفعلة
-                                  </label>
-                                  <Button type="submit" size="sm"><Save size={13} /> إضافة</Button>
-                                </form>
-                              </div>
-                            ) : deviceOffers.some((offer) => offer.is_active) ? (
-                              <div className="space-y-2">
-                                {deviceOffers.filter((offer) => offer.is_active).map((offer) => (
-                                  <div key={offer.id} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
-                                    <b>{offer.sessions_count} جلسات</b>
-                                    <span>{formatMoney(offer.price_minor, offer.currency)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">لا توجد باكيدجات مفعلة حاليًا.</div>
-                            )}
+                            <PackageOffersEditor
+                              serviceId={service.id}
+                              deviceKey={deviceKey}
+                              offers={deviceOffers}
+                              isAdmin={isAdmin}
+                              enabled={configured}
+                              disabledMessage="حدد سعر الجلسة على الجهاز أولًا قبل تفعيل باكيدجاته."
+                            />
                           </div>
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {!service.requires_laser_device && (
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900">
+                      <PackageCheck size={16} /> الباكيدجات
+                    </div>
+                    <PackageOffersEditor
+                      serviceId={service.id}
+                      deviceKey={null}
+                      offers={serviceOffers}
+                      isAdmin={isAdmin}
+                    />
                   </div>
                 )}
               </CardContent>

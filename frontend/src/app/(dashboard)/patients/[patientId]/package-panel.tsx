@@ -11,7 +11,7 @@ import { PackageCancellationForm } from "./package-cancellation-form";
 type PackageOffer = {
   id: string;
   service_name: string;
-  device_name: string;
+  device_name: string | null;
   sessions_count: number;
   price_minor: number;
   currency: string;
@@ -173,7 +173,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
                   <option value="" disabled>اختار الباكيدج</option>
                   {offers.map((offer) => (
                     <option key={offer.id} value={offer.id}>
-                      {offer.service_name} · {offer.device_name} · {offer.sessions_count} جلسات · {formatMoney(offer.price_minor, offer.currency)}
+                      {offer.service_name}{offer.device_name ? ` · ${offer.device_name}` : ""} · {offer.sessions_count} جلسات · {formatMoney(offer.price_minor, offer.currency)}
                     </option>
                   ))}
                 </select>
@@ -197,7 +197,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
             </form>
           ) : (
             <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
-              مفيش عروض باكيدجات مفعلة. أضف أسعار 3/6/9 جلسات من صفحة الخدمات أولًا.
+              مفيش عروض باكيدجات مفعلة. أضف باكيدج بعدد الجلسات والسعر المناسب من صفحة الخدمات أولًا.
             </p>
           )}
         </details>

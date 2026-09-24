@@ -185,9 +185,9 @@ export async function updateLaserDevicePrice(formData: FormData) {
 
 export async function updatePackageOffer(formData: FormData) {
   const serviceId = String(formData.get("service_id") || "");
-  const deviceKey = String(formData.get("device_key") || "");
+  const deviceKey = String(formData.get("device_key") || "").trim() || null;
   const sessionsCount = Number(String(formData.get("sessions_count") || "0"));
-  if (!serviceId || !deviceKey) return;
+  if (!serviceId) return;
   if (!Number.isInteger(sessionsCount) || sessionsCount <= 0) {
     throw new Error("اكتب عدد جلسات صحيح أكبر من صفر.");
   }

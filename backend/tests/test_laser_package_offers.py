@@ -93,6 +93,146 @@ def test_upsert_package_offer_accepts_custom_session_count(monkeypatch) -> None:
     assert fake_db.flushed is True
 
 
+def test_upsert_package_offer_supports_non_laser_service(monkeypatch) -> None:
+    workspace_id = uuid4()
+    service_id = uuid4()
+    service = SimpleNamespace(
+        id=service_id,
+        name="Hydrafacial",
+        is_active=True,
+        requires_laser_device=False,
+        price_minor=40_000,
+    )
+    scalars = iter([service, None])
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.added = []
+            self.flushed = False
+
+        def scalar(self, *_args, **_kwargs):
+            return next(scalars)
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    fake_db = FakeDb()
+    monkeypatch.setattr(
+        offers_module,
+        "configured_device_price",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-laser package must not read laser device pricing")
+        ),
+    )
+
+    row = offers_module.upsert_package_offer(
+        fake_db,
+        workspace_id=workspace_id,
+        service_id=service_id,
+        device_key=None,
+        sessions_count=5,
+        price_minor=175_000,
+        currency="EGP",
+        is_active=True,
+    )
+
+    assert row.sessions_count == 5
+    assert row.device_key is None
+    assert row.device_name is None
+    assert row in fake_db.added
+    assert fake_db.flushed is True
+
+
+def test_non_laser_offer_uses_service_price_for_savings() -> None:
+    now = datetime(2026, 9, 24, tzinfo=UTC)
+    workspace_id = uuid4()
+    service_id = uuid4()
+    offer = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        service_id=service_id,
+        device_key=None,
+        device_name=None,
+        sessions_count=5,
+        price_minor=175_000,
+        currency="EGP",
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    service = SimpleNamespace(
+        id=service_id,
+        name="Hydrafacial",
+        price_minor=40_000,
+        requires_laser_device=False,
+    )
+
+    result = offers_module._read_offer(object(), offer=offer, service=service)
+
+    assert result.device_key is None
+    assert result.device_name is None
+    assert result.standalone_session_price_minor == 40_000
+    assert result.savings_minor == 25_000
+
+
+def test_purchase_non_laser_offer_snapshots_service_price_without_device(monkeypatch) -> None:
+    workspace_id = uuid4()
+    patient_id = uuid4()
+    service_id = uuid4()
+    offer = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        service_id=service_id,
+        sessions_count=5,
+        price_minor=175_000,
+        device_key=None,
+        device_name=None,
+    )
+    service = SimpleNamespace(
+        id=service_id,
+        name="Hydrafacial",
+        is_active=True,
+        requires_laser_device=False,
+        price_minor=40_000,
+    )
+    captured = {}
+
+    monkeypatch.setattr(offers_module, "get_active_package_offer", lambda *args, **kwargs: offer)
+    monkeypatch.setattr(
+        offers_module,
+        "configured_device_price",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-laser purchase must not read laser device pricing")
+        ),
+    )
+
+    def fake_create_patient_package(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(offers_module, "create_patient_package", fake_create_patient_package)
+    fake_db = SimpleNamespace(scalar=lambda *args, **kwargs: service)
+
+    offers_module.purchase_package_offer(
+        fake_db,
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        offer_id=offer.id,
+        amount_paid_minor=0,
+        payment_method="unknown",
+        created_by_user_id=None,
+    )
+
+    assert captured["name"] == "Hydrafacial · 5 sessions"
+    assert captured["sessions_purchased"] == 5
+    assert captured["laser_device_key"] is None
+    assert captured["laser_device_name"] is None
+    assert captured["standalone_session_price_minor_at_purchase"] == 40_000
+
+
 def test_device_specific_package_requires_matching_laser_device(monkeypatch) -> None:
     package = _package(device_key="candela_gentle")
     monkeypatch.setattr(packages_module, "_locked_package", lambda *args, **kwargs: package)
@@ -190,7 +330,12 @@ def test_purchase_offer_allows_zero_initial_payment(monkeypatch) -> None:
 
     monkeypatch.setattr(offers_module, "create_patient_package", fake_create_patient_package)
     fake_db = SimpleNamespace(
-        scalar=lambda *args, **kwargs: SimpleNamespace(name="Underarm Laser", is_active=True)
+        scalar=lambda *args, **kwargs: SimpleNamespace(
+            name="Underarm Laser",
+            is_active=True,
+            requires_laser_device=True,
+            price_minor=25_000,
+        )
     )
 
     offers_module.purchase_package_offer(
