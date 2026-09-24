@@ -47,6 +47,134 @@ def resolved_operation_parameters(
     return params
 
 
+def _drop_implicit_identity_refs(
+    params: dict[str, object],
+    *,
+    operation: TurnOperation,
+) -> dict[str, object]:
+    """Keep context-only refs from overwriting a verified active-task identity."""
+    cleaned = dict(params)
+    for field, key in (
+        ("service", "service_id"),
+        ("doctor", "doctor_id"),
+        ("device", "device_key"),
+    ):
+        entity = getattr(operation.entities, field)
+        if entity is not None and entity.ref is not None and not entity.text:
+            cleaned.pop(key, None)
+    return cleaned
+
+
+def _canonical_ref_for_identity(
+    context: SemanticContext,
+    *,
+    kind: str,
+    canonical_id: str,
+) -> str | None:
+    return next(
+        (
+            ref
+            for ref, target in context.reference_map.items()
+            if target.kind == kind and target.canonical_id == canonical_id
+        ),
+        None,
+    )
+
+
+def _identity_compatible_with_service(
+    context: SemanticContext,
+    *,
+    service_id: str,
+    identity_kind: str,
+    identity_id: str,
+) -> bool | None:
+    """Return False only when current server metadata proves incompatibility."""
+    service_ref = _canonical_ref_for_identity(
+        context,
+        kind="service",
+        canonical_id=service_id,
+    )
+    identity_ref = _canonical_ref_for_identity(
+        context,
+        kind=identity_kind,
+        canonical_id=identity_id,
+    )
+    if service_ref is None or identity_ref is None:
+        return None
+
+    service_target = context.reference_map.get(service_ref)
+    if (
+        identity_kind == "device"
+        and service_target is not None
+        and service_target.metadata.get("requires_laser_device") is False
+    ):
+        return False
+
+    raw_focus = context.server_metadata.get("focus_details")
+    focus = raw_focus if isinstance(raw_focus, dict) else {}
+    relationship_key = "doctor_refs" if identity_kind == "doctor" else "device_refs"
+
+    service_detail = focus.get(service_ref)
+    if isinstance(service_detail, dict) and relationship_key in service_detail:
+        refs = service_detail.get(relationship_key)
+        if isinstance(refs, list):
+            return identity_ref in refs
+
+    identity_detail = focus.get(identity_ref)
+    if isinstance(identity_detail, dict) and "service_refs" in identity_detail:
+        refs = identity_detail.get("service_refs")
+        if isinstance(refs, list):
+            return service_ref in refs
+    return None
+
+
+def _invalidate_incompatible_booking_identities(
+    params: dict[str, object],
+    *,
+    active_task: BookingTaskState,
+    context: SemanticContext,
+) -> dict[str, object]:
+    """Clear only server-proven invalid doctor/device dependencies after service replacement."""
+    new_service = params.get("service_id")
+    if not isinstance(new_service, str) or new_service == active_task.constraints.service_id:
+        return params
+
+    cleaned = dict(params)
+    for key, kind, existing in (
+        ("doctor_id", "doctor", active_task.constraints.doctor_id),
+        ("device_key", "device", active_task.constraints.device_key),
+    ):
+        candidate = cleaned.get(key) if key in cleaned else existing
+        if not isinstance(candidate, str):
+            continue
+        compatible = _identity_compatible_with_service(
+            context,
+            service_id=new_service,
+            identity_kind=kind,
+            identity_id=candidate,
+        )
+        if compatible is False:
+            cleaned[key] = None
+    return cleaned
+
+
+def _booking_followup_parameters(
+    operation: TurnOperation,
+    *,
+    active_task: BookingTaskState,
+    context: SemanticContext,
+) -> dict[str, object]:
+    params = _drop_implicit_identity_refs(
+        resolved_operation_parameters(operation, context=context),
+        operation=operation,
+    )
+    return _invalidate_incompatible_booking_identities(
+        params,
+        active_task=active_task,
+        context=context,
+    )
+
+
 def adapt_matching_active_task_step(
     step: PlanStep,
     *,
@@ -54,14 +182,35 @@ def adapt_matching_active_task_step(
     active_task: ActiveTaskState | None,
     context: SemanticContext,
 ) -> PlanStep:
-    """Treat a repeated structured reschedule intent as an update to its verified active target.
+    """Merge structured continuations into verified active workflow state."""
+    if isinstance(active_task, BookingTaskState):
+        if operation.type == "continue_active":
+            params = _booking_followup_parameters(
+                operation,
+                active_task=active_task,
+                context=context,
+            )
+            return step.model_copy(update={"facts": params})
+        if operation.type == "book":
+            # A persisted booking task is the single authoritative in-progress booking.
+            # The interpreter's continues_previous flag describes semantic read continuity
+            # and is not reliable evidence that an active booking correction is a new task.
+            # A genuinely separate booking starts only after the old task is completed or
+            # explicitly cancelled, so any book operation while this state exists is a patch.
+            params = _booking_followup_parameters(
+                operation,
+                active_task=active_task,
+                context=context,
+            )
+            return PlanStep(
+                operation_index=step.operation_index,
+                operation_type=operation.type,
+                disposition="state_update",
+                state_action="update_active",
+                response_goal="clarification",
+                facts=params,
+            )
 
-    The semantic model may emit ``reschedule`` again on a natural follow-up instead of
-    ``continue_active``. Once Python has already verified and persisted one reschedule target, a
-    follow-up that does not identify a different appointment must mutate only the replacement
-    constraints. This prevents a replacement date from being reused to search for the original
-    appointment. An explicit different appointment remains a fresh workflow request.
-    """
     if not isinstance(active_task, RescheduleTaskState) or operation.type != "reschedule":
         return step
     if step.clarification_field == "appointment":
