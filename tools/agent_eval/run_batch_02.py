@@ -16,7 +16,9 @@ from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import Appointment
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.conversation import Conversation
+from app.models.doctor_service import DoctorService
 from app.models.message import Message
 from app.models.patient import Patient
 from app.models.patient_package import PatientPackage
@@ -62,6 +64,117 @@ ScenarioFn = Callable[[Session, Workspace], ScenarioResult]
 BATCH_NUMBER = 2
 SCENARIO_VERSION = "batch2-v1"
 NATIVE_HISTORY_LIMIT = 6
+BATCH2_FIXTURE_VERSION = "batch2-demo-fixtures-v1"
+
+
+def _ensure_batch2_catalog_fixtures(
+    db: Session,
+    workspace: Workspace,
+) -> dict[str, str]:
+    """Seed only missing Batch 2 catalog rows inside the scenario rollback."""
+
+    baseline = build_clinic_catalog(db, workspace)
+    doctor_ids = [
+        UUID(str(row["id"]))
+        for row in baseline.get("doctors", [])
+        if isinstance(row, dict) and row.get("id")
+    ][:3]
+    if not doctor_ids:
+        raise RuntimeError("EVAL_INFRA_ERROR: no bookable doctors for Batch 2 fixtures")
+
+    specs = (
+        {
+            "slug": "hydrafacial",
+            "name": "Hydrafacial",
+            "category": "Facial",
+            "operational_category": "dermatology",
+            "duration_minutes": 60,
+            "price_minor": 180000,
+            "requires_laser_device": False,
+        },
+        {
+            "slug": "laser-hair-removal-underarm",
+            "name": "ليزر إزالة الشعر - إبط",
+            "category": "Laser Hair Removal",
+            "operational_category": "laser",
+            "duration_minutes": 15,
+            "price_minor": 55000,
+            "requires_laser_device": True,
+        },
+    )
+    service_ids: dict[str, str] = {}
+    for spec in specs:
+        service = db.scalar(
+            select(Service).where(
+                Service.workspace_id == workspace.id,
+                Service.slug == spec["slug"],
+            )
+        )
+        if service is None:
+            service = Service(
+                workspace_id=workspace.id,
+                name=str(spec["name"]),
+                slug=str(spec["slug"]),
+                category=str(spec["category"]),
+                operational_category=str(spec["operational_category"]),
+                duration_minutes=int(spec["duration_minutes"]),
+                price_minor=int(spec["price_minor"]),
+                currency="EGP",
+                requires_medical_review=False,
+                requires_laser_device=bool(spec["requires_laser_device"]),
+                is_active=True,
+            )
+            db.add(service)
+            db.flush()
+        service_ids[str(spec["slug"])] = str(service.id)
+
+        for doctor_id in doctor_ids:
+            exists = db.scalar(
+                select(DoctorService.id).where(
+                    DoctorService.workspace_id == workspace.id,
+                    DoctorService.doctor_id == doctor_id,
+                    DoctorService.service_id == service.id,
+                    DoctorService.is_active.is_(True),
+                )
+            )
+            if exists is None:
+                db.add(
+                    DoctorService(
+                        workspace_id=workspace.id,
+                        doctor_id=doctor_id,
+                        service_id=service.id,
+                        is_active=True,
+                    )
+                )
+
+        if spec["slug"] == "laser-hair-removal-underarm":
+            for device_key, device_name, price_minor in (
+                ("prime_lase", "Prime Lase", 55000),
+                ("candela_gentle", "Candela Gentle", 70000),
+            ):
+                price = db.scalar(
+                    select(ServiceDevicePrice).where(
+                        ServiceDevicePrice.workspace_id == workspace.id,
+                        ServiceDevicePrice.service_id == service.id,
+                        ServiceDevicePrice.device_key == device_key,
+                        ServiceDevicePrice.is_active.is_(True),
+                    )
+                )
+                if price is None:
+                    db.add(
+                        ServiceDevicePrice(
+                            workspace_id=workspace.id,
+                            service_id=service.id,
+                            device_key=device_key,
+                            device_name=device_name,
+                            price_minor=price_minor,
+                            duration_minutes=15,
+                            currency="EGP",
+                            is_active=True,
+                        )
+                    )
+    db.flush()
+    return service_ids
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,10 +376,19 @@ def laser_context(
 ):
     catalog = build_clinic_catalog(db, workspace)
     branch_id = active_branch_id(catalog)
+    service_model = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace.id,
+            Service.slug == service_slug,
+            Service.is_active.is_(True),
+        )
+    )
+    if service_model is None:
+        raise RuntimeError(f"EVAL_INFRA_ERROR: missing service {service_slug}")
     service = next(
         row
         for row in catalog.get("services", [])
-        if isinstance(row, dict) and row.get("slug") == service_slug
+        if isinstance(row, dict) and str(row.get("id")) == str(service_model.id)
     )
     doctors = [
         row
@@ -1937,6 +2059,7 @@ def run_case(engine, workspace_slug: str, case_fn: ScenarioFn) -> ScenarioResult
         if workspace is None:
             raise RuntimeError("Workspace not found")
         assert_demo_only(workspace)
+        _ensure_batch2_catalog_fixtures(db, workspace)
         return case_fn(db, workspace)
     except Exception as exc:  # noqa: BLE001
         return ScenarioResult(
@@ -2203,6 +2326,7 @@ def main() -> int:
             "workspace_slug": workspace.slug,
             "history_loader_limit": settings.agent_history_messages,
             "native_interpreter_history_limit": NATIVE_HISTORY_LIMIT,
+            "fixture_version": BATCH2_FIXTURE_VERSION,
         }
 
     results: list[ScenarioResult] = []

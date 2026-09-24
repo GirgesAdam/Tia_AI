@@ -417,7 +417,20 @@ def booking_context(
     adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
     today = datetime.now(UTC).date()
     if service_slug:
-        services = [row for row in services if row.get("slug") == service_slug]
+        service_row = db.scalar(
+            select(Service).where(
+                Service.workspace_id == workspace.id,
+                Service.slug == service_slug,
+                Service.is_active.is_(True),
+            )
+        )
+        if service_row is None:
+            raise RuntimeError(f"Required demo service missing: {service_slug}")
+        services = [
+            row
+            for row in services
+            if str(row.get("id")) == str(service_row.id)
+        ]
 
     for service in services:
         service_id = str(service["id"])
