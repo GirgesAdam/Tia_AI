@@ -165,9 +165,15 @@ SEMANTIC PRINCIPLES
   extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
   the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can
   calculate from the verified unit price. If both pack price and overage unit price are requested,
-  include both offers and overage_price. Set requested_pulse_details to exactly what was requested.
-  Preserve a clearly referenced laser device in entities.device. Never estimate how many Pulses a
-  future treatment will consume unless verified clinic data explicitly supplies that fact.
+  include both offers and overage_price. Use financial_ledger when the customer asks about money
+  already paid, money still due, payment/transaction status, checkout, settlement, or whether an
+  owned Pulse pack is financially paid/closed. financial_ledger is only a semantic ownership marker:
+  it does not authorize a financial read. If the same customer turn also asks an Agent-owned Pulse
+  fact, include both requested details in the same pulse_info operation so deterministic Python can
+  preserve the safe Pulse read and hand the financial concern to Reception. Set requested_pulse_details
+  to exactly what was requested. Preserve a clearly referenced laser device in entities.device.
+  Never estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
+  supplies that fact.
 - buy_pulse_pack means the customer is asking Tia to purchase a prepaid Pulse pack now. A direct
   imperative request to obtain/add/provision a Pulse pack now is a purchase action even when phrased
   colloquially and without the literal word "buy"; use execution_intent=execute. Questions about
@@ -176,9 +182,11 @@ SEMANTIC PRINCIPLES
   Pulse-pack purchase is separate from booking. A request to purchase a Pulse pack and book a session
   requires separate buy_pulse_pack and book operations. Never claim or infer that money was paid
   merely because the customer authorized the purchase; payment truth is owned by backend/payment
-  records. Questions about amounts already paid, balance due, payment transactions, refunds, or
-  checkout/settlement for an owned Pulse pack are receptionist-owned; use human_support unless the
-  customer is disputing a payment, which remains a payment_dispute safety signal.
+  records. Questions about amounts already paid, balance due, payment transactions, payment status,
+  checkout, or settlement for an owned Pulse pack are receptionist-owned; represent them as
+  pulse_info with requested_pulse_details=[financial_ledger] (plus any separately requested safe
+  Pulse details) so Python can deterministically enforce human ownership. Do not use financial_ledger
+  for a payment dispute: that remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the

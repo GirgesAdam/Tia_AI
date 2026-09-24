@@ -14,6 +14,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import StructuredOutputError
 from app.agents.v2 import turn_interpreter as interpreter
+from app.agents.v2.responder import _system_prompt
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.agents.v2.turn_interpreter import (
@@ -113,6 +114,23 @@ def test_cached_prefix_contains_current_pulse_ownership_boundary() -> None:
     assert "Pulse pack is not a session" in stable
     assert "must not set package_usage" in stable
     assert "money was paid" in stable
+    assert "financial_ledger" in stable
+    assert "amounts already paid" in stable
+    assert "balance due" in stable
+    assert "payment transactions" in stable
+    assert "payment status" in stable
+
+
+def test_responder_contract_separates_offers_from_owned_pulse_state() -> None:
+    text = _system_prompt(
+        clinic_name="Tia Test",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+    )
+    assert "Pulse-pack offer facts describe clinic offers available for purchase" in text
+    assert "they are never evidence" in text
+    assert "the customer owns that pack" in text
+    assert "pulse_balance or pulse_packs" in text
 
 
 def test_models_without_explicit_cache_keep_plain_messages() -> None:

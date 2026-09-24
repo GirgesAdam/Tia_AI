@@ -41,7 +41,7 @@ SafetySignal = Literal[
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
-PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price"]
+PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "financial_ledger"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
@@ -229,7 +229,9 @@ class TurnOperation(StrictContractModel):
         default_factory=list,
         description=(
             "For pulse_info only, include exactly the Pulse facts requested: balance, owned_packs, "
-            "offers, and/or overage_price. Do not add unrelated Pulse data."
+            "offers, overage_price, and/or financial_ledger. financial_ledger is a semantic ownership "
+            "marker for receptionist-owned money/payment facts about an owned Pulse pack; it never "
+            "authorizes a financial read. Do not add unrelated Pulse data."
         ),
     )
     # Required in provider schemas. The default preserves compatibility for direct
