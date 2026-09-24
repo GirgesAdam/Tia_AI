@@ -89,6 +89,8 @@ class V2RuntimeStepTrace:
     read_kinds: tuple[str, ...]
     outcome: TurnOutcome | None = None
     pending_write: bool = False
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,37 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
     if step.write_intent is None and step.state_action != "start_reschedule":
         return step
     return advance_step_after_verification(step, reads.verification)
+
+
+def _verified_no_availability(reads: ReadExecutionBundle | None) -> bool:
+    """True only for a successful availability read that canonically found zero options."""
+    if reads is None:
+        return False
+    availability_results = [result for result in reads.results if result.kind == "availability"]
+    if not availability_results:
+        return False
+    for result in availability_results:
+        if not result.ok:
+            return False
+        count = result.payload.get("matching_slot_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return False
+        if count > 0:
+            return False
+    return True
+
+
+def _continuation_condition_satisfied(
+    operation: TurnOperation,
+    *,
+    previous_reads: ReadExecutionBundle | None,
+) -> bool:
+    condition = getattr(operation, "continuation_condition", "always")
+    if condition == "always":
+        return True
+    if condition == "if_previous_no_availability":
+        return _verified_no_availability(previous_reads)
+    raise RuntimeError(f"Unsupported continuation condition: {condition}")
 
 
 def _terminal_handoff_plan(plan: TurnPlan) -> bool:
@@ -313,6 +346,7 @@ def orchestrate_v2_turn(
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
+    operation_reads: dict[int, ReadExecutionBundle] = {}
     grouped_positions: dict[str, list[int]] = {}
     for position, grouped_step in enumerate(plan.steps):
         group = compound_write_group(grouped_step)
@@ -331,6 +365,26 @@ def orchestrate_v2_turn(
             timezone_name=timezone_name,
         )
         operation = _operation_for_step(understanding, planned_step)
+        if not _continuation_condition_satisfied(
+            operation,
+            previous_reads=operation_reads.get(planned_step.operation_index - 1),
+        ):
+            traces.append(
+                V2RuntimeStepTrace(
+                    operation_index=planned_step.operation_index,
+                    operation_type=planned_step.operation_type,
+                    disposition_before=planned_step.disposition,
+                    disposition_after="skipped",
+                    read_kinds=(),
+                    skipped=True,
+                    skip_reason=(
+                        "continuation_condition_false:"
+                        f"{getattr(operation, 'continuation_condition', 'always')}"
+                    ),
+                )
+            )
+            continue
+
         effective_step = adapt_matching_active_task_step(
             planned_step,
             operation=operation,
@@ -370,6 +424,7 @@ def orchestrate_v2_turn(
             effective_step,
             reads,
         )
+        operation_reads[effective_step.operation_index] = reads
         advanced = compound_advanced if compound_handled else _advance_after_reads(effective_step, reads)
         transition = apply_step_state(
             current_task,

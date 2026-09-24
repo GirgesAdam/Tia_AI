@@ -473,3 +473,274 @@ def test_orchestrator_source_keeps_write_and_transaction_boundaries() -> None:
     assert "execute_reschedule" not in text
     assert "re.compile(" not in text
     assert "import re" not in text
+
+
+def _availability_bundle(count: int, *, ok: bool = True) -> ReadExecutionBundle:
+    if not ok:
+        return ReadExecutionBundle(
+            results=[
+                ReadResult(
+                    kind="availability",
+                    ok=False,
+                    error_code="provider_error",
+                )
+            ]
+        )
+    slots = [
+        {
+            "start_local": f"2026-09-17T{18 + index:02d}:00:00+03:00",
+        }
+        for index in range(count)
+    ]
+    return ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=True,
+                payload={
+                    "slots": slots,
+                    "matching_slot_count": count,
+                    "checked_dates": ["2026-09-17"],
+                },
+            )
+        ]
+    )
+
+
+def _conditional_availability_understanding(
+    *,
+    fallback_condition: str = "if_previous_no_availability",
+    include_independent: bool = False,
+) -> TiaTurnUnderstanding:
+    operations = [
+        TurnOperation(
+            type="availability",
+            entities=TurnEntities(),
+            continuation_condition="always",
+        ),
+        TurnOperation(
+            type="availability",
+            entities=TurnEntities(),
+            continuation_condition=fallback_condition,
+        ),
+    ]
+    if include_independent:
+        operations.append(TurnOperation(type="clinic_info", entities=TurnEntities()))
+    return TiaTurnUnderstanding(operations=operations)
+
+
+def _conditional_availability_plan(*, include_independent: bool = False) -> TurnPlan:
+    steps = [
+        PlanStep(
+            operation_index=0,
+            operation_type="availability",
+            disposition="read",
+            reads=[ReadRequest(kind="availability")],
+            response_goal="present_availability",
+        ),
+        PlanStep(
+            operation_index=1,
+            operation_type="availability",
+            disposition="read",
+            reads=[ReadRequest(kind="availability")],
+            response_goal="present_availability",
+        ),
+    ]
+    if include_independent:
+        steps.append(
+            PlanStep(
+                operation_index=2,
+                operation_type="clinic_info",
+                disposition="read",
+                reads=[ReadRequest(kind="clinic_info")],
+                response_goal="answer_clinic_info",
+            )
+        )
+    return TurnPlan(steps=steps)
+
+
+def _run_conditional_availability(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    first: ReadExecutionBundle,
+    fallback: ReadExecutionBundle | None,
+    fallback_condition: str = "if_previous_no_availability",
+    include_independent: bool = False,
+):
+    understanding = _conditional_availability_understanding(
+        fallback_condition=fallback_condition,
+        include_independent=include_independent,
+    )
+    plan = _conditional_availability_plan(include_independent=include_independent)
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=None,
+        understanding=understanding,
+        plan=plan,
+    )
+
+    read_calls: list[int] = []
+    outcome_calls: list[int] = []
+
+    def execute_reads(step, _context):
+        read_calls.append(step.operation_index)
+        if step.operation_index == 0:
+            return first
+        if step.operation_index == 1:
+            assert fallback is not None
+            return fallback
+        return ReadExecutionBundle(
+            results=[
+                ReadResult(
+                    kind="clinic_info",
+                    ok=True,
+                    payload={"clinic": {"name": "Tia Test Clinic"}},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runtime, "execute_step_reads", execute_reads)
+    monkeypatch.setattr(
+        runtime,
+        "apply_step_state",
+        lambda *args, **kwargs: StateTransition(
+            active_task=None,
+            changed=False,
+            reason="read_only",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "finalize_step_after_state_transition",
+        lambda planned_step, transition: planned_step,
+    )
+
+    def build_outcome(step, *, reads=None, **kwargs):
+        outcome_calls.append(step.operation_index)
+        if step.operation_type == "availability":
+            result = next(result for result in reads.results if result.kind == "availability")
+            count = result.payload.get("matching_slot_count") if result.ok else None
+            return TurnOutcome(
+                status="answered",
+                response_goal="present_availability",
+                facts={
+                    "availability": {
+                        "available_option_count": count,
+                        "read_ok": result.ok,
+                    }
+                },
+            )
+        return TurnOutcome(
+            status="answered",
+            response_goal="answer_clinic_info",
+            facts={"clinic_name": "Tia Test Clinic"},
+        )
+
+    monkeypatch.setattr(runtime, "build_step_outcome", build_outcome)
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("grounded reply", "test-model"),
+    )
+
+    result = runtime.orchestrate_v2_turn(**_runtime_args())
+    return result, read_calls, outcome_calls
+
+
+def test_conditional_fallback_skipped_when_primary_availability_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(1),
+        fallback=_availability_bundle(1),
+    )
+
+    assert read_calls == [0]
+    assert outcome_calls == [0]
+    assert len(result.outcomes) == 1
+    assert result.traces[1].operation_index == 1
+    assert result.traces[1].skipped is True
+    assert result.traces[1].disposition_after == "skipped"
+    assert result.traces[1].skip_reason == (
+        "continuation_condition_false:if_previous_no_availability"
+    )
+
+
+def test_conditional_fallback_executes_after_verified_no_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(0),
+        fallback=_availability_bundle(1),
+    )
+
+    assert read_calls == [0, 1]
+    assert outcome_calls == [0, 1]
+    assert len(result.outcomes) == 2
+    assert all(trace.skipped is False for trace in result.traces)
+
+
+def test_conditional_fallback_executes_when_both_windows_have_no_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(0),
+        fallback=_availability_bundle(0),
+    )
+
+    assert read_calls == [0, 1]
+    assert outcome_calls == [0, 1]
+    assert len(result.outcomes) == 2
+
+
+def test_unconditional_multi_availability_reads_both_execute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(1),
+        fallback=_availability_bundle(1),
+        fallback_condition="always",
+    )
+
+    assert read_calls == [0, 1]
+    assert outcome_calls == [0, 1]
+    assert len(result.outcomes) == 2
+    assert not any(trace.skipped for trace in result.traces)
+
+
+def test_technical_availability_failure_does_not_activate_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(0, ok=False),
+        fallback=_availability_bundle(1),
+    )
+
+    assert read_calls == [0]
+    assert outcome_calls == [0]
+    assert len(result.outcomes) == 1
+    assert result.traces[1].skipped is True
+
+
+def test_skipped_conditional_operation_does_not_drop_independent_followup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, outcome_calls = _run_conditional_availability(
+        monkeypatch,
+        first=_availability_bundle(1),
+        fallback=_availability_bundle(1),
+        include_independent=True,
+    )
+
+    assert read_calls == [0, 2]
+    assert outcome_calls == [0, 2]
+    assert len(result.outcomes) == 2
+    assert result.traces[1].operation_index == 1
+    assert result.traces[1].skipped is True
+    assert result.traces[2].operation_index == 2
+    assert result.traces[2].skipped is False
