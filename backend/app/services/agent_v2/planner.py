@@ -684,7 +684,10 @@ def _plan_operation(
         if "owned_packs" in details:
             reads.append(ReadRequest(kind="pulse_packs", parameters=params))
         if "offers" in details:
-            reads.append(ReadRequest(kind="pulse_pack_offers", parameters=params))
+            offer_params = dict(params)
+            if "overage_price" in details:
+                offer_params.pop("pulse_count", None)
+            reads.append(ReadRequest(kind="pulse_pack_offers", parameters=offer_params))
         if "overage_price" in details:
             reads.append(ReadRequest(kind="pulse_billing_settings", parameters=params))
         return PlanStep(
