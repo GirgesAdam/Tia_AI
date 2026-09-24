@@ -15,8 +15,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
-PACKAGE_SESSION_COUNTS = (3, 6, 9)
-
 
 class ServicePackageOffer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Admin-configured sellable laser package for one service and device.
@@ -40,7 +38,7 @@ class ServicePackageOffer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="service_package_offer_device_valid",
         ),
         CheckConstraint(
-            "sessions_count IN (3, 6, 9)",
+            "sessions_count > 0",
             name="service_package_offer_sessions_valid",
         ),
         CheckConstraint("price_minor >= 0", name="service_package_offer_price_non_negative"),

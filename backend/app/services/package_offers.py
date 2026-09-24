@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.clinic_inventory import LASER_DEVICE_NAMES
 from app.models.service import Service
-from app.models.service_package_offer import PACKAGE_SESSION_COUNTS, ServicePackageOffer
+from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.package_offers import ServicePackageOfferRead
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.patient_packages import create_patient_package
@@ -105,8 +105,8 @@ def upsert_package_offer(
     currency: str,
     is_active: bool,
 ) -> ServicePackageOffer:
-    if sessions_count not in PACKAGE_SESSION_COUNTS:
-        raise PackageOfferError("Laser package sessions must be 3, 6, or 9.")
+    if sessions_count <= 0:
+        raise PackageOfferError("Laser package sessions must be a positive integer.")
     if price_minor < 0:
         raise PackageOfferError("Package price cannot be negative.")
     if device_key not in LASER_DEVICE_NAMES:

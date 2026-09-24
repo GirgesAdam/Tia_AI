@@ -4,9 +4,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
-PackageSessionCount = Literal[3, 6, 9]
+PackageSessionCount = PositiveInt
 LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
 
 

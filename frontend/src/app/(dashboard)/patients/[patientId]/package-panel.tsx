@@ -12,7 +12,7 @@ type PackageOffer = {
   id: string;
   service_name: string;
   device_name: string;
-  sessions_count: 3 | 6 | 9;
+  sessions_count: number;
   price_minor: number;
   currency: string;
   savings_minor: number;
