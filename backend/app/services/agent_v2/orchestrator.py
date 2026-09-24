@@ -126,6 +126,13 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
     return advance_step_after_verification(step, reads.verification)
 
 
+def _terminal_handoff_plan(plan: TurnPlan) -> bool:
+    """Safety/standalone handoffs remain terminal; mixed safe reads may run first."""
+    return plan.handoff_category is not None and all(
+        step.disposition == "handoff" for step in plan.steps
+    )
+
+
 def _persist_final_task(
     *,
     db: Session,
@@ -250,7 +257,7 @@ def orchestrate_v2_turn(
         operation_visit_groups=semantic_visit_groups,
     )
 
-    if plan.handoff_category is not None:
+    if _terminal_handoff_plan(plan):
         outcome = build_handoff_outcome(plan)
         if persisted is not None:
             cancel_active_task(

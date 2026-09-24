@@ -9,7 +9,8 @@ import pytest
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
-from app.services.agent_v2.planner import PlanStep, TurnPlan, WriteIntent
+from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.agent_v2.state_executor import StateTransition
 from app.services.agent_v2.state_persistence import PersistedActiveTask, V2StateConflictError
@@ -352,6 +353,113 @@ def test_stale_persistence_conflict_propagates_without_retry(
         runtime.orchestrate_v2_turn(**_runtime_args())
 
     assert attempts == 1
+
+
+def test_mixed_safe_read_and_ordinary_handoff_both_reach_responder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pulse_info",
+                entities=TurnEntities(),
+                requested_pulse_details=["balance"],
+                execution_intent="informational",
+            ),
+            TurnOperation(type="human_support", entities=TurnEntities()),
+        ]
+    )
+    read_step = PlanStep(
+        operation_index=0,
+        operation_type="pulse_info",
+        disposition="read",
+        reads=[ReadRequest(kind="pulse_balance")],
+        response_goal="pulse_information",
+    )
+    handoff_step = PlanStep(
+        operation_index=1,
+        operation_type="human_support",
+        disposition="handoff",
+        response_goal="handoff",
+        facts={"category": "customer_request", "priority": "normal"},
+    )
+    plan = TurnPlan(
+        steps=[read_step, handoff_step],
+        handoff_category="customer_request",
+        handoff_priority="normal",
+    )
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=None,
+        understanding=understanding,
+        plan=plan,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "preflight_compound_visit_plan",
+        lambda plan, **kwargs: plan,
+    )
+
+    read_calls: list[str] = []
+
+    def execute_reads(step, _context):
+        read_calls.extend(item.kind for item in step.reads)
+        return ReadExecutionBundle(
+            results=[
+                ReadResult(
+                    kind="pulse_balance",
+                    ok=True,
+                    payload={"balances": [{"device_key": "candela_gentle", "pulses_remaining": 500}]},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runtime, "execute_step_reads", execute_reads)
+    monkeypatch.setattr(
+        runtime,
+        "apply_step_state",
+        lambda active_task, **kwargs: StateTransition(
+            active_task=active_task,
+            changed=False,
+            reason="read_or_handoff",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "finalize_step_after_state_transition",
+        lambda planned_step, transition: planned_step,
+    )
+
+    read_outcome = TurnOutcome(
+        status="answered",
+        response_goal="pulse_information",
+        facts={"pulse_balances": [{"device_key": "candela_gentle", "pulses_remaining": 500}]},
+    )
+    handoff_outcome = TurnOutcome(
+        status="handoff",
+        response_goal="handoff",
+        facts={"category": "customer_request", "priority": "normal"},
+    )
+
+    def build_outcome(step, **kwargs):
+        return handoff_outcome if step.disposition == "handoff" else read_outcome
+
+    monkeypatch.setattr(runtime, "build_step_outcome", build_outcome)
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: (
+            "متبقي 500 Pulse، وتفاصيل الحساب يأكدها الاستقبال.",
+            "test-model",
+        ),
+    )
+
+    result = runtime.orchestrate_v2_turn(**_runtime_args())
+
+    assert read_calls == ["pulse_balance"]
+    assert result.outcomes == (read_outcome, handoff_outcome)
+    assert result.reply == "متبقي 500 Pulse، وتفاصيل الحساب يأكدها الاستقبال."
+    assert sum(outcome.status == "handoff" for outcome in result.outcomes) == 1
 
 
 def test_orchestrator_source_keeps_write_and_transaction_boundaries() -> None:

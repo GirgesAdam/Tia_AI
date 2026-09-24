@@ -322,6 +322,148 @@ def test_payment_question_and_payment_dispute_are_separate_semantics() -> None:
     assert dispute.handoff_category == "payment"
 
 
+def _pulse_operation(*details: str) -> TurnOperation:
+    return TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(),
+        requested_pulse_details=list(details),
+        execution_intent="informational",
+    )
+
+
+def test_safe_pulse_read_is_preserved_with_ordinary_human_support() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _pulse_operation("balance"),
+            _operation("human_support"),
+        ],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.handoff_category == "customer_request"
+    assert [step.operation_type for step in plan.steps] == ["pulse_info", "human_support"]
+    assert [read.kind for read in plan.steps[0].reads] == ["pulse_balance"]
+    assert plan.steps[0].write_intent is None
+    assert plan.steps[1].disposition == "handoff"
+
+
+def test_safe_pulse_offer_read_is_preserved_with_ordinary_human_support() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _pulse_operation("offers"),
+            _operation("human_support"),
+        ],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert [step.operation_type for step in plan.steps] == ["pulse_info", "human_support"]
+    assert [read.kind for read in plan.steps[0].reads] == ["pulse_pack_offers"]
+    assert plan.steps[1].disposition == "handoff"
+
+
+def test_multiple_safe_reads_keep_order_before_one_handoff() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation(
+                "service_info",
+                service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            ),
+            _pulse_operation("balance"),
+            _operation("human_support"),
+        ],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert [step.operation_type for step in plan.steps] == [
+        "service_info",
+        "pulse_info",
+        "human_support",
+    ]
+    assert sum(step.disposition == "handoff" for step in plan.steps) == 1
+
+
+def test_handoff_first_is_reordered_after_safe_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation("human_support"),
+            _pulse_operation("balance"),
+        ],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert [step.operation_type for step in plan.steps] == ["pulse_info", "human_support"]
+    assert [read.kind for read in plan.steps[0].reads] == ["pulse_balance"]
+    assert plan.steps[1].disposition == "handoff"
+
+
+def test_payment_dispute_remains_terminal_over_safe_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_pulse_operation("balance")],
+        safety_signals=["payment_dispute"],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.steps == []
+    assert plan.handoff_category == "payment"
+
+
+def test_urgent_medical_remains_terminal_over_safe_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_pulse_operation("balance")],
+        safety_signals=["urgent_medical"],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.steps == []
+    assert plan.handoff_category == "medical"
+    assert plan.handoff_priority == "urgent"
+
+
+def test_privacy_issue_remains_terminal_over_safe_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_pulse_operation("balance")],
+        safety_signals=["privacy_issue"],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.steps == []
+    assert plan.handoff_category == "customer_request"
+    assert plan.handoff_priority == "high"
+
+
+def test_write_plus_human_support_fails_closed_without_write() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_pulse_pack",
+                entities=TurnEntities(pulse_count=1000),
+                execution_intent="execute",
+            ),
+            _operation("human_support"),
+        ],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.handoff_category == "customer_request"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].operation_type == "human_support"
+    assert plan.steps[0].disposition == "handoff"
+    assert plan.steps[0].write_intent is None
+
+
 def test_marketing_false_is_an_explicit_write_not_missing_data() -> None:
     turn = TiaTurnUnderstanding(
         operations=[_operation("marketing_update", marketing_consent=False)],

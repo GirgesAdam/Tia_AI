@@ -775,6 +775,15 @@ def _plan_operation(
     return _clarify(index=index, operation=operation, field="intent")
 
 
+def _safe_read_companion(step: PlanStep) -> bool:
+    """Whether a step may safely coexist with an ordinary customer-request handoff."""
+    return (
+        step.disposition == "read"
+        and step.write_intent is None
+        and step.state_action == "none"
+    )
+
+
 def plan_turn(turn: TiaTurnUnderstanding, context: PlannerContext) -> TurnPlan:
     safety = _safety_handoff(turn)
     if safety is not None:
@@ -788,20 +797,29 @@ def plan_turn(turn: TiaTurnUnderstanding, context: PlannerContext) -> TurnPlan:
     }
     compound_booking = len(executable_book_indexes) >= 2
     for index, operation in enumerate(turn.operations):
-        step = _plan_operation(
-            index,
-            operation,
-            context,
-            compound_book=compound_booking and index in executable_book_indexes,
-        )
-        if step.disposition == "handoff":
-            return TurnPlan(
-                steps=[step],
-                handoff_category=str(step.facts.get("category") or "customer_request"),
-                handoff_priority=str(step.facts.get("priority") or "normal"),
+        steps.append(
+            _plan_operation(
+                index,
+                operation,
+                context,
+                compound_book=compound_booking and index in executable_book_indexes,
             )
-        steps.append(step)
-    return TurnPlan(steps=steps)
+        )
+
+    handoff_steps = [step for step in steps if step.disposition == "handoff"]
+    if not handoff_steps:
+        return TurnPlan(steps=steps)
+
+    handoff = handoff_steps[0]
+    companions = [step for step in steps if step.disposition != "handoff"]
+    if companions and not all(_safe_read_companion(step) for step in companions):
+        companions = []
+
+    return TurnPlan(
+        steps=[*companions, handoff],
+        handoff_category=str(handoff.facts.get("category") or "customer_request"),
+        handoff_priority=str(handoff.facts.get("priority") or "normal"),
+    )
 
 
 def advance_step_after_verification(
