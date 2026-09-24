@@ -90,6 +90,31 @@ def test_cache_breakpoint_preserves_prompt_text_and_excludes_dynamic_context() -
     assert wrapped[1:] == original[1:]
 
 
+def test_cached_prefix_contains_current_pulse_ownership_boundary() -> None:
+    messages = interpreter._build_interpreter_messages(
+        history=[HumanMessage(content="عندي Pulses وعايزة أحجز ليزر الإبط على كانديلا")],
+        semantic_context=_context(),
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+    )
+    wrapped = _with_interpreter_prompt_cache_breakpoint(
+        messages,
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+    )
+    blocks = wrapped[0].content
+    assert isinstance(blocks, list)
+    stable = blocks[0]["text"]
+
+    assert "Pulse balance/payment selection is not part of appointment booking." in stable
+    assert "Reception handles" in stable
+    assert "Pulse settlement" in stable
+    assert "buy_pulse_pack means" in stable
+    assert "Pulse pack is not a session" in stable
+    assert "must not set package_usage" in stable
+    assert "money was paid" in stable
+
+
 def test_models_without_explicit_cache_keep_plain_messages() -> None:
     messages = [
         SystemMessage(

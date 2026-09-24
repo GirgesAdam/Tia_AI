@@ -32,6 +32,7 @@ def test_token_usage_aggregates_actual_metadata():
     assert usage.output_tokens == 20
     assert usage.cached_tokens == 40
     assert usage.cache_write_tokens == 25
+    assert usage.uncached_input_tokens == 35
     assert usage.total_tokens == 120
     assert usage.metadata_missing_calls == 0
 

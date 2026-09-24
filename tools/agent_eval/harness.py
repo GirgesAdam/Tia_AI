@@ -36,6 +36,7 @@ class TokenUsage:
     output_tokens: int = 0
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    uncached_input_tokens: int = 0
     total_tokens: int = 0
     calls: int = 0
     metadata_missing_calls: int = 0
@@ -57,6 +58,7 @@ class TokenUsage:
         self.output_tokens += out
         self.cached_tokens += cached
         self.cache_write_tokens += cache_write
+        self.uncached_input_tokens += max(0, inp - cached - cache_write)
         self.total_tokens += total
 
 
@@ -118,6 +120,7 @@ def aggregate_tokens(turns: list[TurnCapture]) -> dict[str, int]:
         "output_tokens",
         "cached_tokens",
         "cache_write_tokens",
+        "uncached_input_tokens",
         "total_tokens",
         "calls",
         "metadata_missing_calls",
@@ -136,6 +139,9 @@ def batch_token_summary(results: list[ScenarioResult]) -> dict[str, Any]:
         "cached_tokens": sum(int(row.token_usage["cached_tokens"]) for row in results),
         "cache_write_tokens": sum(
             int(row.token_usage.get("cache_write_tokens", 0)) for row in results
+        ),
+        "uncached_input_tokens": sum(
+            int(row.token_usage.get("uncached_input_tokens", 0)) for row in results
         ),
         "total_tokens": sum(totals),
         "average_tokens_per_conversation": round(statistics.mean(totals), 2) if totals else 0,
