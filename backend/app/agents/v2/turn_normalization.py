@@ -64,6 +64,34 @@ def _normalize_pulse_pricing(operation: TurnOperation) -> TurnOperation:
     )
 
 
+def _normalize_doctor_set_booking_comparison(operation: TurnOperation) -> TurnOperation:
+    """Repair one impossible booking shape into its read-only comparison meaning.
+
+    The interpreter has already grounded a requested doctor set and nearest-availability date.
+    Python does not inspect customer text; it only prevents an executable booking from targeting
+    multiple doctors simultaneously and preserves the grounded comparison scope as availability.
+    """
+    doctor = operation.entities.doctor
+    date = operation.entities.date
+    if (
+        operation.type != "book"
+        or operation.execution_intent != "execute"
+        or doctor is None
+        or doctor.ref is not None
+        or doctor.candidate_mode != "set"
+        or len(doctor.candidate_refs) < 2
+        or date is None
+        or date.mode != "next_available"
+    ):
+        return operation
+    return operation.model_copy(
+        update={
+            "type": "availability",
+            "execution_intent": "informational",
+        }
+    )
+
+
 def _split_pulse_financial_ledger(
     operation: TurnOperation,
 ) -> tuple[TurnOperation | None, bool]:
@@ -101,6 +129,7 @@ def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUndersta
 
     for operation in turn.operations:
         normalized = _normalize_pulse_pricing(operation)
+        normalized = _normalize_doctor_set_booking_comparison(normalized)
         normalized, needs_handoff = _split_pulse_financial_ledger(normalized)
         requires_financial_handoff = requires_financial_handoff or needs_handoff
         if normalized is not None:
