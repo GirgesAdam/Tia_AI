@@ -827,6 +827,20 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     payment_status=getattr(appointment, "payment_status", "unknown"),
                     amount_paid_minor=getattr(appointment, "amount_paid_minor", None),
                     payment_method=getattr(appointment, "payment_method", "unknown"),
+                    billing_context=getattr(appointment, "billing_context", "standard"),
+                    package_external_id=getattr(appointment, "package_external_id", None),
+                    patient_package_id=(
+                        str(appointment.patient_package_id)
+                        if getattr(appointment, "patient_package_id", None)
+                        else None
+                    ),
+                    laser_device_key=getattr(appointment, "laser_device_key", None),
+                    laser_device_name=getattr(appointment, "laser_device_name", None),
+                    visit_group_id=(
+                        str(appointment.visit_group_id)
+                        if getattr(appointment, "visit_group_id", None)
+                        else None
+                    ),
                 )
             )
 
