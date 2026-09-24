@@ -19,14 +19,21 @@ from app.models.conversation import Conversation
 from app.models.handoff_request import HandoffRequest
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
+from app.models.payment_transaction import PaymentTransaction
+from app.models.pulse_billing import (
+    AppointmentPulseSettlement,
+    PatientPulsePack,
+    PulseUsage,
+)
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatRequest
 from app.services.agent_v2 import live_chat as live_chat_module
 from app.services.agent_v2.live_chat import run_agent_chat
 from app.services.patient_packages import list_patient_packages
+from app.services.pulse_billing import list_patient_pulse_balances
 from app.services.workspace_runtime_policy import workspace_runtime_policy
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 
@@ -78,6 +85,8 @@ class TurnCapture:
     write_result: str | None
     handoff_state: dict[str, Any] | None
     llm_calls: list[dict[str, Any]] = field(default_factory=list)
+    structured_trace: list[dict[str, Any]] = field(default_factory=list)
+    context_metrics: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
 
@@ -94,6 +103,8 @@ class ScenarioResult:
     issues: list[dict[str, str]]
     token_usage: dict[str, int]
     execution_error: str | None = None
+    cost: dict[str, float] = field(default_factory=dict)
+    review: dict[str, Any] = field(default_factory=dict)
 
 
 def jsonable(value: Any) -> Any:
@@ -187,6 +198,7 @@ class RuntimeProbe:
         self.usage = TokenUsage()
         self.turns: list[Any] = []
         self.llm_calls: list[dict[str, Any]] = []
+        self.interpreter_contexts: list[dict[str, Any]] = []
         self._current_attribution: dict[str, Any] | None = None
         self._attribution_attempt = 0
         self._original_generate = None
@@ -227,6 +239,27 @@ class RuntimeProbe:
             probe._current_attribution = interpreter_attribution(
                 messages=messages,
                 model_input=model_input,
+            )
+            attribution = dict(probe._current_attribution or {})
+            probe.interpreter_contexts.append(
+                {
+                    "native_history_messages_exposed": max(0, len(messages) - 3),
+                    "history_text_tokens_estimated": int(
+                        attribution.get("conversation_history_tokens_estimated") or 0
+                    ),
+                    "semantic_context_tokens_estimated": int(
+                        attribution.get("semantic_context_tokens_estimated") or 0
+                    ),
+                    "active_task_tokens_estimated": int(
+                        attribution.get("active_task_tokens_estimated") or 0
+                    ),
+                    "recent_verified_read_tokens_estimated": int(
+                        attribution.get("recent_verified_read_tokens_estimated") or 0
+                    ),
+                    "recent_verified_action_tokens_estimated": int(
+                        attribution.get("recent_verified_action_tokens_estimated") or 0
+                    ),
+                }
             )
             probe._attribution_attempt = 0
             return messages
@@ -537,6 +570,11 @@ def appointment_snapshot(
             "doctor_id": str(row.doctor_id),
             "branch_id": str(row.branch_id),
             "start_at": row.start_at.isoformat(),
+            "billing_context": row.billing_context,
+            "payment_status": row.payment_status,
+            "amount_paid_minor": row.amount_paid_minor,
+            "laser_device_key": row.laser_device_key,
+            "laser_device_name": row.laser_device_name,
             "patient_package_id": (
                 str(row.patient_package_id) if row.patient_package_id else None
             ),
@@ -592,6 +630,130 @@ def package_snapshot(
     return output
 
 
+def financial_snapshot(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+) -> dict[str, Any]:
+    pulse_packs = list(
+        db.scalars(
+            select(PatientPulsePack)
+            .where(
+                PatientPulsePack.workspace_id == workspace.id,
+                PatientPulsePack.patient_id == patient.id,
+            )
+            .order_by(PatientPulsePack.purchased_at, PatientPulsePack.id)
+        )
+    )
+    payments = list(
+        db.scalars(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_id == patient.id,
+            )
+            .order_by(PaymentTransaction.created_at, PaymentTransaction.id)
+        )
+    )
+    pulse_pack_ids = [row.id for row in pulse_packs]
+    usages = (
+        list(
+            db.scalars(
+                select(PulseUsage)
+                .where(
+                    PulseUsage.workspace_id == workspace.id,
+                    PulseUsage.patient_pulse_pack_id.in_(pulse_pack_ids),
+                )
+                .order_by(PulseUsage.created_at, PulseUsage.id)
+            )
+        )
+        if pulse_pack_ids
+        else []
+    )
+    appointment_ids = list(
+        db.scalars(
+            select(Appointment.id).where(
+                Appointment.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+            )
+        )
+    )
+    settlements = (
+        list(
+            db.scalars(
+                select(AppointmentPulseSettlement)
+                .where(
+                    AppointmentPulseSettlement.workspace_id == workspace.id,
+                    AppointmentPulseSettlement.appointment_id.in_(appointment_ids),
+                )
+                .order_by(AppointmentPulseSettlement.created_at, AppointmentPulseSettlement.id)
+            )
+        )
+        if appointment_ids
+        else []
+    )
+    return {
+        "pulse_packs": [
+            {
+                "id": str(row.id),
+                "device_key": row.device_key,
+                "pulses_purchased": row.pulses_purchased,
+                "sale_price_minor": row.sale_price_minor,
+                "status": row.status,
+                "purchase_transaction_id": (
+                    str(row.purchase_transaction_id) if row.purchase_transaction_id else None
+                ),
+            }
+            for row in pulse_packs
+        ],
+        "pulse_balances": [
+            row.model_dump(mode="json")
+            for row in list_patient_pulse_balances(
+                db,
+                workspace_id=workspace.id,
+                patient_id=patient.id,
+            )
+        ],
+        "payments": [
+            {
+                "id": str(row.id),
+                "transaction_type": row.transaction_type,
+                "amount_minor": row.amount_minor,
+                "currency": row.currency,
+                "patient_pulse_pack_id": (
+                    str(row.patient_pulse_pack_id) if row.patient_pulse_pack_id else None
+                ),
+                "patient_package_id": (
+                    str(row.patient_package_id) if row.patient_package_id else None
+                ),
+            }
+            for row in payments
+        ],
+        "pulse_usages": [
+            {
+                "id": str(row.id),
+                "patient_pulse_pack_id": str(row.patient_pulse_pack_id),
+                "appointment_id": str(row.appointment_id),
+                "pulses_used": row.pulses_used,
+                "status": row.status,
+            }
+            for row in usages
+        ],
+        "pulse_settlements": [
+            {
+                "id": str(row.id),
+                "appointment_id": str(row.appointment_id),
+                "pulses_used": row.pulses_used,
+                "pulses_from_balance": row.pulses_from_balance,
+                "deficit_pulses": row.deficit_pulses,
+                "resolution": row.resolution,
+                "overage_charge_minor": row.overage_charge_minor,
+            }
+            for row in settlements
+        ],
+    }
+
+
 def state_snapshot(
     db: Session,
     workspace: Workspace,
@@ -600,7 +762,18 @@ def state_snapshot(
     return {
         "appointments": appointment_snapshot(db, workspace, patient),
         "packages": package_snapshot(db, workspace, patient),
+        **financial_snapshot(db, workspace, patient),
     }
+
+
+def acquire_eval_advisory_lock(db: Session, *, namespace: str = "tia-agent-eval") -> None:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:namespace))"),
+        {"namespace": namespace},
+    )
 
 
 def action_rows(
@@ -738,6 +911,21 @@ def send_turn(
             response.conversation_id,
         ),
         llm_calls=list(probe.llm_calls),
+        structured_trace=[
+            {
+                "understanding": jsonable(turn.understanding),
+                "plan": jsonable(turn.plan),
+                "outcomes": jsonable(turn.outcomes),
+                "active_task": jsonable(turn.active_task),
+                "persisted_task": jsonable(turn.persisted_task),
+            }
+            for turn in probe.turns
+        ],
+        context_metrics=(
+            dict(probe.interpreter_contexts[-1])
+            if probe.interpreter_contexts
+            else {}
+        ),
     )
     return response, capture
 
