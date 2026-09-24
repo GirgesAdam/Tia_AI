@@ -99,6 +99,151 @@ def test_counted_overage_semantics_are_not_normalized_to_pack_offer() -> None:
     assert result.entities.pulse_count == 1000
 
 
+def test_financial_ledger_only_normalizes_to_human_support() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(),
+        requested_pulse_details=["financial_ledger"],
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+
+    assert [item.type for item in normalized.operations] == ["human_support"]
+    assert normalized.operations[0].requested_pulse_details == []
+
+
+def test_financial_ledger_splits_from_each_allowed_pulse_read() -> None:
+    for detail in ("balance", "owned_packs", "offers", "overage_price"):
+        operation = TurnOperation(
+            type="pulse_info",
+            entities=TurnEntities(pulse_count=1000 if detail in {"offers", "overage_price"} else None),
+            requested_pulse_details=[detail, "financial_ledger"],
+            execution_intent="informational",
+        )
+
+        normalized = normalize_semantic_invariants(
+            TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+        )
+
+        assert [item.type for item in normalized.operations] == ["pulse_info", "human_support"]
+        assert normalized.operations[0].requested_pulse_details == [detail]
+        assert normalized.operations[1].requested_pulse_details == []
+
+
+def test_financial_ledger_split_does_not_duplicate_existing_human_support() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pulse_info",
+                entities=TurnEntities(),
+                requested_pulse_details=["balance", "financial_ledger"],
+                execution_intent="informational",
+            ),
+            TurnOperation(
+                type="human_support",
+                entities=TurnEntities(),
+                execution_intent="informational",
+            ),
+        ],
+        safety_signals=[],
+    )
+
+    normalized = normalize_semantic_invariants(turn)
+
+    assert [item.type for item in normalized.operations] == ["pulse_info", "human_support"]
+    assert normalized.operations[0].requested_pulse_details == ["balance"]
+
+
+def test_financial_ledger_normalization_preserves_payment_dispute_precedence() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pulse_info",
+                entities=TurnEntities(),
+                requested_pulse_details=["financial_ledger"],
+                execution_intent="informational",
+            )
+        ],
+        safety_signals=["payment_dispute"],
+    )
+
+    normalized = normalize_semantic_invariants(turn)
+    plan = plan_turn(normalized, _planner_context())
+
+    assert plan.steps == []
+    assert plan.handoff_category == "payment"
+
+
+def test_refund_quote_is_not_consumed_by_financial_ledger_normalization() -> None:
+    operation = TurnOperation(
+        type="refund_quote",
+        entities=TurnEntities(),
+        execution_intent="informational",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    )
+
+    assert normalized.operations == [operation]
+
+
+def test_normal_pulse_details_remain_agent_owned_reads() -> None:
+    expected_reads = {
+        "balance": ["pulse_balance"],
+        "owned_packs": ["pulse_packs"],
+        "offers": ["pulse_pack_offers"],
+        "overage_price": ["pulse_billing_settings"],
+    }
+    for detail, read_kinds in expected_reads.items():
+        turn = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="pulse_info",
+                    entities=TurnEntities(),
+                    requested_pulse_details=[detail],
+                    execution_intent="informational",
+                )
+            ],
+            safety_signals=[],
+        )
+
+        normalized = normalize_semantic_invariants(turn)
+        plan = plan_turn(normalized, _planner_context())
+
+        assert plan.handoff_category is None
+        assert [read.kind for read in plan.steps[0].reads] == read_kinds
+
+
+def test_financial_compounds_preserve_safe_read_plus_one_handoff() -> None:
+    for detail, expected_read in (
+        ("balance", "pulse_balance"),
+        ("offers", "pulse_pack_offers"),
+    ):
+        turn = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="pulse_info",
+                    entities=TurnEntities(pulse_count=1000 if detail == "offers" else None),
+                    requested_pulse_details=[detail, "financial_ledger"],
+                    execution_intent="informational",
+                )
+            ],
+            safety_signals=[],
+        )
+
+        normalized = normalize_semantic_invariants(turn)
+        plan = plan_turn(normalized, _planner_context())
+
+        assert [step.operation_type for step in plan.steps] == ["pulse_info", "human_support"]
+        assert [read.kind for read in plan.steps[0].reads] == [expected_read]
+        assert plan.steps[1].disposition == "handoff"
+        assert sum(step.disposition == "handoff" for step in plan.steps) == 1
+
+
 def test_new_turn_contract_has_no_pulse_billing_choice() -> None:
     properties = TurnOperation.model_json_schema()["properties"]
 

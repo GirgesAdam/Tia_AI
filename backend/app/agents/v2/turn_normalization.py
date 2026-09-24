@@ -6,6 +6,7 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
+    TurnEntities,
     TurnOperation,
 )
 
@@ -63,9 +64,57 @@ def _normalize_pulse_pricing(operation: TurnOperation) -> TurnOperation:
     )
 
 
+def _split_pulse_financial_ledger(
+    operation: TurnOperation,
+) -> tuple[TurnOperation | None, bool]:
+    """Separate a receptionist-owned Pulse financial concern from Agent-owned Pulse reads.
+
+    The interpreter supplies financial_ledger as structured semantics. Python never inspects raw
+    customer text and never turns this marker into a financial read. If safe Pulse details are also
+    requested, preserve those details as one informational pulse_info operation and signal that one
+    ordinary human_support operation is required for the financial concern.
+    """
+    details = list(dict.fromkeys(operation.requested_pulse_details))
+    if "financial_ledger" not in details:
+        return operation, False
+
+    safe_details = [detail for detail in details if detail != "financial_ledger"]
+    if not safe_details:
+        return None, True
+
+    safe_operation = operation.model_copy(
+        update={
+            "type": "pulse_info",
+            "requested_service_details": [],
+            "requested_pulse_details": safe_details,
+            "execution_intent": "informational",
+        }
+    )
+    return safe_operation, True
+
+
 def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
     """Repair contradictions using only structured model output, never raw customer text."""
-    operations = [_normalize_pulse_pricing(operation) for operation in turn.operations]
+    existing_human_support = any(operation.type == "human_support" for operation in turn.operations)
+    requires_financial_handoff = False
+    operations: list[TurnOperation] = []
+
+    for operation in turn.operations:
+        normalized = _normalize_pulse_pricing(operation)
+        normalized, needs_handoff = _split_pulse_financial_ledger(normalized)
+        requires_financial_handoff = requires_financial_handoff or needs_handoff
+        if normalized is not None:
+            operations.append(normalized)
+
+    if requires_financial_handoff and not existing_human_support:
+        operations.append(
+            TurnOperation(
+                type="human_support",
+                entities=TurnEntities(),
+                execution_intent="informational",
+            )
+        )
+
     if operations == turn.operations:
         return turn
     return turn.model_copy(update={"operations": operations})

@@ -24,6 +24,16 @@ def test_v2_turn_schema_is_strict_provider_compatible() -> None:
     assert "$ref" not in str(provider)
 
 
+def test_v2_provider_schema_exposes_financial_ledger_as_pulse_semantic_marker() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()
+    pulse_details = schema["$defs"]["TurnOperation"]["properties"]["requested_pulse_details"]
+    item_schema = pulse_details["items"]
+    assert "financial_ledger" in item_schema["enum"]
+
+    provider = canonicalize_provider_json_schema(schema)
+    assert "financial_ledger" in str(provider)
+
+
 def test_v2_contract_supports_compound_operations_without_capability_fields() -> None:
     turn = TiaTurnUnderstanding(
         operations=[

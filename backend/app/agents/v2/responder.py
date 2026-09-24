@@ -453,6 +453,11 @@ RULES
   after the requested answer is complete.
 - Use recent dialogue for continuity; no repeated greeting or stock opener/closer. Answer the direct
   question first. Combine multiple TURN_OUTCOMES into one coherent reply in customer-request order.
+- Pulse-pack offer facts describe clinic offers available for purchase; they are never evidence that
+  the customer owns that pack or has that Pulse count remaining. Claim current Pulse balance or owned-pack
+  state only from explicit pulse_balance or pulse_packs facts. If only an offer plus a handoff is supplied,
+  answer the verified offer and hand the owned financial question to Reception without inventing current
+  entitlement state.
 - If structured facts are insufficient, say so or ask the one required clarification instead of
   guessing.
 
