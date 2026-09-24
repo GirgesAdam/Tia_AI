@@ -25,27 +25,29 @@ def _read_offer(
     db: Session,
     *,
     offer: ServicePackageOffer,
-    service_name: str | None = None,
+    service: Service | None = None,
 ) -> ServicePackageOfferRead:
-    service = None
-    if service_name is None:
+    if service is None:
         service = db.scalar(
             select(Service).where(
                 Service.workspace_id == offer.workspace_id,
                 Service.id == offer.service_id,
             )
         )
-        service_name = service.name if service is not None else "Service"
-    try:
-        device_price = configured_device_price(
-            db,
-            workspace_id=offer.workspace_id,
-            service_id=offer.service_id,
-            device_key=offer.device_key,
-        )
-        standalone = int(device_price.price_minor or 0) if device_price is not None else 0
-    except InventoryOperationError:
-        standalone = 0
+    service_name = service.name if service is not None else "Service"
+    if offer.device_key is None:
+        standalone = int(service.price_minor or 0) if service is not None else 0
+    else:
+        try:
+            device_price = configured_device_price(
+                db,
+                workspace_id=offer.workspace_id,
+                service_id=offer.service_id,
+                device_key=offer.device_key,
+            )
+            standalone = int(device_price.price_minor or 0) if device_price is not None else 0
+        except InventoryOperationError:
+            standalone = 0
     full_standalone = standalone * int(offer.sessions_count)
     return ServicePackageOfferRead(
         id=offer.id,
@@ -73,7 +75,7 @@ def list_package_offers(
     active_only: bool = False,
 ) -> list[ServicePackageOfferRead]:
     stmt = (
-        select(ServicePackageOffer, Service.name)
+        select(ServicePackageOffer, Service)
         .join(
             Service,
             (Service.workspace_id == ServicePackageOffer.workspace_id)
@@ -88,10 +90,7 @@ def list_package_offers(
     rows = db.execute(
         stmt.order_by(Service.name, ServicePackageOffer.device_key, ServicePackageOffer.sessions_count)
     ).all()
-    return [
-        _read_offer(db, offer=offer, service_name=service_name)
-        for offer, service_name in rows
-    ]
+    return [_read_offer(db, offer=offer, service=service) for offer, service in rows]
 
 
 def upsert_package_offer(
@@ -99,18 +98,16 @@ def upsert_package_offer(
     *,
     workspace_id: UUID,
     service_id: UUID,
-    device_key: str,
+    device_key: str | None,
     sessions_count: int,
     price_minor: int,
     currency: str,
     is_active: bool,
 ) -> ServicePackageOffer:
     if sessions_count <= 0:
-        raise PackageOfferError("Laser package sessions must be a positive integer.")
+        raise PackageOfferError("Package sessions must be a positive integer.")
     if price_minor < 0:
         raise PackageOfferError("Package price cannot be negative.")
-    if device_key not in LASER_DEVICE_NAMES:
-        raise PackageOfferError("Unsupported laser device.")
     service = db.scalar(
         select(Service).where(
             Service.workspace_id == workspace_id,
@@ -120,25 +117,34 @@ def upsert_package_offer(
     )
     if service is None:
         raise PackageOfferNotFound("Service not found.")
-    if not service.requires_laser_device:
-        raise PackageOfferError("Package offers in this screen are only available for laser-device services.")
-    try:
-        device_price = configured_device_price(
-            db,
-            workspace_id=workspace_id,
-            service_id=service_id,
-            device_key=device_key,
-        )
-    except InventoryOperationError as exc:
-        raise PackageOfferError(str(exc)) from exc
-    if device_price is None:
-        raise PackageOfferError("Laser device price is required before configuring its packages.")
+
+    if service.requires_laser_device:
+        if device_key not in LASER_DEVICE_NAMES:
+            raise PackageOfferError("A supported laser device is required for this service package.")
+        try:
+            device_price = configured_device_price(
+                db,
+                workspace_id=workspace_id,
+                service_id=service_id,
+                device_key=device_key,
+            )
+        except InventoryOperationError as exc:
+            raise PackageOfferError(str(exc)) from exc
+        if device_price is None:
+            raise PackageOfferError("Laser device price is required before configuring its packages.")
+        device_name = LASER_DEVICE_NAMES[device_key]
+        device_predicate = ServicePackageOffer.device_key == device_key
+    else:
+        if device_key is not None:
+            raise PackageOfferError("This service package must not specify a laser device.")
+        device_name = None
+        device_predicate = ServicePackageOffer.device_key.is_(None)
 
     row = db.scalar(
         select(ServicePackageOffer).where(
             ServicePackageOffer.workspace_id == workspace_id,
             ServicePackageOffer.service_id == service_id,
-            ServicePackageOffer.device_key == device_key,
+            device_predicate,
             ServicePackageOffer.sessions_count == sessions_count,
         )
     )
@@ -147,7 +153,7 @@ def upsert_package_offer(
             workspace_id=workspace_id,
             service_id=service_id,
             device_key=device_key,
-            device_name=LASER_DEVICE_NAMES[device_key],
+            device_name=device_name,
             sessions_count=sessions_count,
             price_minor=price_minor,
             currency=currency.upper(),
@@ -155,7 +161,7 @@ def upsert_package_offer(
         )
         db.add(row)
     else:
-        row.device_name = LASER_DEVICE_NAMES[device_key]
+        row.device_name = device_name
         row.price_minor = price_minor
         row.currency = currency.upper()
         row.is_active = is_active
@@ -208,17 +214,6 @@ def purchase_package_offer(
         offer_id=offer_id,
         for_update=True,
     )
-    try:
-        device_price = configured_device_price(
-            db,
-            workspace_id=workspace_id,
-            service_id=offer.service_id,
-            device_key=offer.device_key,
-        )
-    except InventoryOperationError as exc:
-        raise PackageOfferError(str(exc)) from exc
-    if device_price is None or device_price.price_minor is None:
-        raise PackageOfferError("Standalone device price is unavailable for this package offer.")
     service = db.scalar(
         select(Service).where(
             Service.workspace_id == workspace_id,
@@ -228,7 +223,29 @@ def purchase_package_offer(
     )
     if service is None:
         raise PackageOfferNotFound("Package service not found or inactive.")
-    name = f"{service.name} · {offer.device_name} · {offer.sessions_count} sessions"
+
+    if service.requires_laser_device:
+        if offer.device_key not in LASER_DEVICE_NAMES:
+            raise PackageOfferError("A supported laser device is required for this package offer.")
+        try:
+            device_price = configured_device_price(
+                db,
+                workspace_id=workspace_id,
+                service_id=offer.service_id,
+                device_key=offer.device_key,
+            )
+        except InventoryOperationError as exc:
+            raise PackageOfferError(str(exc)) from exc
+        if device_price is None or device_price.price_minor is None:
+            raise PackageOfferError("Standalone device price is unavailable for this package offer.")
+        standalone_price_minor = int(device_price.price_minor)
+        name = f"{service.name} · {offer.device_name} · {offer.sessions_count} sessions"
+    else:
+        if offer.device_key is not None:
+            raise PackageOfferError("Non-laser package offer must not specify a laser device.")
+        standalone_price_minor = int(service.price_minor)
+        name = f"{service.name} · {offer.sessions_count} sessions"
+
     return create_patient_package(
         db,
         workspace_id=workspace_id,
@@ -247,5 +264,5 @@ def purchase_package_offer(
         origin_appointment_id=origin_appointment_id,
         laser_device_key=offer.device_key,
         laser_device_name=offer.device_name,
-        standalone_session_price_minor_at_purchase=int(device_price.price_minor),
+        standalone_session_price_minor_at_purchase=standalone_price_minor,
     )
