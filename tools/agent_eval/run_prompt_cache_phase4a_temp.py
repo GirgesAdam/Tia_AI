@@ -164,15 +164,16 @@ def _candela_patient(db: Session, workspace: Workspace) -> Patient:
 
 def _candela_underarm_slot(db: Session, workspace: Workspace):
     from app.agents.clinic_grounding import build_clinic_catalog
-    from tools.agent_eval.harness import active_branch_id
+    from tools.agent_eval.harness import active_branch_id, service_by_slug
 
     catalog = build_clinic_catalog(db, workspace)
     branch_id = active_branch_id(catalog)
+    db_service = service_by_slug(db, workspace, "laser-hair-removal-underarm")
     service = next(
         row
         for row in catalog.get("services", [])
         if isinstance(row, dict)
-        and row.get("slug") == "laser-hair-removal-underarm"
+        and str(row.get("id")) == str(db_service.id)
     )
     doctors = [
         row
