@@ -6,7 +6,7 @@ import pytest
 
 import app.services.package_offers as offers_module
 import app.services.patient_packages as packages_module
-from app.models.service_package_offer import PACKAGE_SESSION_COUNTS
+from app.schemas.package_offers import ServicePackageOfferUpsert
 from app.services.patient_packages import (
     PackageOperationError,
     package_read,
@@ -28,8 +28,69 @@ def _package(*, device_key: str | None = "candela_gentle") -> SimpleNamespace:
     )
 
 
-def test_only_three_six_and_nine_session_offers_are_supported() -> None:
-    assert PACKAGE_SESSION_COUNTS == (3, 6, 9)
+def test_custom_positive_session_counts_are_supported() -> None:
+    payload = ServicePackageOfferUpsert(
+        service_id=uuid4(),
+        device_key="candela_gentle",
+        sessions_count=4,
+        price_minor=100_000,
+    )
+
+    assert payload.sessions_count == 4
+
+    with pytest.raises(ValueError):
+        ServicePackageOfferUpsert(
+            service_id=uuid4(),
+            device_key="candela_gentle",
+            sessions_count=0,
+            price_minor=100_000,
+        )
+
+
+def test_upsert_package_offer_accepts_custom_session_count(monkeypatch) -> None:
+    workspace_id = uuid4()
+    service_id = uuid4()
+    scalars = iter([
+        SimpleNamespace(id=service_id, name="Underarm Laser", is_active=True, requires_laser_device=True),
+        None,
+    ])
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.added = []
+            self.flushed = False
+
+        def scalar(self, *_args, **_kwargs):
+            return next(scalars)
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    fake_db = FakeDb()
+    monkeypatch.setattr(
+        offers_module,
+        "configured_device_price",
+        lambda *args, **kwargs: SimpleNamespace(price_minor=25_000),
+    )
+
+    row = offers_module.upsert_package_offer(
+        fake_db,
+        workspace_id=workspace_id,
+        service_id=service_id,
+        device_key="candela_gentle",
+        sessions_count=4,
+        price_minor=90_000,
+        currency="EGP",
+        is_active=True,
+    )
+
+    assert row.sessions_count == 4
+    assert row.price_minor == 90_000
+    assert row in fake_db.added
+    assert fake_db.flushed is True
 
 
 def test_device_specific_package_requires_matching_laser_device(monkeypatch) -> None:
