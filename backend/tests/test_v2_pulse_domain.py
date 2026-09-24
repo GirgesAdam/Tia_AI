@@ -550,6 +550,192 @@ def test_compound_pack_and_overage_info_plans_both_verified_reads() -> None:
     assert step.reads[1].parameters["pulse_count"] == 1000
 
 
+def _pulse_offer(*, pulses_count: int, price_minor: int, workspace_id):
+    return SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        device_key="candela_gentle",
+        device_name="Candela Gentle",
+        pulses_count=pulses_count,
+        price_minor=price_minor,
+        currency="EGP",
+        is_active=True,
+        created_at=NOW,
+        updated_at=NOW,
+        model_dump=lambda **_kwargs: {
+            "device_key": "candela_gentle",
+            "device_name": "Candela Gentle",
+            "pulses_count": pulses_count,
+            "price_minor": price_minor,
+            "currency": "EGP",
+        },
+    )
+
+
+def test_compound_offer_and_overage_scopes_count_per_read(monkeypatch) -> None:
+    workspace_id = uuid4()
+    offer_1000 = _pulse_offer(
+        pulses_count=1000,
+        price_minor=150_000,
+        workspace_id=workspace_id,
+    )
+    billing = SimpleNamespace(
+        device_key="candela_gentle",
+        device_name="Candela Gentle",
+        overage_price_minor=150,
+        currency="EGP",
+        model_dump=lambda **_kwargs: {
+            "device_key": "candela_gentle",
+            "device_name": "Candela Gentle",
+            "overage_price_minor": 150,
+            "currency": "EGP",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_pack_offers",
+        lambda *_args, **_kwargs: [offer_1000],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_billing_settings",
+        lambda *_args, **_kwargs: [billing],
+    )
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(
+            device=EntityReference(
+                text="Candela Gentle",
+                ref="device:candela_gentle",
+            ),
+            pulse_count=500,
+        ),
+        requested_pulse_details=["offers", "overage_price"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert "pulse_count" not in step.reads[0].parameters
+    assert step.reads[1].parameters["pulse_count"] == 500
+
+    bundle = execute_step_reads(
+        step,
+        ReadExecutionContext(
+            db=object(),
+            workspace=SimpleNamespace(id=workspace_id),
+            patient=SimpleNamespace(id=uuid4()),
+            now=NOW,
+        ),
+    )
+
+    offers_payload = bundle.results[0].payload
+    overage_payload = bundle.results[1].payload
+    assert [offer["pulses_count"] for offer in offers_payload["offers"]] == [1000]
+    assert overage_payload["requested_pulse_count"] == 500
+    assert overage_payload["overage_total_minor"] == 75_000
+
+
+def test_offer_only_explicit_count_keeps_pack_filtering(monkeypatch) -> None:
+    workspace_id = uuid4()
+    offer_1000 = _pulse_offer(
+        pulses_count=1000,
+        price_minor=150_000,
+        workspace_id=workspace_id,
+    )
+    offer_2000 = _pulse_offer(
+        pulses_count=2000,
+        price_minor=250_000,
+        workspace_id=workspace_id,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_pack_offers",
+        lambda *_args, **_kwargs: [offer_1000, offer_2000],
+    )
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=1000),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert step.reads[0].parameters["pulse_count"] == 1000
+    bundle = execute_step_reads(
+        step,
+        ReadExecutionContext(
+            db=object(),
+            workspace=SimpleNamespace(id=workspace_id),
+            patient=SimpleNamespace(id=uuid4()),
+            now=NOW,
+        ),
+    )
+
+    assert [offer["pulses_count"] for offer in bundle.results[0].payload["offers"]] == [1000]
+
+
+def test_overage_only_does_not_read_pack_offers() -> None:
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(pulse_count=500),
+        requested_pulse_details=["overage_price"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert [read.kind for read in step.reads] == ["pulse_billing_settings"]
+    assert step.reads[0].parameters["pulse_count"] == 500
+
+
+def test_offers_only_without_count_returns_all_matching_offers(monkeypatch) -> None:
+    workspace_id = uuid4()
+    offers = [
+        _pulse_offer(
+            pulses_count=1000,
+            price_minor=150_000,
+            workspace_id=workspace_id,
+        ),
+        _pulse_offer(
+            pulses_count=2000,
+            price_minor=250_000,
+            workspace_id=workspace_id,
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_pulse_pack_offers",
+        lambda *_args, **_kwargs: offers,
+    )
+    operation = TurnOperation(
+        type="pulse_info",
+        entities=TurnEntities(),
+        requested_pulse_details=["offers"],
+        execution_intent="informational",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+
+    assert "pulse_count" not in step.reads[0].parameters
+    bundle = execute_step_reads(
+        step,
+        ReadExecutionContext(
+            db=object(),
+            workspace=SimpleNamespace(id=workspace_id),
+            patient=SimpleNamespace(id=uuid4()),
+            now=NOW,
+        ),
+    )
+
+    assert [offer["pulses_count"] for offer in bundle.results[0].payload["offers"]] == [1000, 2000]
+
+
 def test_buy_pulse_pack_requires_verified_unique_offer() -> None:
     operation = TurnOperation(
         type="buy_pulse_pack",
