@@ -35,6 +35,8 @@ class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
+    uncached_input_tokens: int = 0
     total_tokens: int = 0
     calls: int = 0
     metadata_missing_calls: int = 0
@@ -49,9 +51,14 @@ class TokenUsage:
         total = int(usage.get("total_tokens") or (inp + out))
         details = usage.get("input_token_details") or usage.get("prompt_tokens_details") or {}
         cached = int(details.get("cache_read") or details.get("cached_tokens") or 0)
+        cache_write = int(
+            details.get("cache_creation") or details.get("cache_write_tokens") or 0
+        )
         self.input_tokens += inp
         self.output_tokens += out
         self.cached_tokens += cached
+        self.cache_write_tokens += cache_write
+        self.uncached_input_tokens += max(0, inp - cached - cache_write)
         self.total_tokens += total
 
 
@@ -112,6 +119,8 @@ def aggregate_tokens(turns: list[TurnCapture]) -> dict[str, int]:
         "input_tokens",
         "output_tokens",
         "cached_tokens",
+        "cache_write_tokens",
+        "uncached_input_tokens",
         "total_tokens",
         "calls",
         "metadata_missing_calls",
@@ -128,6 +137,12 @@ def batch_token_summary(results: list[ScenarioResult]) -> dict[str, Any]:
         "input_tokens": sum(int(row.token_usage["input_tokens"]) for row in results),
         "output_tokens": sum(int(row.token_usage["output_tokens"]) for row in results),
         "cached_tokens": sum(int(row.token_usage["cached_tokens"]) for row in results),
+        "cache_write_tokens": sum(
+            int(row.token_usage.get("cache_write_tokens", 0)) for row in results
+        ),
+        "uncached_input_tokens": sum(
+            int(row.token_usage.get("uncached_input_tokens", 0)) for row in results
+        ),
         "total_tokens": sum(totals),
         "average_tokens_per_conversation": round(statistics.mean(totals), 2) if totals else 0,
         "median_tokens_per_conversation": statistics.median(totals) if totals else 0,
@@ -265,6 +280,7 @@ class RuntimeProbe:
                         input_tokens=0,
                         output_tokens=0,
                         cached_tokens=0,
+                        cache_write_tokens=0,
                         total_tokens=0,
                         model=model_name,
                         latency_ms=latency_ms,
@@ -298,6 +314,7 @@ class RuntimeProbe:
                     input_tokens=call_usage.input_tokens,
                     output_tokens=call_usage.output_tokens,
                     cached_tokens=call_usage.cached_tokens,
+                    cache_write_tokens=call_usage.cache_write_tokens,
                     total_tokens=call_usage.total_tokens,
                     model=model_name,
                     latency_ms=latency_ms,

@@ -29,6 +29,8 @@ def _cached_openai_model(
     max_tokens: int,
     timeout_seconds: int,
     max_retries: int,
+    prompt_cache_mode: str | None = None,
+    prompt_cache_ttl: str | None = None,
 ) -> BaseChatModel:
     """Reuse stateless OpenAI Responses API clients across customer turns.
 
@@ -37,6 +39,12 @@ def _cached_openai_model(
     shape keeps the existing LangGraph/tool-message contract stable while the
     transport uses the Responses API.
     """
+    prompt_cache_options = None
+    if prompt_cache_mode is not None:
+        prompt_cache_options = {"mode": prompt_cache_mode}
+        if prompt_cache_ttl is not None:
+            prompt_cache_options["ttl"] = prompt_cache_ttl
+
     return ChatOpenAI(
         model=model,
         api_key=api_key,
@@ -48,6 +56,7 @@ def _cached_openai_model(
         max_retries=max_retries,
         streaming=False,
         store=False,
+        prompt_cache_options=prompt_cache_options,
     )
 
 
@@ -57,11 +66,29 @@ def _reasoning_effort_for(model: str) -> str:
     return settings.openai_reasoning_effort
 
 
+def _supports_explicit_prompt_cache(model: str) -> bool:
+    """Return whether the configured GPT family supports explicit breakpoints."""
+
+    normalized = str(model).strip().lower()
+    if not normalized.startswith("gpt-"):
+        return False
+    version = normalized.removeprefix("gpt-").split("-", 1)[0]
+    parts = version.split(".", 1)
+    try:
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) == 2 else 0
+    except ValueError:
+        return False
+    return (major, minor) >= (5, 6)
+
+
 def _build_openai_model(
     *,
     model: str,
     max_tokens: int,
     max_retries: int | None = None,
+    prompt_cache_mode: str | None = None,
+    prompt_cache_ttl: str | None = None,
 ) -> BaseChatModel:
     retries = settings.llm_max_retries if max_retries is None else max_retries
     return _cached_openai_model(
@@ -71,6 +98,8 @@ def _build_openai_model(
         max_tokens=max_tokens,
         timeout_seconds=settings.llm_timeout_seconds,
         max_retries=retries,
+        prompt_cache_mode=prompt_cache_mode,
+        prompt_cache_ttl=prompt_cache_ttl,
     )
 
 
@@ -90,17 +119,27 @@ def _build_optional_fallback_model(
 
 
 def build_realtime_interpreter_model() -> BaseChatModel:
+    explicit_cache = _supports_explicit_prompt_cache(settings.openai_model)
     return _build_openai_model(
         model=settings.openai_model,
         max_tokens=settings.agent_router_max_output_tokens,
         max_retries=settings.llm_realtime_max_retries,
+        prompt_cache_mode="explicit" if explicit_cache else None,
+        prompt_cache_ttl="30m" if explicit_cache else None,
     )
 
 
 def build_realtime_interpreter_fallback_model() -> BaseChatModel | None:
-    return _build_optional_fallback_model(
+    fallback = settings.openai_fallback_model
+    if not fallback or fallback == settings.openai_model:
+        return None
+    explicit_cache = _supports_explicit_prompt_cache(fallback)
+    return _build_openai_model(
+        model=fallback,
         max_tokens=settings.agent_router_max_output_tokens,
         max_retries=settings.llm_realtime_max_retries,
+        prompt_cache_mode="explicit" if explicit_cache else None,
+        prompt_cache_ttl="30m" if explicit_cache else None,
     )
 
 
