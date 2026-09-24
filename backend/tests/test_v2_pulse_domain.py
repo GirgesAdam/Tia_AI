@@ -546,6 +546,8 @@ def test_compound_pack_and_overage_info_plans_both_verified_reads() -> None:
         "pulse_pack_offers",
         "pulse_billing_settings",
     ]
+    assert "pulse_count" not in step.reads[0].parameters
+    assert step.reads[1].parameters["pulse_count"] == 1000
 
 
 def test_buy_pulse_pack_requires_verified_unique_offer() -> None:
