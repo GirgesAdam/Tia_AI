@@ -15,6 +15,7 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.agents.v2.turn_interpreter import merge_verified_read_context
+from app.agents.v2.turn_normalization import normalize_semantic_invariants
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
 from app.services.agent_v2.planner import PlannerContext, PlanStep, ReadRequest, plan_turn
 from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
@@ -193,6 +194,32 @@ def test_requested_doctor_set_cannot_authorize_a_booking_write() -> None:
     assert step.disposition == "clarify"
     assert step.clarification_field == "doctor"
     assert step.write_intent is None
+
+
+def test_doctor_set_booking_contradiction_normalizes_to_availability_read() -> None:
+    operation = _operation(
+        "book",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            doctor=EntityReference(
+                text="مين أقرب",
+                ref=None,
+                candidate_refs=["D1", "D2"],
+                candidate_mode="set",
+            ),
+            date=DateConstraint(mode="next_available"),
+        ),
+        execution_intent="execute",
+    )
+
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    ).operations[0]
+
+    assert normalized.type == "availability"
+    assert normalized.execution_intent == "informational"
+    assert normalized.entities.doctor == operation.entities.doctor
+    assert normalized.entities.date == operation.entities.date
 
 
 def test_informational_booking_language_never_creates_write_intent() -> None:

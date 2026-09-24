@@ -9,7 +9,8 @@ import pytest
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
-from app.services.agent_v2.planner import PlanStep, TurnPlan, WriteIntent
+from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.agent_v2.state_executor import StateTransition
 from app.services.agent_v2.state_persistence import PersistedActiveTask, V2StateConflictError
@@ -352,6 +353,180 @@ def test_stale_persistence_conflict_propagates_without_retry(
         runtime.orchestrate_v2_turn(**_runtime_args())
 
     assert attempts == 1
+
+
+def test_same_turn_fallback_is_skipped_when_previous_availability_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(type="availability", entities=TurnEntities()),
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(),
+                continues_previous=True,
+                continuation_condition="if_previous_no_availability",
+            ),
+        ]
+    )
+    first = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        response_goal="present_availability",
+    )
+    fallback = PlanStep(
+        operation_index=1,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        response_goal="present_availability",
+    )
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=None,
+        understanding=understanding,
+        plan=TurnPlan(steps=[first, fallback]),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "preflight_compound_visit_plan",
+        lambda plan, **kwargs: plan,
+    )
+
+    read_calls: list[int] = []
+
+    def read_once(step, _context):
+        read_calls.append(step.operation_index)
+        if step.operation_index != 0:
+            pytest.fail("conditional fallback must not run after successful availability")
+        return ReadExecutionBundle(
+            results=[
+                ReadResult(
+                    kind="availability",
+                    ok=True,
+                    payload={"slots": [{"start_at": "2026-09-15T10:00:00+00:00"}]},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runtime, "execute_step_reads", read_once)
+    monkeypatch.setattr(
+        runtime,
+        "apply_step_state",
+        lambda *args, **kwargs: StateTransition(
+            active_task=None,
+            changed=False,
+            reason="read_only",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "finalize_step_after_state_transition",
+        lambda planned_step, transition: planned_step,
+    )
+    first_outcome = TurnOutcome(status="answered", response_goal="present_availability")
+    monkeypatch.setattr(runtime, "build_step_outcome", lambda *args, **kwargs: first_outcome)
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("الموعد الأول متاح.", "test-model"),
+    )
+
+    result = runtime.orchestrate_v2_turn(**_runtime_args())
+
+    assert read_calls == [0]
+    assert result.outcomes == (first_outcome,)
+    assert len(result.traces) == 1
+
+
+def test_same_turn_fallback_runs_when_previous_availability_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(type="availability", entities=TurnEntities()),
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(),
+                continues_previous=True,
+                continuation_condition="if_previous_no_availability",
+            ),
+        ]
+    )
+    steps = [
+        PlanStep(
+            operation_index=index,
+            operation_type="availability",
+            disposition="read",
+            reads=[ReadRequest(kind="availability")],
+            response_goal="present_availability",
+        )
+        for index in range(2)
+    ]
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=None,
+        understanding=understanding,
+        plan=TurnPlan(steps=steps),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "preflight_compound_visit_plan",
+        lambda plan, **kwargs: plan,
+    )
+
+    read_calls: list[int] = []
+
+    def read_both(step, _context):
+        read_calls.append(step.operation_index)
+        slots = [] if step.operation_index == 0 else [{"start_at": "2026-09-16T10:00:00+00:00"}]
+        return ReadExecutionBundle(
+            results=[
+                ReadResult(
+                    kind="availability",
+                    ok=True,
+                    payload={"slots": slots, "matching_slot_count": len(slots)},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runtime, "execute_step_reads", read_both)
+    monkeypatch.setattr(
+        runtime,
+        "apply_step_state",
+        lambda *args, **kwargs: StateTransition(
+            active_task=None,
+            changed=False,
+            reason="read_only",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "finalize_step_after_state_transition",
+        lambda planned_step, transition: planned_step,
+    )
+    outcomes = [
+        TurnOutcome(status="answered", response_goal="no_availability"),
+        TurnOutcome(status="answered", response_goal="present_availability"),
+    ]
+    monkeypatch.setattr(
+        runtime,
+        "build_step_outcome",
+        lambda step, **kwargs: outcomes[step.operation_index],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("البديل متاح.", "test-model"),
+    )
+
+    result = runtime.orchestrate_v2_turn(**_runtime_args())
+
+    assert read_calls == [0, 1]
+    assert result.outcomes == tuple(outcomes)
+    assert len(result.traces) == 2
 
 
 def test_orchestrator_source_keeps_write_and_transaction_boundaries() -> None:

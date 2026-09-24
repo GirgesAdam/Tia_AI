@@ -126,6 +126,22 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
     return advance_step_after_verification(step, reads.verification)
 
 
+def _availability_option_count(reads: ReadExecutionBundle) -> int | None:
+    """Return the verified option count for one availability-bearing runtime step."""
+    counts: list[int] = []
+    for result in reads.results:
+        if result.kind != "availability" or not result.ok:
+            continue
+        value = result.payload.get("matching_slot_count")
+        if isinstance(value, int) and value >= 0:
+            counts.append(value)
+            continue
+        slots = result.payload.get("slots")
+        if isinstance(slots, list):
+            counts.append(len(slots))
+    return max(counts) if counts else None
+
+
 def _persist_final_task(
     *,
     db: Session,
@@ -306,6 +322,7 @@ def orchestrate_v2_turn(
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
+    previous_availability_option_count: int | None = None
     grouped_positions: dict[str, list[int]] = {}
     for position, grouped_step in enumerate(plan.steps):
         group = compound_write_group(grouped_step)
@@ -324,6 +341,14 @@ def orchestrate_v2_turn(
             timezone_name=timezone_name,
         )
         operation = _operation_for_step(understanding, planned_step)
+        if (
+            getattr(operation, "continuation_condition", "always")
+            == "if_previous_no_availability"
+            and previous_availability_option_count is not None
+            and previous_availability_option_count > 0
+        ):
+            previous_availability_option_count = None
+            continue
         effective_step = adapt_matching_active_task_step(
             planned_step,
             operation=operation,
@@ -359,6 +384,7 @@ def orchestrate_v2_turn(
             if effective_step.reads
             else ReadExecutionBundle()
         )
+        previous_availability_option_count = _availability_option_count(reads)
         compound_advanced, reads, compound_handled = resolve_compound_followup_after_reads(
             effective_step,
             reads,

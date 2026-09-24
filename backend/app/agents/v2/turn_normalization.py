@@ -63,9 +63,42 @@ def _normalize_pulse_pricing(operation: TurnOperation) -> TurnOperation:
     )
 
 
+def _normalize_doctor_set_booking_comparison(operation: TurnOperation) -> TurnOperation:
+    """Fail safe when a doctor-set nearest-availability comparison is emitted as a booking.
+
+    A set means the customer is referring to several supplied doctors together rather than
+    selecting one canonical doctor. A booking cannot safely write against that set. When the
+    same structured operation also asks for next availability, preserve the verified comparison
+    scope as a read instead of turning it into a doctor-choice clarification.
+    """
+    doctor = operation.entities.doctor
+    date = operation.entities.date
+    if (
+        operation.type != "book"
+        or operation.execution_intent != "execute"
+        or doctor is None
+        or doctor.ref is not None
+        or doctor.candidate_mode != "set"
+        or len(doctor.candidate_refs) < 2
+        or date is None
+        or date.mode != "next_available"
+    ):
+        return operation
+    return operation.model_copy(
+        update={
+            "type": "availability",
+            "execution_intent": "informational",
+        }
+    )
+
+
 def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
     """Repair contradictions using only structured model output, never raw customer text."""
-    operations = [_normalize_pulse_pricing(operation) for operation in turn.operations]
+    operations = []
+    for operation in turn.operations:
+        operation = _normalize_pulse_pricing(operation)
+        operation = _normalize_doctor_set_booking_comparison(operation)
+        operations.append(operation)
     if operations == turn.operations:
         return turn
     return turn.model_copy(update={"operations": operations})
