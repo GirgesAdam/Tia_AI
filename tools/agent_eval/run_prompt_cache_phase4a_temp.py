@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.agents import model_provider
 from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest, ClinicCapability
 from app.integrations.clinic.registry import get_clinic_adapter
@@ -309,10 +310,17 @@ def run_pulse_smoke(engine) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("gate", choices=("full-booking", "pulse-smoke"))
+    parser.add_argument(
+        "gate",
+        choices=("full-booking", "full-booking-implicit", "pulse-smoke"),
+    )
     ns = parser.parse_args()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     if ns.gate == "full-booking":
+        return run_full_booking(engine)
+    if ns.gate == "full-booking-implicit":
+        model_provider._cached_openai_model.cache_clear()
+        model_provider._supports_explicit_prompt_cache = lambda _model: False
         return run_full_booking(engine)
     return run_pulse_smoke(engine)
 
