@@ -3,6 +3,8 @@ from __future__ import annotations
 from tools.agent_eval.harness import ScenarioResult, TurnCapture
 from tools.agent_eval.run_batch_03 import CASES, _stage_metrics, db_delta
 
+# Keep the final eval container alive only via Railway start-command capture; test code stays unchanged.
+
 
 def test_batch_03_has_22_ordered_scenarios() -> None:
     names = [case.__name__ for case in CASES]
