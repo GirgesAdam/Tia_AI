@@ -578,10 +578,11 @@ def case_10_two_appointments_one_package(db: Session, workspace: Workspace) -> S
     )
     package_service = service_by_slug(db, workspace, "prp-skin")
     package = _seed_package_balance(db, workspace, patient, package_service, remaining=2, name="Batch4 unrelated package")
+    hydra_day = hydra_appt.start_at.astimezone(ZoneInfo(workspace.timezone or "UTC")).date()
     target_av, target_slot = _future_slot(
         db, workspace, service_id=str(laser_service.id), doctor_id=str(laser.doctor_id),
         device_key="candela_gentle",
-        after_date=laser.start_at.astimezone(ZoneInfo(workspace.timezone or "UTC")).date(),
+        after_date=hydra_day,
         exclude_appointment_id=str(laser.id),
     )
     target_date, target_time = local_slot(target_av, target_slot)
@@ -836,13 +837,28 @@ def case_15_incremental_doctor_date_service_corrections(db: Session, workspace: 
     prp = service_by_slug(db, workspace, "prp-skin")
     hydra = service_by_slug(db, workspace, "hydrafacial")
     catalog = build_clinic_catalog(db, workspace)
-    common = _common_doctors(catalog, prp.id, hydra.id)
+    branch_id = active_branch_id(catalog)
+
+    def scheduled_here(row: dict[str, Any]) -> bool:
+        scheduled = {
+            str(value)
+            for value in (row.get("scheduled_branch_ids") or row.get("branch_ids") or [])
+            if value
+        }
+        return not scheduled or branch_id in scheduled
+
+    common = [
+        row for row in _common_doctors(catalog, prp.id, hydra.id)
+        if scheduled_here(row)
+    ]
     if not common:
-        raise RuntimeError("EVAL_INFRA_ERROR: no doctor common to PRP and Hydrafacial")
+        raise RuntimeError("EVAL_INFRA_ERROR: no branch-scheduled doctor common to PRP and Hydrafacial")
     final_doctor = common[0]
     prp_doctors = [
         row for row in catalog.get("doctors", [])
-        if row.get("id") and str(prp.id) in {str(value) for value in (row.get("service_ids") or [])}
+        if row.get("id")
+        and str(prp.id) in {str(value) for value in (row.get("service_ids") or [])}
+        and scheduled_here(row)
         and str(row.get("id")) != str(final_doctor["id"])
     ]
     initial_doctor = prp_doctors[0] if prp_doctors else final_doctor
