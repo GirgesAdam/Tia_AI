@@ -971,7 +971,7 @@ def _read_customer_packages(request: ReadRequest, context: ReadExecutionContext)
         patient_id=context.patient.id,
         service_id=service_id,
         usable_only=False,
-        include_financials=True,
+        include_financials=False,
     )
     if package_id is not None:
         rows = [row for row in rows if row.id == package_id]
@@ -980,7 +980,27 @@ def _read_customer_packages(request: ReadRequest, context: ReadExecutionContext)
     return ReadResult(
         kind=request.kind,
         ok=True,
-        payload={"packages": [row.model_dump(mode="json") for row in rows]},
+        payload={
+            "packages": [
+                row.model_dump(
+                    mode="json",
+                    include={
+                        "name",
+                        "sessions_purchased",
+                        "sessions_reserved",
+                        "sessions_consumed",
+                        "sessions_remaining",
+                        "laser_device_name",
+                        "purchased_at",
+                        "expires_at",
+                        "status",
+                        "effective_status",
+                        "source",
+                    },
+                )
+                for row in rows
+            ]
+        },
     )
 
 
