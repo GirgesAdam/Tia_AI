@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# Eval-only source change to force Railway to apply the no-cache focused command.
+# Eval-only source change to force Railway to apply the writable pycache focused command.
 import json
 
 from app.core.config import settings
