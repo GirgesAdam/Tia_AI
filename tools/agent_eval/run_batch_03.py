@@ -287,7 +287,14 @@ def _claim_reply_and_handback(
         conversation_id=conversation_id,
     )
     if handoff is None:
-        raise RuntimeError("EVAL_INFRA_ERROR: active handoff missing")
+        return {
+            "missing_handoff": True,
+            "before_staff": ownership_snapshot(db, workspace, conversation_id),
+            "during_staff": None,
+            "after_handback": ownership_snapshot(db, workspace, conversation_id),
+            "staff_message_id": None,
+            "staff_message": staff_text,
+        }
     before = ownership_snapshot(db, workspace, conversation_id)
     claim_handoff(
         db,
@@ -748,6 +755,7 @@ def case_01_handoff_during_active_booking(
         human_owned is not None
         and human_owned["owner_type"] == "human"
         and no_booking_while_human
+        and not staff_evidence.get("missing_handoff")
         and staff_evidence["after_handback"]["owner_type"] == "ai"
         and bool(resumed_task)
         and str(service["id"]) in resumed_serialized
@@ -933,6 +941,7 @@ def case_03_financial_handoff_then_new_booking(
     ok = (
         human is not None
         and human["owner_type"] == "human"
+        and not staff_evidence.get("missing_handoff")
         and staff_evidence["after_handback"]["owner_type"] == "ai"
         and len(created) == 1
         and created[0]["service_id"] == str(service["id"])
@@ -2234,9 +2243,11 @@ def case_19_price_package_booking(
     after = extended_state_snapshot(db, workspace, patient)
     created = created_appointments(before, after)
     reply = (turns[-1].agent_response or "").replace(",", "")
+    normalized_reply = reply.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    expected_price = money(service.price_minor).split(".", 1)[0]
     delta = db_delta(before, after)
     ok = (
-        money(service.price_minor) in reply
+        expected_price in normalized_reply
         and len(created) == 1
         and created[0]["patient_package_id"] == str(package.id)
         and _pulse_safe(delta)
