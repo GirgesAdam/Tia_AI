@@ -115,6 +115,21 @@ def test_generic_financial_ownership_inside_booking_normalizes_to_handoff_only()
     assert all(not step.reads for step in plan.steps)
 
 
+def test_existing_financial_human_support_operation_is_preserved() -> None:
+    handoff = TurnOperation(
+        type="human_support",
+        entities=TurnEntities(),
+        financial_ownership="reception",
+        execution_intent="informational",
+    )
+    normalized = normalize_semantic_invariants(
+        TiaTurnUnderstanding(operations=[handoff], safety_signals=[])
+    )
+    assert len(normalized.operations) == 1
+    assert normalized.operations[0].type == "human_support"
+    assert normalized.operations[0].financial_ownership == "reception"
+
+
 def test_service_price_inside_booking_remains_service_catalog_read() -> None:
     pricing = TurnOperation(
         type="pricing",

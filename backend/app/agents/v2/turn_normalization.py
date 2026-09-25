@@ -128,6 +128,8 @@ def _split_generic_financial_ownership(
     """Convert the model's typed receptionist-owned financial marker into a safe handoff."""
     if operation is None or operation.financial_ownership != "reception":
         return operation, False
+    if operation.type == "human_support":
+        return operation, True
     return None, True
 
 
