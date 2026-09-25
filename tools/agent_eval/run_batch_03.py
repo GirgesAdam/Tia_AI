@@ -2905,6 +2905,47 @@ def main() -> int:
             flush=True,
         )
     print("EVAL_REPORT_B64_END", flush=True)
+    for row in payload["scenario_results"]:
+        compact = {
+            "id": row["id"],
+            "category": row["category"],
+            "execution_error": row.get("execution_error"),
+            "issues": row.get("issues") or [],
+            "token_usage": row.get("token_usage") or {},
+            "cost": row.get("cost") or {},
+            "turns": [
+                {
+                    "turn_number": turn["turn_number"],
+                    "user_message": turn["user_message"],
+                    "agent_response": turn.get("agent_response"),
+                    "verified_reads": turn.get("verified_reads") or [],
+                    "write_attempted": turn.get("write_attempted"),
+                    "write_result": turn.get("write_result"),
+                    "handoff_state": turn.get("handoff_state"),
+                    "runtime_state": turn.get("runtime_state") or {},
+                    "structured_operations": [
+                        operation
+                        for trace in (turn.get("structured_trace") or [])
+                        for operation in (
+                            (trace.get("understanding") or {}).get("operations") or []
+                        )
+                    ],
+                    "plan_reads": [
+                        read
+                        for trace in (turn.get("structured_trace") or [])
+                        for step in ((trace.get("plan") or {}).get("steps") or [])
+                        for read in (step.get("reads") or [])
+                    ],
+                }
+                for turn in row.get("turns") or []
+            ],
+            "db_verification": row.get("db_verification") or {},
+        }
+        print(
+            "EVAL_SCENARIO_COMPACT="
+            + json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
+            flush=True,
+        )
     print(f"JSON_RESULT={json_path}")
     print(f"MD_RESULT={md_path}")
     print(f"SCENARIOS_RUN={len(results)}")
