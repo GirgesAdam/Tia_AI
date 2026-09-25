@@ -378,3 +378,51 @@ def test_multiple_device_prices_are_presented_without_silent_selection(
     assert "Prime Lase" in text and "550" in text
     assert "Candela Gentle" in text and "650" in text
     assert "أي جهاز" in text
+
+
+def test_package_backed_booking_keeps_package_fact_and_scopes_pulse_guidance() -> None:
+    outcome = TurnOutcome(
+        status="completed",
+        response_goal="booking_completed",
+        facts={
+            "package_usage": "use_existing",
+            "availability": {
+                "service_name": "PRP للبشرة",
+                "availability_windows": [
+                    {
+                        "doctor_name": "د. مها",
+                        "start_local": "2026-09-26T10:00:00+03:00",
+                        "start_time_24h": "10:00",
+                    }
+                ],
+                "available_option_count": 1,
+            },
+        },
+        action_result={
+            "ok": True,
+            "write_kind": "booking",
+            "status": "confirmed",
+            "package_used": True,
+            "package_name": "PRP package",
+        },
+    )
+
+    messages = _build_responder_messages(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[
+            HumanMessage(
+                content="عندي باكدج وعندي Pulses كمان، احجزي الجلسة من الباكدج"
+            )
+        ],
+        outcomes=[outcome],
+    )
+
+    system_prompt = str(messages[0].content)
+    outcome_payload = str(messages[-2].content)
+
+    assert '"package_used":true' in outcome_payload
+    assert '"package_usage":"use_existing"' in outcome_payload
+    assert "do not add Pulse" in system_prompt
+    assert "another TURN_OUTCOME in this same turn explicitly carries a Pulse" in system_prompt

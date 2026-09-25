@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import BaseMessage
 from sqlalchemy.orm import Session
@@ -104,6 +105,7 @@ class V2OrchestratedTurn:
     active_task: ActiveTaskState | None
     persisted_task: PersistedActiveTask | None
     pending_write: PendingV2Write | None
+    verified_action_context: dict[str, object] | None = None
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -157,6 +159,204 @@ def _continuation_condition_satisfied(
     if condition == "if_previous_no_availability":
         return _verified_no_availability(previous_reads)
     raise RuntimeError(f"Unsupported continuation condition: {condition}")
+
+
+def _completed_action_context(
+    step: PlanStep,
+    action_result: dict[str, object],
+) -> dict[str, object] | None:
+    """Capture only canonical facts needed for the immediately following turn."""
+    intent = step.write_intent
+    if (
+        step.disposition != "write_ready"
+        or intent is None
+        or action_result.get("ok") is not True
+    ):
+        return None
+
+    parameters = dict(intent.parameters)
+    if intent.kind == "buy_pulse_pack":
+        device_key = parameters.get("device_key")
+        if device_key in (None, ""):
+            return None
+        context: dict[str, object] = {
+            "operation_type": "buy_pulse_pack",
+            "device_key": str(device_key),
+        }
+        pulse_count = parameters.get("pulse_count")
+        if isinstance(pulse_count, int) and not isinstance(pulse_count, bool) and pulse_count > 0:
+            context["pulse_count"] = pulse_count
+        return context
+
+    if intent.kind == "booking":
+        required = ("service_id", "doctor_id", "start_at")
+        if any(parameters.get(key) in (None, "") for key in required):
+            return None
+        appointment_id = action_result.get("appointment_id")
+        status = action_result.get("status")
+        if appointment_id in (None, "") or status not in {"pending", "confirmed"}:
+            return None
+        context = {
+            "operation_type": "book",
+            "appointment_id": str(appointment_id),
+            "service_id": str(parameters["service_id"]),
+            "doctor_id": str(parameters["doctor_id"]),
+            "start_at": str(parameters["start_at"]),
+            "status": str(status),
+            "package_usage": str(parameters.get("package_usage") or "unspecified"),
+        }
+        if parameters.get("device_key") not in (None, ""):
+            context["device_key"] = str(parameters["device_key"])
+        for key in ("date", "time"):
+            if isinstance(parameters.get(key), dict):
+                context[key] = dict(parameters[key])
+        return context
+
+    if intent.kind == "cancel_appointment":
+        appointment_id = action_result.get("appointment_id")
+        if appointment_id in (None, "") or action_result.get("status") != "cancelled":
+            return None
+        return {
+            "operation_type": "cancel_appointment",
+            "appointment_id": str(appointment_id),
+            "status": "cancelled",
+        }
+    return None
+
+
+def _exact_requested_start_at(step: PlanStep, *, timezone_name: str) -> datetime | None:
+    date = step.facts.get("date")
+    time = step.facts.get("time")
+    if not isinstance(date, dict) or not isinstance(time, dict):
+        return None
+    if date.get("mode") != "exact" or time.get("mode") != "exact":
+        return None
+    start_date = date.get("start_date")
+    start_time = time.get("start_time")
+    if not isinstance(start_date, str) or not isinstance(start_time, str):
+        return None
+    try:
+        local = datetime.fromisoformat(f"{start_date}T{start_time}")
+        return local.replace(tzinfo=ZoneInfo(timezone_name))
+    except (ValueError, KeyError):
+        return None
+
+
+def _same_recent_booking(
+    step: PlanStep,
+    recent_action: dict[str, object],
+    *,
+    timezone_name: str,
+) -> bool:
+    if (
+        step.operation_type != "book"
+        or recent_action.get("operation_type") != "book"
+        or recent_action.get("status") not in {"pending", "confirmed"}
+    ):
+        return False
+    expected_start = _exact_requested_start_at(step, timezone_name=timezone_name)
+    recent_start_raw = recent_action.get("start_at")
+    if expected_start is None or not isinstance(recent_start_raw, str):
+        return False
+    try:
+        recent_start = datetime.fromisoformat(recent_start_raw)
+    except ValueError:
+        return False
+    if recent_start.tzinfo is None or recent_start.utcoffset() is None:
+        return False
+    if expected_start.astimezone(recent_start.tzinfo) != recent_start:
+        return False
+
+    def same(key: str) -> bool:
+        current = step.facts.get(key)
+        recent = recent_action.get(key)
+        return str(current) == str(recent) if current not in (None, "") or recent not in (None, "") else True
+
+    return (
+        same("service_id")
+        and same("doctor_id")
+        and same("device_key")
+        and str(step.facts.get("package_usage") or "unspecified")
+        == str(recent_action.get("package_usage") or "unspecified")
+    )
+
+
+def _bare_recent_cancellation(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object],
+) -> bool:
+    if (
+        step.operation_type != "cancel_appointment"
+        or recent_action.get("operation_type") != "cancel_appointment"
+        or recent_action.get("status") != "cancelled"
+    ):
+        return False
+    explicit_target = step.facts.get("appointment_id")
+    if explicit_target not in (None, ""):
+        return str(explicit_target) == str(recent_action.get("appointment_id"))
+    if operation.selection is not None:
+        return False
+    entities = operation.entities
+    return all(
+        value is None
+        for value in (
+            entities.appointment,
+            entities.service,
+            entities.doctor,
+            entities.device,
+            entities.date,
+            entities.time,
+        )
+    )
+
+
+def _acknowledgment_facts(action: str, *, same_booking: bool = False) -> dict[str, object]:
+    return {
+        "acknowledgment": {
+            "action": action,
+            "already_completed": True,
+            **({"same_booking": True} if same_booking else {}),
+        }
+    }
+
+
+def _normalize_recent_action_acknowledgments(
+    plan: TurnPlan,
+    understanding: TiaTurnUnderstanding,
+    *,
+    recent_action: dict[str, object] | None,
+    timezone_name: str,
+) -> TurnPlan:
+    if not isinstance(recent_action, dict):
+        return plan
+    normalized: list[PlanStep] = []
+    changed = False
+    for step in plan.steps:
+        operation = _operation_for_step(understanding, step)
+        ack_facts: dict[str, object] | None = None
+        if _same_recent_booking(step, recent_action, timezone_name=timezone_name):
+            ack_facts = _acknowledgment_facts("booking", same_booking=True)
+        elif _bare_recent_cancellation(step, operation, recent_action):
+            ack_facts = _acknowledgment_facts("cancel_appointment")
+        if ack_facts is None:
+            normalized.append(step)
+            continue
+        normalized.append(
+            step.model_copy(
+                update={
+                    "disposition": "respond",
+                    "reads": [],
+                    "write_intent": None,
+                    "state_action": "none",
+                    "response_goal": "social_ack",
+                    "clarification_field": None,
+                    "facts": ack_facts,
+                }
+            )
+        )
+        changed = True
+    return plan.model_copy(update={"steps": normalized}) if changed else plan
 
 
 def _terminal_handoff_plan(plan: TurnPlan) -> bool:
@@ -289,6 +489,12 @@ def orchestrate_v2_turn(
         catalog=canonical_catalog,
         operation_visit_groups=semantic_visit_groups,
     )
+    plan = _normalize_recent_action_acknowledgments(
+        plan,
+        understanding,
+        recent_action=recent_action_context,
+        timezone_name=timezone_name,
+    )
 
     if _terminal_handoff_plan(plan):
         outcome = build_handoff_outcome(plan)
@@ -345,6 +551,7 @@ def orchestrate_v2_turn(
     pending_write: PendingV2Write | None = None
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
+    completed_action_context: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
     operation_reads: dict[int, ReadExecutionBundle] = {}
     grouped_positions: dict[str, list[int]] = {}
@@ -487,6 +694,9 @@ def orchestrate_v2_turn(
             outcomes.append(outcome)
 
             if outcome.status == "completed":
+                action_context = _completed_action_context(advanced, action_result)
+                if action_context is not None:
+                    completed_action_context = action_context
                 if (
                     step_group_key is not None
                     and active_group_key == step_group_key
@@ -617,4 +827,5 @@ def orchestrate_v2_turn(
         active_task=current_task,
         persisted_task=persisted_after,
         pending_write=None,
+        verified_action_context=completed_action_context,
     )
