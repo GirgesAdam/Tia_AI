@@ -14,10 +14,12 @@ ChoicePurpose = Literal[
     "doctor",
     "device",
     "appointment",
+    "appointment_target",
     "package",
     "booking_slot",
     "reschedule_slot",
 ]
+LifecycleAction = Literal["cancel_appointment", "confirm_appointment", "reschedule"]
 WriteOperation = Literal["booking", "reschedule"]
 
 
@@ -80,6 +82,7 @@ class OptionChoice(StrictStateModel):
 class OptionSnapshot(StrictStateModel):
     snapshot_id: str
     purpose: ChoicePurpose
+    lifecycle_action: LifecycleAction | None = None
     task_version: int
     created_at: datetime
     expires_at: datetime

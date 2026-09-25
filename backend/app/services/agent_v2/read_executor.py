@@ -363,6 +363,27 @@ def _appointment_matches_date(
     return row.start_at.astimezone(tz).date() in set(dates)
 
 
+def _appointment_matches_time(
+    row: AppointmentRecord,
+    raw: object,
+) -> bool:
+    mode, start, end = _time_constraint(raw)
+    if mode is None or mode == "nearest":
+        return True
+    tz = ZoneInfo(row.timezone)
+    local_start = row.start_at.astimezone(tz).timetz().replace(tzinfo=None)
+    local_end = row.end_at.astimezone(tz).timetz().replace(tzinfo=None)
+    if mode == "exact":
+        return start is not None and local_start == start
+    if mode == "after":
+        return start is not None and local_start >= start
+    if mode == "before":
+        return start is not None and local_end <= start
+    if mode == "range":
+        return start is not None and end is not None and local_start >= start and local_end <= end
+    return False
+
+
 def _read_service_catalog(
     request: ReadRequest,
     context: ReadExecutionContext,
@@ -771,11 +792,23 @@ def _read_appointments(
         rows = [row for row in rows if row.service_id == str(params["service_id"])]
     if params.get("doctor_id") is not None:
         rows = [row for row in rows if row.doctor_id == str(params["doctor_id"])]
+    if params.get("device_key") is not None:
+        rows = [
+            row
+            for row in rows
+            if row.laser_device_key == str(params["device_key"])
+        ]
     if params.get("date") is not None:
         rows = [
             row
             for row in rows
             if _appointment_matches_date(row, params["date"], now=context.now)
+        ]
+    if params.get("time") is not None:
+        rows = [
+            row
+            for row in rows
+            if _appointment_matches_time(row, params["time"])
         ]
 
     component_scoped = (

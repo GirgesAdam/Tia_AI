@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.outcome import ResponseGoal
-from app.services.agent_v2.state import ActiveTaskState, OptionChoice
+from app.services.agent_v2.state import ActiveTaskState, OptionChoice, OptionSnapshot
 from app.services.agent_v2.state_rules import option_snapshot_is_current
 
 PlanDisposition = Literal[
@@ -118,6 +118,7 @@ class PlannerContext:
     semantic_context: SemanticContext
     active_task: ActiveTaskState | None
     now: datetime
+    pending_choice: OptionSnapshot | None = None
 
 
 def _canonical_entity(
@@ -185,6 +186,56 @@ def _base_parameters(
     return values, ambiguous
 
 
+def _source_appointment_parameters(
+    operation: TurnOperation,
+    context: PlannerContext,
+    *,
+    fallback: dict[str, object],
+) -> dict[str, object]:
+    """Resolve existing-appointment identity independently from replacement constraints."""
+    pending = context.pending_choice
+    if (
+        pending is not None
+        and pending.purpose == "appointment_target"
+        and pending.lifecycle_action == operation.type
+        and context.now < pending.expires_at
+        and len(pending.options) == 1
+    ):
+        selected_id = pending.options[0].payload.get("appointment_id")
+        if selected_id not in (None, ""):
+            return {"appointment_id": str(selected_id)}
+
+    selector = operation.source_appointment
+    if selector is None:
+        if operation.type == "reschedule":
+            appointment_id = fallback.get("appointment_id")
+            return {"appointment_id": appointment_id} if appointment_id is not None else {}
+        return {
+            key: value
+            for key, value in fallback.items()
+            if key in {"appointment_id", "service_id", "doctor_id", "device_key", "date", "time"}
+        }
+
+    params: dict[str, object] = {}
+    for field, kind, key in (
+        ("appointment", "appointment", "appointment_id"),
+        ("service", "service", "service_id"),
+        ("doctor", "doctor", "doctor_id"),
+        ("device", "device", "device_key"),
+    ):
+        entity = getattr(selector, field)
+        if entity is None or entity.ref is None:
+            continue
+        value = context.semantic_context.resolve(entity.ref, expected_kind=kind)
+        if value is not None:
+            params[key] = value
+    if selector.date is not None:
+        params["date"] = selector.date.model_dump(mode="json")
+    if selector.time is not None:
+        params["time"] = selector.time.model_dump(mode="json")
+    return params
+
+
 def _service_requires_laser_device(
     operation: TurnOperation,
     context: PlannerContext,
@@ -240,14 +291,21 @@ def _safety_handoff(turn: TiaTurnUnderstanding) -> TurnPlan | None:
     return None
 
 
+def _selection_snapshot(context: PlannerContext) -> OptionSnapshot | None:
+    state = context.active_task
+    if state is not None and option_snapshot_is_current(state, now=context.now):
+        return state.option_snapshot
+    pending = context.pending_choice
+    if pending is not None and context.now < pending.expires_at:
+        return pending
+    return None
+
+
 def _selected_snapshot_option(
     operation: TurnOperation,
     context: PlannerContext,
 ) -> OptionChoice | None:
-    state = context.active_task
-    if state is None or not option_snapshot_is_current(state, now=context.now):
-        return None
-    snapshot = state.option_snapshot
+    snapshot = _selection_snapshot(context)
     if snapshot is None or operation.selection is None:
         return None
 
@@ -272,11 +330,29 @@ def _selected_snapshot_option(
 
 def _plan_select_active(index: int, operation: TurnOperation, context: PlannerContext) -> PlanStep:
     state = context.active_task
+    snapshot = _selection_snapshot(context)
     selected = _selected_snapshot_option(operation, context)
-    if state is None or state.option_snapshot is None or selected is None:
+    if snapshot is None or selected is None:
         return _clarify(index=index, operation=operation, field="selection")
 
-    purpose = state.option_snapshot.purpose
+    purpose = snapshot.purpose
+    if purpose == "appointment" and snapshot.lifecycle_action is not None:
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="clarify",
+            response_goal="clarification",
+            clarification_field="date" if snapshot.lifecycle_action == "reschedule" else "intent",
+            facts={
+                "choice_purpose": purpose,
+                "lifecycle_action": snapshot.lifecycle_action,
+                "selected_option": selected.model_dump(mode="json"),
+            },
+        )
+
+    if state is None or state.option_snapshot is None:
+        return _clarify(index=index, operation=operation, field="selection")
+
     if purpose == "booking_slot":
         authorized = (
             operation.execution_intent == "execute"
@@ -426,12 +502,17 @@ def _plan_operation(
     params, ambiguous = _base_parameters(operation, context)
 
     if operation.type == "human_support":
+        financial = operation.financial_ownership == "reception"
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
             disposition="handoff",
             response_goal="handoff",
-            facts={"category": "customer_request", "priority": "normal"},
+            facts={
+                "category": "payment" if financial else "customer_request",
+                "priority": "normal",
+                "preserve_active_task": financial,
+            },
         )
     if operation.type == "social":
         return PlanStep(
@@ -467,7 +548,11 @@ def _plan_operation(
     if informational is not None:
         return informational
 
-    if ambiguous.get("service"):
+    if ambiguous.get("service") and operation.type not in {
+        "confirm_appointment",
+        "cancel_appointment",
+        "reschedule",
+    }:
         return _clarify(index=index, operation=operation, field="service", goal="ask_service_choice")
     if ambiguous.get("doctor") and not (
         operation.type == "availability" or (compound_book and operation.type == "book")
@@ -485,7 +570,11 @@ def _plan_operation(
         "reschedule",
     }:
         return _clarify(index=index, operation=operation, field="device")
-    if ambiguous.get("appointment"):
+    if ambiguous.get("appointment") and operation.type not in {
+        "confirm_appointment",
+        "cancel_appointment",
+        "reschedule",
+    }:
         return _clarify(
             index=index,
             operation=operation,
@@ -603,8 +692,7 @@ def _plan_operation(
         )
 
     if operation.type in {"confirm_appointment", "cancel_appointment"}:
-        if "appointment_ids" in params:
-            return _clarify(index=index, operation=operation, field="appointment", goal="ask_appointment_choice")
+        source_params = _source_appointment_parameters(operation, context, fallback=params)
         kind: WriteKind = (
             "confirm_appointment" if operation.type == "confirm_appointment" else "cancel_appointment"
         )
@@ -615,26 +703,31 @@ def _plan_operation(
             operation_index=index,
             operation_type=operation.type,
             disposition="read",
-            reads=[ReadRequest(kind="appointments", parameters=params)],
-            write_intent=WriteIntent(kind=kind, authorized=True, parameters=params),
+            reads=[ReadRequest(kind="appointments", parameters=source_params)],
+            write_intent=WriteIntent(kind=kind, authorized=True, parameters=source_params),
             response_goal=goal,
-            facts=params,
+            facts={"source_appointment": source_params},
         )
 
     if operation.type == "reschedule":
-        if "doctor_ids" in params or "appointment_ids" in params:
-            field: ClarificationField = "appointment" if "appointment_ids" in params else "doctor"
-            return _clarify(index=index, operation=operation, field=field)
-        if "date" not in params:
+        if "doctor_ids" in params:
+            return _clarify(index=index, operation=operation, field="doctor")
+        source_params = _source_appointment_parameters(operation, context, fallback=params)
+        replacement_params = {
+            key: value
+            for key, value in params.items()
+            if key not in {"appointment_id", "appointment_ids"}
+        }
+        if "date" not in replacement_params:
             return PlanStep(
                 operation_index=index,
                 operation_type=operation.type,
                 disposition="clarify",
-                reads=[ReadRequest(kind="appointments", parameters=params)],
+                reads=[ReadRequest(kind="appointments", parameters=source_params)],
                 state_action="start_reschedule",
                 response_goal="clarification",
                 clarification_field="date",
-                facts=params,
+                facts={**replacement_params, "source_appointment": source_params},
             )
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
         requires_device = _service_requires_laser_device(operation, context)
@@ -643,14 +736,22 @@ def _plan_operation(
             operation_type=operation.type,
             disposition="read",
             reads=[
-                ReadRequest(kind="appointments", parameters=params),
-                ReadRequest(kind="availability", parameters={**params, "reschedule": True}),
+                ReadRequest(kind="appointments", parameters=source_params),
+                ReadRequest(
+                    kind="availability",
+                    parameters={**replacement_params, "reschedule": True},
+                ),
             ],
-            write_intent=WriteIntent(kind="reschedule", authorized=True, parameters=params),
+            write_intent=WriteIntent(
+                kind="reschedule",
+                authorized=True,
+                parameters=replacement_params,
+            ),
             state_action="start_reschedule",
             response_goal="present_availability",
             facts={
-                **params,
+                **replacement_params,
+                "source_appointment": source_params,
                 "exact_time_requested": exact_time,
                 "service_requires_laser_device": requires_device,
             },

@@ -136,10 +136,14 @@ SEMANTIC PRINCIPLES
   request to avoid using an existing package can still book the same established service as a
   standalone appointment.
 - Use select_active only when structured pending/active options are actually supplied inside
-  SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. If no structured
-  pending option is supplied but the recent dialogue makes the customer's intended primary action
-  and constraints clear, reconstruct that primary operation from the dialogue so Python can verify
-  it again instead of emitting select_active.
+  SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. For a pending
+  appointment choice, an ordinal/ref reply selects only that verified appointment; do not reconstruct
+  cancel/reschedule or treat the selected appointment's current date/time as replacement authority.
+  If pending_choice purpose=appointment_target, that single verified appointment is the lifecycle
+  target: use its appointment_ref in source_appointment when the customer next explicitly cancels or
+  supplies replacement constraints for reschedule. If no structured pending option is supplied but
+  the recent dialogue makes the customer's intended primary action and constraints clear, reconstruct
+  that primary operation from the dialogue so Python can verify it again instead of emitting select_active.
 - Use continue_active for a requirement that continues an explicitly supplied active task without
   independently restating the task's primary operation.
 - cancel_active stops an unfinished conversational task. cancel_appointment concerns an already
@@ -147,7 +151,14 @@ SEMANTIC PRINCIPLES
 - availability means asking what appointment possibilities exist without requesting creation of a
   new appointment. book means requesting creation of a new appointment.
 - reschedule means changing an existing appointment. confirm_appointment confirms an existing
-  appointment.
+  appointment. For cancel_appointment, confirm_appointment, and reschedule, identify the existing
+  appointment in source_appointment. For reschedule, entities.date/time and entities doctor/device/service
+  are replacement constraints only; never copy the requested new date/time into source_appointment.
+  If the customer states both the current appointment date/time and the requested new date/time,
+  preserve the current values in source_appointment and the new values in entities. When a lifecycle
+  request uses a broad category such as "laser" without naming one exact service, do not expand it
+  into a service-catalog choice before current appointments are checked; leave the exact service
+  unresolved and let Python present verified current appointments.
 - For appointment_list, broad category wording such as asking for "my next laser appointment" must
   not force a service choice from the catalog. Unless one specific service is clearly named, leave
   the service entity null so Python can read the customer's actual appointments first.
@@ -157,6 +168,13 @@ SEMANTIC PRINCIPLES
 - Pulse balance/payment selection is not part of appointment booking. Reception handles
   appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
   mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
+- financial_ownership=reception is the general typed marker for customer/appointment money-ledger
+  meaning: amount already paid, balance still due, payment or transaction status, checkout, or
+  settlement. Apply it even inside an active booking/reschedule and even when a service/device is in
+  context. A question like "how much is left for me to pay?" is not service pricing. Service/package
+  offer-price questions use financial_ownership=none. For a mixed request, keep any separately asked
+  Agent-owned read as its own operation and mark only the ledger concern reception. The marker never
+  authorizes a financial read or write; Python converts it to Reception ownership deterministically.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
   Pulse-pack offers, or per-device overage price. Use balance for an aggregate remaining Pulse balance
   by device. Use owned_packs when the customer asks about a particular pack they own, including that

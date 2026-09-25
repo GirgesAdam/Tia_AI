@@ -124,6 +124,32 @@ def _recent_verified_action_context(
     return dict(value) if isinstance(value, dict) else None
 
 
+def _recent_pending_choice_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Return only the immediately preceding V2 verified appointment-choice snapshot."""
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if previous is None or previous.sender_type != "ai" or previous.direction != "outbound":
+        return None
+    metadata = dict(previous.metadata_json or {})
+    if metadata.get("runtime") != "v2":
+        return None
+    value = metadata.get("v2_pending_choice")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _availability_option_count_for_step(
     turn: V2OrchestratedTurn,
     *,
@@ -274,6 +300,11 @@ def _run_v2_after_inbound(
         conversation=conversation,
         inbound=inbound,
     )
+    pending_choice_context = _recent_pending_choice_context(
+        db,
+        conversation=conversation,
+        inbound=inbound,
+    )
 
     def live_write(step):
         return execute_write_ready_step(
@@ -300,6 +331,7 @@ def _run_v2_after_inbound(
         write_executor=live_write,
         recent_read_context=recent_read_context,
         recent_action_context=recent_action_context,
+        pending_choice_context=pending_choice_context,
     )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
@@ -378,6 +410,11 @@ def _run_v2_after_inbound(
             "handoff_ack": handoff_ack_allowed,
             "v2_read_context": verified_read_context,
             "v2_action_context": verified_action_context,
+            "v2_pending_choice": (
+                turn.pending_choice.model_dump(mode="json")
+                if turn.pending_choice is not None
+                else None
+            ),
         },
     )
     conversation.last_message_at = outbound_now

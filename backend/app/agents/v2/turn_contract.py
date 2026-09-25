@@ -48,6 +48,7 @@ TimeAmbiguity = Literal["none", "twelve_hour"]
 SelectionKind = Literal["index", "time", "ref"]
 EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
+FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
 
 
@@ -166,6 +167,17 @@ class Selection(StrictContractModel):
         return self
 
 
+class AppointmentSelector(StrictContractModel):
+    """Existing-appointment identity constraints, separate from replacement constraints."""
+
+    appointment: EntityReference | None = None
+    service: EntityReference | None = None
+    doctor: EntityReference | None = None
+    device: EntityReference | None = None
+    date: DateConstraint | None = None
+    time: TimeConstraint | None = None
+
+
 class TurnEntities(StrictContractModel):
     service: EntityReference | None = None
     doctor: EntityReference | None = None
@@ -222,6 +234,14 @@ class TurnOperation(StrictContractModel):
         )
     )
     entities: TurnEntities
+    source_appointment: AppointmentSelector | None = Field(
+        default=None,
+        description=(
+            "For appointment lifecycle operations only, identify the existing/source appointment. "
+            "Keep replacement date/time and requested replacement identities in entities. Never put "
+            "replacement date/time here."
+        ),
+    )
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
@@ -232,6 +252,15 @@ class TurnOperation(StrictContractModel):
             "offers, overage_price, and/or financial_ledger. financial_ledger is a semantic ownership "
             "marker for receptionist-owned money/payment facts about an owned Pulse pack; it never "
             "authorizes a financial read. Do not add unrelated Pulse data."
+        ),
+    )
+    financial_ownership: FinancialOwnership = Field(
+        default="none",
+        description=(
+            "Set reception when this operation asks about money already paid, balance still due, "
+            "payment/transaction status, checkout, or settlement for the customer's own account or "
+            "appointment. This is a semantic ownership marker only and never authorizes a financial "
+            "read or write. Service/package offer prices remain none."
         ),
     )
     # Required in provider schemas. The default preserves compatibility for direct

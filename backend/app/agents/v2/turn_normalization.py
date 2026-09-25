@@ -115,10 +115,20 @@ def _split_pulse_financial_ledger(
             "type": "pulse_info",
             "requested_service_details": [],
             "requested_pulse_details": safe_details,
+            "financial_ownership": "none",
             "execution_intent": "informational",
         }
     )
     return safe_operation, True
+
+
+def _split_generic_financial_ownership(
+    operation: TurnOperation | None,
+) -> tuple[TurnOperation | None, bool]:
+    """Convert the model's typed receptionist-owned financial marker into a safe handoff."""
+    if operation is None or operation.financial_ownership != "reception":
+        return operation, False
+    return None, True
 
 
 def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
@@ -132,6 +142,8 @@ def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUndersta
         normalized = _normalize_doctor_set_booking_comparison(normalized)
         normalized, needs_handoff = _split_pulse_financial_ledger(normalized)
         requires_financial_handoff = requires_financial_handoff or needs_handoff
+        normalized, needs_handoff = _split_generic_financial_ownership(normalized)
+        requires_financial_handoff = requires_financial_handoff or needs_handoff
         if normalized is not None:
             operations.append(normalized)
 
@@ -140,6 +152,7 @@ def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUndersta
             TurnOperation(
                 type="human_support",
                 entities=TurnEntities(),
+                financial_ownership="reception",
                 execution_intent="informational",
             )
         )
@@ -154,7 +167,11 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
     return (
         operation.type,
         operation.execution_intent,
+        operation.financial_ownership,
         operation.continues_previous,
+        operation.source_appointment.model_dump_json()
+        if operation.source_appointment is not None
+        else None,
         _entity_identity(entities.service),
         _entity_identity(entities.doctor),
         _entity_identity(entities.device),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -56,7 +56,7 @@ from app.services.agent_v2.read_executor import (
     ReadExecutionContext,
     execute_step_reads,
 )
-from app.services.agent_v2.state import ActiveTaskState
+from app.services.agent_v2.state import ActiveTaskState, OptionChoice, OptionSnapshot
 from app.services.agent_v2.state_executor import (
     apply_step_state,
     finalize_step_after_state_transition,
@@ -106,10 +106,99 @@ class V2OrchestratedTurn:
     persisted_task: PersistedActiveTask | None
     pending_write: PendingV2Write | None
     verified_action_context: dict[str, object] | None = None
+    pending_choice: OptionSnapshot | None = None
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
     return active_task.model_dump(mode="json") if active_task is not None else None
+
+
+def _pending_choice_from_context(
+    value: dict[str, Any] | None,
+    *,
+    now: datetime,
+) -> OptionSnapshot | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        snapshot = OptionSnapshot.model_validate(value)
+    except ValueError:
+        return None
+    if now >= snapshot.expires_at:
+        return None
+    if snapshot.purpose not in {"appointment", "appointment_target"}:
+        return None
+    return snapshot
+
+
+def _appointment_choice_snapshot(
+    *,
+    step: PlanStep,
+    outcome: TurnOutcome,
+    now: datetime,
+    turn_id: str,
+) -> OptionSnapshot | None:
+    if (
+        step.response_goal != "ask_appointment_choice"
+        or step.operation_type not in {"cancel_appointment", "confirm_appointment", "reschedule"}
+    ):
+        return None
+    choices: list[OptionChoice] = []
+    for choice in outcome.choices:
+        appointment_id = choice.facts.get("appointment_id")
+        if appointment_id in (None, ""):
+            continue
+        choices.append(
+            OptionChoice(
+                ref=choice.ref,
+                label=choice.label,
+                payload={"appointment_id": str(appointment_id)},
+            )
+        )
+    if not choices:
+        return None
+    return OptionSnapshot(
+        snapshot_id=f"{turn_id}:{step.operation_index}:appointment-choice",
+        purpose="appointment",
+        lifecycle_action=step.operation_type,
+        task_version=1,
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+        options=choices,
+    )
+
+
+def _selected_appointment_snapshot(
+    *,
+    step: PlanStep,
+    now: datetime,
+    turn_id: str,
+) -> OptionSnapshot | None:
+    if step.operation_type != "select_active":
+        return None
+    action = step.facts.get("lifecycle_action")
+    selected = step.facts.get("selected_option")
+    if action not in {"cancel_appointment", "confirm_appointment", "reschedule"}:
+        return None
+    if not isinstance(selected, dict):
+        return None
+    payload = selected.get("payload")
+    if not isinstance(payload, dict) or payload.get("appointment_id") in (None, ""):
+        return None
+    choice = OptionChoice(
+        ref=str(selected.get("ref") or "appointment-target"),
+        label=str(selected.get("label")) if selected.get("label") not in (None, "") else None,
+        payload={"appointment_id": str(payload["appointment_id"])},
+    )
+    return OptionSnapshot(
+        snapshot_id=f"{turn_id}:{step.operation_index}:appointment-target",
+        purpose="appointment_target",
+        lifecycle_action=action,
+        task_version=1,
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+        options=[choice],
+    )
 
 
 def _operation_for_step(
@@ -366,6 +455,14 @@ def _terminal_handoff_plan(plan: TurnPlan) -> bool:
     )
 
 
+def _preserve_active_task_on_handoff(plan: TurnPlan) -> bool:
+    return any(
+        step.disposition == "handoff"
+        and step.facts.get("preserve_active_task") is True
+        for step in plan.steps
+    )
+
+
 def _persist_final_task(
     *,
     db: Session,
@@ -438,6 +535,7 @@ def orchestrate_v2_turn(
     write_executor: V2WriteExecutor | None = None,
     recent_read_context: dict[str, Any] | None = None,
     recent_action_context: dict[str, Any] | None = None,
+    pending_choice_context: dict[str, Any] | None = None,
 ) -> V2OrchestratedTurn:
     """Run one stateful V2 turn with an optional verified-write executor.
 
@@ -454,12 +552,21 @@ def orchestrate_v2_turn(
         run_id=run_id,
     )
     initial_task = persisted.active_task if persisted is not None else None
+    pending_choice = _pending_choice_from_context(
+        pending_choice_context,
+        now=local_now,
+    )
 
     canonical_catalog = catalog or build_clinic_catalog(db, workspace)
     semantic_context: SemanticContext = build_semantic_context(canonical_catalog)
+    task_context_kwargs: dict[str, Any] = {
+        "active_task": _task_dict(initial_task),
+    }
+    if pending_choice is not None:
+        task_context_kwargs["pending_choice"] = pending_choice.model_dump(mode="json")
     semantic_context = with_safe_task_context(
         semantic_context,
-        active_task=_task_dict(initial_task),
+        **task_context_kwargs,
     )
     semantic_context = with_safe_read_context(
         semantic_context,
@@ -482,6 +589,7 @@ def orchestrate_v2_turn(
             semantic_context=semantic_context,
             active_task=initial_task,
             now=local_now,
+            pending_choice=pending_choice,
         ),
     )
     plan = normalize_compound_turn_plan(
@@ -498,7 +606,8 @@ def orchestrate_v2_turn(
 
     if _terminal_handoff_plan(plan):
         outcome = build_handoff_outcome(plan)
-        if persisted is not None:
+        preserve_active_task = _preserve_active_task_on_handoff(plan)
+        if persisted is not None and not preserve_active_task:
             cancel_active_task(
                 db,
                 workspace_id=workspace.id,
@@ -522,8 +631,8 @@ def orchestrate_v2_turn(
             outcomes=(outcome,),
             reply=reply,
             responder_model=model,
-            active_task=None,
-            persisted_task=None,
+            active_task=initial_task if preserve_active_task else None,
+            persisted_task=persisted if preserve_active_task else None,
             pending_write=None,
         )
 
@@ -549,6 +658,7 @@ def orchestrate_v2_turn(
     traces: list[V2RuntimeStepTrace] = []
     outcomes: list[TurnOutcome] = []
     pending_write: PendingV2Write | None = None
+    outgoing_pending_choice: OptionSnapshot | None = None
     cancelled_existing_task = False
     completed_existing_task_result: dict[str, object] | None = None
     completed_action_context: dict[str, object] | None = None
@@ -769,7 +879,20 @@ def orchestrate_v2_turn(
             )
         )
         outcomes.append(outcome)
+        selected_snapshot = _selected_appointment_snapshot(
+            step=advanced,
+            now=local_now,
+            turn_id=resolved_turn_id,
+        )
+        choice_snapshot = _appointment_choice_snapshot(
+            step=advanced,
+            outcome=outcome,
+            now=local_now,
+            turn_id=resolved_turn_id,
+        )
+        outgoing_pending_choice = selected_snapshot or choice_snapshot or outgoing_pending_choice
         if outcome.status == "handoff":
+            outgoing_pending_choice = None
             if current_task is not None:
                 cancelled_existing_task = persisted is not None
                 current_task = None
@@ -805,6 +928,7 @@ def orchestrate_v2_turn(
             active_task=current_task,
             persisted_task=persisted_after,
             pending_write=pending_write,
+            pending_choice=outgoing_pending_choice,
         )
 
     if not outcomes:
@@ -828,4 +952,5 @@ def orchestrate_v2_turn(
         persisted_task=persisted_after,
         pending_write=None,
         verified_action_context=completed_action_context,
+        pending_choice=outgoing_pending_choice,
     )
