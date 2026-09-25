@@ -7,6 +7,7 @@ from tools.agent_eval.run_batch_03 import CASES, _stage_metrics, db_delta
 def test_batch_03_has_22_ordered_scenarios() -> None:
     names = [case.__name__ for case in CASES]
     assert len(names) == 22
+    assert len(set(names)) == len(names)
     assert names[:4] == [
         "case_01_handoff_during_active_booking",
         "case_02_staff_takeover_then_handback",
