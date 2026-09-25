@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tag")
     parser.add_argument(
         "--profile",
-        default="full",
+        default="quick",
         choices=("quick", "full", "failed-only"),
     )
     parser.add_argument("--rerun-failed")

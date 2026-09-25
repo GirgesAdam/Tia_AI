@@ -89,6 +89,13 @@ def test_quick_profile_needs_no_runtime_config(capsys) -> None:
     assert "no DB or LLM execution" in output
 
 
+def test_default_profile_is_safe_quick(capsys) -> None:
+    assert main(["--batch", "batch_03"]) == 0
+    output = capsys.readouterr().out
+    assert "Selected scenarios: 22" in output
+    assert "no DB or LLM execution" in output
+
+
 def test_legacy_batch_entrypoints_remain_present() -> None:
     root = Path(__file__).resolve().parents[1]
     for name in ("run_batch_01.py", "run_batch_02.py", "run_batch_03.py"):
