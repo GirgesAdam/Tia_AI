@@ -48,7 +48,6 @@ from app.services.agent_v2.planner import (
     PlannerContext,
     PlanStep,
     TurnPlan,
-    advance_step_after_verification,
     plan_turn,
 )
 from app.services.agent_v2.read_executor import (
@@ -69,6 +68,7 @@ from app.services.agent_v2.state_persistence import (
     save_active_task,
 )
 from app.services.agent_v2.turn_normalization import expand_multi_service_operations
+from app.services.agent_v2.write_policy import advance_step_with_write_policies
 
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
 
@@ -216,7 +216,7 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
         return step
     if step.write_intent is None and step.state_action != "start_reschedule":
         return step
-    return advance_step_after_verification(step, reads.verification)
+    return advance_step_with_write_policies(step, reads)
 
 
 def _verified_no_availability(reads: ReadExecutionBundle | None) -> bool:
