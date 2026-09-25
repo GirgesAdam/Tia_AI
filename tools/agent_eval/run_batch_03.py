@@ -2887,24 +2887,6 @@ def main() -> int:
         md_path,
     )
 
-    encoded = base64.b64encode(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            default=str,
-        ).encode("utf-8")
-    ).decode("ascii")
-    print("EVAL_REPORT_B64_BEGIN", flush=True)
-    for offset in range(
-        0,
-        len(encoded),
-        3000,
-    ):
-        print(
-            f"EVAL_REPORT_B64={encoded[offset : offset + 3000]}",
-            flush=True,
-        )
-    print("EVAL_REPORT_B64_END", flush=True)
     for row in payload["scenario_results"]:
         compact = {
             "id": row["id"],
@@ -2946,6 +2928,26 @@ def main() -> int:
             + json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
             flush=True,
         )
+    print("EVAL_COMPACT_END", flush=True)
+
+    encoded = base64.b64encode(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+    ).decode("ascii")
+    print("EVAL_REPORT_B64_BEGIN", flush=True)
+    for offset in range(
+        0,
+        len(encoded),
+        3000,
+    ):
+        print(
+            f"EVAL_REPORT_B64={encoded[offset : offset + 3000]}",
+            flush=True,
+        )
+    print("EVAL_REPORT_B64_END", flush=True)
     print(f"JSON_RESULT={json_path}")
     print(f"MD_RESULT={md_path}")
     print(f"SCENARIOS_RUN={len(results)}")
