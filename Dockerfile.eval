@@ -16,6 +16,7 @@ RUN python -m pip install --upgrade pip \
 COPY backend/alembic.ini /app/backend/alembic.ini
 COPY backend/alembic /app/backend/alembic
 COPY backend/app /app/backend/app
+COPY backend/tests /app/backend/tests
 COPY tools/agent_eval /app/tools/agent_eval
 
 RUN mkdir -p /app/backend/eval_results \
