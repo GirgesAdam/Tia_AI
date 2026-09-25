@@ -198,7 +198,12 @@ def _verified_read_context_from_turn(
 def _verified_action_context_from_turn(
     turn: V2OrchestratedTurn,
 ) -> dict[str, Any] | None:
-    """Persist only minimal facts from the last verified completed Pulse-pack purchase."""
+    """Persist only minimal canonical facts from the immediately completed action."""
+    direct = getattr(turn, "verified_action_context", None)
+    if isinstance(direct, dict) and direct:
+        return dict(direct)
+
+    # Backward-compatible fallback for older/in-memory turn objects used by tests.
     for trace in reversed(turn.traces):
         outcome = trace.outcome
         if (

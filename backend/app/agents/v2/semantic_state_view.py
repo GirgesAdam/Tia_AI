@@ -192,10 +192,34 @@ def verified_action_semantic_view(
     if not isinstance(action_context, dict):
         return {}
     operation_type = action_context.get("operation_type")
-    if operation_type != "buy_pulse_pack":
+    if operation_type not in {"buy_pulse_pack", "book", "cancel_appointment"}:
         return {}
+
     safe: dict[str, object] = {"operation_type": operation_type}
+    if action_context.get("status") not in (None, ""):
+        safe["status"] = action_context["status"]
+
+    if operation_type == "cancel_appointment":
+        appointment_ref = _entity_ref(
+            action_context.get("appointment_id"),
+            kind="appointment",
+            context=context,
+        )
+        if appointment_ref is not None:
+            safe["appointment_ref"] = appointment_ref
+        return safe
+
     safe.update(_safe_constraints(action_context, context))
+    if operation_type == "book":
+        appointment_ref = _entity_ref(
+            action_context.get("appointment_id"),
+            kind="appointment",
+            context=context,
+        )
+        if appointment_ref is not None:
+            safe["appointment_ref"] = appointment_ref
+        if action_context.get("start_at") not in (None, ""):
+            safe["start_at"] = action_context["start_at"]
     return safe
 
 

@@ -188,3 +188,55 @@ def test_legacy_pulse_usage_is_not_exposed_to_the_model() -> None:
 
     assert "pulse_usage" not in payload
     assert "use_existing" not in payload
+
+
+def test_verified_booking_action_view_uses_only_ephemeral_refs() -> None:
+    context = _context()
+    safe = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": APPOINTMENT_ID,
+            "service_id": SERVICE_ID,
+            "doctor_id": DOCTOR_ID,
+            "device_key": "candela_gentle",
+            "start_at": "2026-09-17T16:00:00+00:00",
+            "status": "confirmed",
+            "date": {"mode": "exact", "start_date": "2026-09-17"},
+            "time": {"mode": "exact", "start_time": "19:00"},
+            "package_usage": "unspecified",
+        },
+    )
+
+    recent = safe.model_input["recent_verified_action"]
+    assert recent["operation_type"] == "book"
+    assert recent["appointment_ref"] == "A1"
+    assert recent["service_ref"] == "S1"
+    assert recent["doctor_ref"] == "D1"
+    assert recent["device_ref"] == "V1"
+    assert recent["status"] == "confirmed"
+    encoded = json.dumps(recent, ensure_ascii=False, default=str)
+    assert SERVICE_ID not in encoded
+    assert DOCTOR_ID not in encoded
+    assert APPOINTMENT_ID not in encoded
+    assert "candela_gentle" not in encoded
+
+
+def test_verified_cancellation_action_view_hides_canonical_appointment_id() -> None:
+    context = _context()
+    safe = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "cancel_appointment",
+            "appointment_id": APPOINTMENT_ID,
+            "status": "cancelled",
+        },
+    )
+
+    recent = safe.model_input["recent_verified_action"]
+    assert recent == {
+        "operation_type": "cancel_appointment",
+        "status": "cancelled",
+        "appointment_ref": "A1",
+    }
+    assert APPOINTMENT_ID not in json.dumps(recent, ensure_ascii=False)

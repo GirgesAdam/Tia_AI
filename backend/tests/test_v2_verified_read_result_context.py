@@ -126,3 +126,38 @@ def test_failed_pulse_purchase_does_not_produce_verified_action_context() -> Non
     )
 
     assert _verified_action_context_from_turn(turn) is None
+
+
+def test_direct_verified_booking_action_context_is_preserved_for_next_turn() -> None:
+    context = {
+        "operation_type": "book",
+        "appointment_id": "appointment-1",
+        "service_id": "service-1",
+        "doctor_id": "doctor-1",
+        "device_key": "candela_gentle",
+        "start_at": "2026-09-25T11:00:00+00:00",
+        "status": "confirmed",
+        "package_usage": "unspecified",
+    }
+    turn = SimpleNamespace(
+        verified_action_context=context,
+        traces=(),
+        plan=SimpleNamespace(steps=()),
+    )
+
+    assert _verified_action_context_from_turn(turn) == context
+
+
+def test_direct_verified_cancellation_action_context_is_preserved_for_next_turn() -> None:
+    context = {
+        "operation_type": "cancel_appointment",
+        "appointment_id": "appointment-1",
+        "status": "cancelled",
+    }
+    turn = SimpleNamespace(
+        verified_action_context=context,
+        traces=(),
+        plan=SimpleNamespace(steps=()),
+    )
+
+    assert _verified_action_context_from_turn(turn) == context
