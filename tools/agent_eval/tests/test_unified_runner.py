@@ -12,10 +12,11 @@ from tools.agent_eval.reporting import summary_from_rows
 from tools.agent_eval.run import main
 
 
-def test_registry_loads_all_three_batches() -> None:
+def test_registry_loads_all_batches() -> None:
     assert len(scenarios_for_batch("batch_01")) == 15
     assert len(scenarios_for_batch("batch_02")) == 24
     assert len(scenarios_for_batch("batch_03")) == 22
+    assert len(scenarios_for_batch("batch_04")) == 17
 
 
 def test_batch_and_scenario_filtering() -> None:
@@ -98,7 +99,7 @@ def test_default_profile_is_safe_quick(capsys) -> None:
 
 def test_legacy_batch_entrypoints_remain_present() -> None:
     root = Path(__file__).resolve().parents[1]
-    for name in ("run_batch_01.py", "run_batch_02.py", "run_batch_03.py"):
+    for name in ("run_batch_01.py", "run_batch_02.py", "run_batch_03.py", "run_batch_04.py"):
         source = (root / name).read_text(encoding="utf-8")
         assert "def main()" in source
         assert "CASES" in source

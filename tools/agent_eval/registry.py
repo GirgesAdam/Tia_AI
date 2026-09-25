@@ -11,6 +11,7 @@ _BATCH_MODULES = {
     "batch_01": "tools.agent_eval.run_batch_01",
     "batch_02": "tools.agent_eval.run_batch_02",
     "batch_03": "tools.agent_eval.run_batch_03",
+    "batch_04": "tools.agent_eval.run_batch_04",
 }
 
 _BATCH1 = (
@@ -60,6 +61,26 @@ _BATCH3_NAMES = (
     "case_21_repeated_corrections", "case_22_abandon_then_different_booking",
 )
 
+_BATCH4_NAMES = (
+    "case_01_book_then_modify_after_gap",
+    "case_02_cancel_after_long_gap",
+    "case_03_completed_appointment_not_actionable",
+    "case_04_financial_handoff_then_return_later",
+    "case_05_reception_modifies_then_handback",
+    "case_06_multiple_messages_while_human_owns",
+    "case_07_package_reschedule_cancel_chain",
+    "case_08_package_then_nonpackage_service",
+    "case_09_exhausted_package_after_gap",
+    "case_10_two_appointments_one_package",
+    "case_11_cancel_one_then_modify_other",
+    "case_12_same_service_different_dates_devices",
+    "case_13_price_availability_existing_package",
+    "case_14_change_service_after_availability",
+    "case_15_incremental_doctor_date_service_corrections",
+    "case_16_repeat_reschedule_confirmation",
+    "case_17_repeat_package_booking_confirmation",
+)
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -100,8 +121,12 @@ def _tags(value: str) -> tuple[str, ...]:
 def _rows_for(batch: BatchName) -> list[tuple[str, str]]:
     if batch == "batch_01":
         return list(_BATCH1)
-    names = _BATCH2_NAMES if batch == "batch_02" else _BATCH3_NAMES
-    prefix = "b2" if batch == "batch_02" else "b3"
+    if batch == "batch_02":
+        names, prefix = _BATCH2_NAMES, "b2"
+    elif batch == "batch_03":
+        names, prefix = _BATCH3_NAMES, "b3"
+    else:
+        names, prefix = _BATCH4_NAMES, "b4"
     return [
         (name, f"{prefix}_{name.removeprefix('case_')}")
         for name in names
