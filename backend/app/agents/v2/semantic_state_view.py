@@ -91,6 +91,9 @@ def _safe_option_snapshot(
     purpose = value.get("purpose")
     if purpose not in (None, ""):
         safe["purpose"] = purpose
+    lifecycle_action = value.get("lifecycle_action")
+    if lifecycle_action in {"cancel_appointment", "confirm_appointment", "reschedule"}:
+        safe["lifecycle_action"] = lifecycle_action
     raw_options = value.get("options")
     if not isinstance(raw_options, list):
         return safe
@@ -113,6 +116,13 @@ def _safe_option_snapshot(
             ):
                 if payload.get(key) not in (None, ""):
                     option[key] = payload.get(key)
+            appointment_ref = _entity_ref(
+                payload.get("appointment_id"),
+                kind="appointment",
+                context=context,
+            )
+            if appointment_ref is not None:
+                option["appointment_ref"] = appointment_ref
             device_ref = _entity_ref(
                 payload.get("device_key") or payload.get("laser_device_key"),
                 kind="device",
