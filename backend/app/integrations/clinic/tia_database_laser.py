@@ -21,8 +21,14 @@ from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.service import Service
 from app.models.staff import Staff
-from app.services.booking import BookingRuleError, calculate_availability, find_exact_slot
+from app.services.booking import (
+    BookingCompatibilityError,
+    BookingRuleError,
+    calculate_availability,
+    find_exact_slot,
+)
 from app.services.inventory import (
+    DeviceServiceCompatibilityError,
     InventoryOperationError,
     configured_device_price,
     list_laser_device_prices,
@@ -84,6 +90,8 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
                 service_id=service_id,
                 device_key=device_key,
             )
+        except DeviceServiceCompatibilityError as exc:
+            raise BookingCompatibilityError(str(exc), dimension="device") from exc
         except InventoryOperationError as exc:
             raise BookingRuleError(str(exc)) from exc
 

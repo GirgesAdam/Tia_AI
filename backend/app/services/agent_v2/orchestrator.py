@@ -220,6 +220,42 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
     return advance_step_with_write_policies(step, reads)
 
 
+def _compatibility_failure_step(
+    step: PlanStep,
+    reads: ReadExecutionBundle,
+) -> PlanStep | None:
+    """Turn a canonically proven compatibility read failure into safe continuation."""
+    for result in reads.results:
+        if result.kind != "availability" or result.ok:
+            continue
+        failure = result.payload.get("compatibility_failure")
+        if not isinstance(failure, dict):
+            continue
+        dimension = failure.get("dimension")
+        if dimension not in {"doctor", "device"}:
+            continue
+
+        facts = {
+            **step.facts,
+            "compatibility_failure": dict(failure),
+            "doctor_id" if dimension == "doctor" else "device_key": None,
+        }
+        state_action = step.state_action
+        if state_action == "none" and step.operation_type == "book":
+            state_action = "start_booking"
+        return step.model_copy(
+            update={
+                "disposition": "clarify",
+                "write_intent": None,
+                "state_action": state_action,
+                "response_goal": "clarification",
+                "clarification_field": str(dimension),
+                "facts": facts,
+            }
+        )
+    return None
+
+
 def _verified_no_availability(reads: ReadExecutionBundle | None) -> bool:
     """True only for a successful availability read that canonically found zero options."""
     if reads is None:
@@ -851,12 +887,24 @@ def orchestrate_v2_turn(
                 if effective_step.reads
                 else ReadExecutionBundle()
             )
-            compound_advanced, normal_reads, compound_handled = (
-                resolve_compound_followup_after_reads(
-                    effective_step,
-                    normal_reads,
-                )
+            compatibility_advanced = _compatibility_failure_step(
+                effective_step,
+                normal_reads,
             )
+            if compatibility_advanced is None:
+                compound_advanced, normal_reads, compound_handled = (
+                    resolve_compound_followup_after_reads(
+                        effective_step,
+                        normal_reads,
+                    )
+                )
+                advanced = (
+                    compound_advanced
+                    if compound_handled
+                    else _advance_after_reads(effective_step, normal_reads)
+                )
+            else:
+                advanced = compatibility_advanced
             reads = (
                 ReadExecutionBundle(
                     results=[*validation_reads.results, *normal_reads.results],
@@ -864,11 +912,6 @@ def orchestrate_v2_turn(
                 )
                 if validation_reads.results
                 else normal_reads
-            )
-            advanced = (
-                compound_advanced
-                if compound_handled
-                else _advance_after_reads(effective_step, normal_reads)
             )
 
         operation_reads[effective_step.operation_index] = reads

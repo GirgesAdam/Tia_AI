@@ -22,6 +22,7 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.services.agent_v2.planner import PlanStep, ReadKind, ReadRequest, VerificationFacts
+from app.services.booking import BookingCompatibilityError, BookingRuleError
 from app.services.clinic_knowledge_base import relevant_knowledge_context
 from app.services.package_offers import list_package_offers
 from app.services.package_refund_quotes import list_patient_package_refund_quotes
@@ -94,6 +95,67 @@ def _catalog_row(
         if row_id is not None and str(row_id) == target:
             return row
     return None
+
+
+def _availability_compatibility_failure(
+    error: BookingCompatibilityError,
+    *,
+    params: dict[str, object],
+    context: ReadExecutionContext,
+) -> ReadResult:
+    """Expose a typed canonical compatibility rejection without re-deriving the rule."""
+    catalog = _catalog(context)
+    service = _catalog_row(catalog, "services", params.get("service_id"))
+    service_name = (
+        str(service.get("name") or service.get("service_name"))
+        if service is not None and (service.get("name") or service.get("service_name"))
+        else "الخدمة"
+    )
+
+    if error.dimension == "doctor":
+        requested = _catalog_row(catalog, "doctors", params.get("doctor_id"))
+        if requested is None:
+            raise error
+        requested_name = (
+            str(requested.get("name") or requested.get("doctor_name"))
+            if requested.get("name") or requested.get("doctor_name")
+            else None
+        )
+    elif error.dimension == "device":
+        device_key = str(params.get("device_key") or "")
+        requested = next(
+            (
+                device
+                for row in _catalog_rows(catalog, "services")
+                for device in (row.get("laser_devices") or [])
+                if isinstance(device, dict)
+                and str(device.get("device_key")) == device_key
+            ),
+            None,
+        )
+        if requested is None:
+            raise error
+        requested_name = (
+            str(requested.get("device_name"))
+            if requested.get("device_name")
+            else device_key
+        )
+    else:
+        raise error
+
+    return ReadResult(
+        kind="availability",
+        ok=False,
+        error_code=f"{error.dimension}_service_incompatible",
+        payload={
+            "compatibility_failure": {
+                "dimension": error.dimension,
+                "service_name": service_name,
+                "requested_name": requested_name,
+                "compatible_options": [],
+            }
+        },
+    )
 
 
 def _explanatory_knowledge(context: ReadExecutionContext) -> str | None:
@@ -471,6 +533,73 @@ def _read_doctors(request: ReadRequest, context: ReadExecutionContext) -> ReadRe
     return ReadResult(kind=request.kind, ok=True, payload={"doctors": filtered})
 
 
+def _with_verified_compatibility_options(
+    result: ReadResult,
+    *,
+    params: dict[str, object],
+    context: ReadExecutionContext,
+    adapter: ClinicAdapter,
+    branch_id: str,
+    booking_date: date,
+    appointment_id: str | None,
+) -> ReadResult:
+    """Offer only alternatives returned by the canonical availability engine."""
+    failure = result.payload.get("compatibility_failure")
+    if not isinstance(failure, dict):
+        return result
+    dimension = failure.get("dimension")
+    if dimension not in {"doctor", "device"}:
+        return result
+
+    try:
+        availability = adapter.get_availability(
+            AvailabilityRequest(
+                branch_id=branch_id,
+                service_id=str(params["service_id"]),
+                booking_date=booking_date,
+                doctor_id=(
+                    None
+                    if dimension == "doctor"
+                    else str(params["doctor_id"])
+                    if params.get("doctor_id")
+                    else None
+                ),
+                exclude_appointment_id=(
+                    appointment_id if params.get("reschedule") else None
+                ),
+                now=context.now,
+                laser_device_key=(
+                    None
+                    if dimension == "device"
+                    else str(params["device_key"])
+                    if params.get("device_key")
+                    else None
+                ),
+            )
+        )
+    except BookingRuleError:
+        return result
+
+    labels: list[str] = []
+    for slot in availability.slots:
+        if not _slot_matches_time(
+            slot,
+            timezone_name=availability.timezone,
+            constraint=params.get("time"),
+        ):
+            continue
+        label = slot.doctor_name if dimension == "doctor" else slot.laser_device_name
+        if label and label not in labels:
+            labels.append(label)
+
+    payload = dict(result.payload)
+    payload["compatibility_failure"] = {
+        **failure,
+        "compatible_options": labels,
+    }
+    return result.model_copy(update={"payload": payload})
+
+
 def _read_availability(
     request: ReadRequest,
     context: ReadExecutionContext,
@@ -509,17 +638,42 @@ def _read_availability(
         checked_dates.append(booking_date.isoformat())
         date_matches: list[dict[str, object]] = []
         for requested_doctor in requested_doctors:
-            availability = adapter.get_availability(
-                AvailabilityRequest(
-                    branch_id=branch_id,
-                    service_id=str(service_id),
-                    booking_date=booking_date,
-                    doctor_id=requested_doctor,
-                    exclude_appointment_id=appointment_id if params.get("reschedule") else None,
-                    now=context.now,
-                    laser_device_key=device_key,
+            try:
+                availability = adapter.get_availability(
+                    AvailabilityRequest(
+                        branch_id=branch_id,
+                        service_id=str(service_id),
+                        booking_date=booking_date,
+                        doctor_id=requested_doctor,
+                        exclude_appointment_id=appointment_id if params.get("reschedule") else None,
+                        now=context.now,
+                        laser_device_key=device_key,
+                    )
                 )
-            )
+            except BookingCompatibilityError as exc:
+                failure = _availability_compatibility_failure(
+                    exc,
+                    params={
+                        **params,
+                        "doctor_id": requested_doctor,
+                        "device_key": device_key,
+                    },
+                    context=context,
+                )
+                failure = _with_verified_compatibility_options(
+                    failure,
+                    params={
+                        **params,
+                        "doctor_id": requested_doctor,
+                        "device_key": device_key,
+                    },
+                    context=context,
+                    adapter=adapter,
+                    branch_id=branch_id,
+                    booking_date=booking_date,
+                    appointment_id=appointment_id,
+                )
+                return failure, VerificationFacts()
             if not service_meta:
                 service_meta = {
                     "service_id": availability.service_id,

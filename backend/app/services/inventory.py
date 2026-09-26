@@ -32,6 +32,10 @@ class InventoryNotFound(InventoryOperationError):
     pass
 
 
+class DeviceServiceCompatibilityError(InventoryOperationError):
+    """A known laser device is not configured for the requested service."""
+
+
 def is_laser_service(service: Service) -> bool:
     """Use the explicit service capability flag, never the display name, as truth."""
     return bool(getattr(service, "requires_laser_device", False))
@@ -180,7 +184,7 @@ def configured_device_price(
         )
     )
     if row is None or row.price_minor is None or row.duration_minutes is None:
-        raise InventoryOperationError(
+        raise DeviceServiceCompatibilityError(
             f"Price and duration for {LASER_DEVICE_NAMES[device_key]} are not configured "
             "for this laser service."
         )
