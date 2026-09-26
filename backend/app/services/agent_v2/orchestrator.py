@@ -47,6 +47,7 @@ from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_s
 from app.services.agent_v2.planner import (
     PlannerContext,
     PlanStep,
+    ReadRequest,
     TurnPlan,
     plan_turn,
 )
@@ -410,6 +411,96 @@ def _acknowledgment_facts(action: str, *, same_booking: bool = False) -> dict[st
     }
 
 
+def _recent_booking_validation_request(
+    step: PlanStep,
+    recent_action: dict[str, object] | None,
+    *,
+    timezone_name: str,
+) -> ReadRequest | None:
+    """Return the targeted canonical read required before a duplicate-booking ack."""
+    if not isinstance(recent_action, dict):
+        return None
+    if not _same_recent_booking(step, recent_action, timezone_name=timezone_name):
+        return None
+    appointment_id = recent_action.get("appointment_id")
+    if appointment_id in (None, ""):
+        return None
+    return ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": str(appointment_id)},
+    )
+
+
+def _canonical_recent_booking_is_current(
+    recent_action: dict[str, object] | None,
+    reads: ReadExecutionBundle,
+) -> bool:
+    """Require the recent booking to still match canonical active appointment truth."""
+    if not isinstance(recent_action, dict):
+        return False
+    appointment_id = recent_action.get("appointment_id")
+    if appointment_id in (None, "") or reads.verification.appointment_match_count != 1:
+        return False
+
+    def same_value(current: object, expected: object) -> bool:
+        if expected in (None, ""):
+            return current in (None, "")
+        return str(current) == str(expected)
+
+    for result in reads.results:
+        if result.kind != "appointments" or not result.ok:
+            continue
+        rows = result.payload.get("appointments")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("appointment_id")) != str(appointment_id):
+                continue
+            if row.get("status") not in {"pending", "confirmed"}:
+                return False
+            if not same_value(row.get("service_id"), recent_action.get("service_id")):
+                return False
+            if not same_value(row.get("doctor_id"), recent_action.get("doctor_id")):
+                return False
+            if not same_value(row.get("laser_device_key"), recent_action.get("device_key")):
+                return False
+            current_start = row.get("start_at")
+            recent_start = recent_action.get("start_at")
+            if not isinstance(current_start, str) or not isinstance(recent_start, str):
+                return False
+            try:
+                current_dt = datetime.fromisoformat(current_start)
+                recent_dt = datetime.fromisoformat(recent_start)
+            except ValueError:
+                return False
+            if (
+                current_dt.tzinfo is None
+                or current_dt.utcoffset() is None
+                or recent_dt.tzinfo is None
+                or recent_dt.utcoffset() is None
+                or current_dt != recent_dt
+            ):
+                return False
+            return True
+    return False
+
+
+def _booking_acknowledgment_step(step: PlanStep) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "social_ack",
+            "clarification_field": None,
+            "facts": _acknowledgment_facts("booking", same_booking=True),
+        }
+    )
+
+
 def _normalize_recent_action_acknowledgments(
     plan: TurnPlan,
     understanding: TiaTurnUnderstanding,
@@ -424,9 +515,10 @@ def _normalize_recent_action_acknowledgments(
     for step in plan.steps:
         operation = _operation_for_step(understanding, step)
         ack_facts: dict[str, object] | None = None
-        if _same_recent_booking(step, recent_action, timezone_name=timezone_name):
-            ack_facts = _acknowledgment_facts("booking", same_booking=True)
-        elif _bare_recent_cancellation(step, operation, recent_action):
+        # Booking acknowledgments are resolved later, after a targeted canonical
+        # appointment read. Recent action context is continuity evidence, not
+        # current lifecycle truth.
+        if _bare_recent_cancellation(step, operation, recent_action):
             ack_facts = _acknowledgment_facts("cancel_appointment")
         if ack_facts is None:
             normalized.append(step)
@@ -732,17 +824,54 @@ def orchestrate_v2_turn(
                     context=semantic_context,
                 )
 
-        reads = (
-            execute_step_reads(effective_step, read_context)
-            if effective_step.reads
-            else ReadExecutionBundle()
-        )
-        compound_advanced, reads, compound_handled = resolve_compound_followup_after_reads(
+        recent_booking_validation = _recent_booking_validation_request(
             effective_step,
-            reads,
+            recent_action_context,
+            timezone_name=timezone_name,
         )
+        validation_reads = ReadExecutionBundle()
+        if recent_booking_validation is not None:
+            validation_step = effective_step.model_copy(
+                update={"reads": [recent_booking_validation]}
+            )
+            validation_reads = execute_step_reads(validation_step, read_context)
+
+        if (
+            recent_booking_validation is not None
+            and _canonical_recent_booking_is_current(
+                recent_action_context,
+                validation_reads,
+            )
+        ):
+            reads = validation_reads
+            advanced = _booking_acknowledgment_step(effective_step)
+        else:
+            normal_reads = (
+                execute_step_reads(effective_step, read_context)
+                if effective_step.reads
+                else ReadExecutionBundle()
+            )
+            compound_advanced, normal_reads, compound_handled = (
+                resolve_compound_followup_after_reads(
+                    effective_step,
+                    normal_reads,
+                )
+            )
+            reads = (
+                ReadExecutionBundle(
+                    results=[*validation_reads.results, *normal_reads.results],
+                    verification=normal_reads.verification,
+                )
+                if validation_reads.results
+                else normal_reads
+            )
+            advanced = (
+                compound_advanced
+                if compound_handled
+                else _advance_after_reads(effective_step, normal_reads)
+            )
+
         operation_reads[effective_step.operation_index] = reads
-        advanced = compound_advanced if compound_handled else _advance_after_reads(effective_step, reads)
         transition = apply_step_state(
             current_task,
             step=advanced,
