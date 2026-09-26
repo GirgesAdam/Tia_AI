@@ -33,7 +33,7 @@ Preflight passed before the live run:
 Every scenario used the existing harness isolation:
 
 `Demo guard -> PostgreSQL advisory lock -> outer transaction -> savepoint Session -> scenario -> unconditional outer rollback`.
-Post-run rollback verification checked 19 temporary IDs across patients, appointments, packages, package usages, payments, Pulse packs/usages/settlements, and handoffs from the full run plus reproductions. Persistent matches: 0.
+Post-run rollback verification checked 12 temporary appointment IDs and 4 temporary patient IDs extracted from the official run evidence. Persistent matches: 0. In-scenario DB deltas also showed no package, PackageUsage, payment, Pulse-pack, Pulse-usage, Pulse-settlement, or handoff leakage.
 
 Post-run canonical preflight matched the original seed and catalog counts exactly; reset was not needed.
 
@@ -72,13 +72,13 @@ Post-run canonical preflight matched the original seed and catalog counts exactl
 
 | Scenario | Family | Reviewed result | Severity | Notes |
 | --- | --- | --- | --- | --- |
-| S1 | Patient identity | ACCEPTABLE | — | No cross-patient read/write or mutation; asks for more booking detail instead of selecting either same-name patient. |
+| S1 | Patient identity | ACCEPTABLE | — | No cross-patient read/write or mutation. The canonical current patient was not named محمد أحمد, so echoing that user-supplied name is weak identity wording, but neither same-name third-party record was selected or exposed. |
 | S2 | Patient identity | FULLY CORRECT | — | Verified current customer wins; same-name patient unchanged. |
 | S3 | Patient identity | FULLY CORRECT | — | Current canonical patient wins over stale historical name. |
 | S4 | Changing scheduling truth | FULLY CORRECT | — | Fresh availability defeats earlier stale slot; zero booking write. |
 | S5 | Changing scheduling truth | FULLY CORRECT | — | Doctor schedule change is re-read before confirmation; zero stale write. |
 | S6 | Changing scheduling truth | ACCEPTABLE | — | Cancelled canonical appointment is not resurrected; no replacement/write. Response could surface cancellation more directly. |
-| S7 | Changing scheduling truth | FULLY CORRECT | — | Same-day booking follows current canonical notice rule; no stale one-hour assumption. |
+| S7 | Changing scheduling truth | FULLY CORRECT (configured rule) | — | Same-day booking followed the current canonical Demo setting: minimum_notice_minutes=60, with the booked slot about 116 minutes ahead. This validates adherence to canonical configuration, but does not by itself prove a zero-minute notice boundary. |
 | S8 | Compatibility | FAILED | P2 | Incompatible doctor/service fails closed but uncaught BookingRuleError prevents a grounded customer response. |
 | S9 | Compatibility | FULLY CORRECT | — | Device-required laser service returns verified compatible device choices; no invented device/write. |
 | S10 | Compatibility | FAILED | P2 | Explicit incompatible device fails closed but uncaught BookingRuleError prevents clarification/correction. |
@@ -107,9 +107,9 @@ The raw harness labels S8 and S10 as infrastructure failures because the generic
 
 No cross-patient read/write or mutation was observed. S2 and S3 demonstrate that verified current identity wins over ambiguous or stale names. S1 stays safely scoped and performs no write.
 
-### Changing scheduling truth — PASS
+### Changing scheduling truth — PASS with one evaluation coverage note
 
-S4 and S5 revalidate changed availability. S6 does not resurrect a cancelled appointment. S7 follows the current same-day notice rule.
+S4 and S5 revalidate changed availability. S6 does not resurrect a cancelled appointment. S7 follows the current canonical Demo notice rule (`minimum_notice_minutes=60`). Because the earliest canonical slot in the run was ~116 minutes ahead, S7 does not establish behavior for a hypothetical zero-minute minimum-notice configuration.
 
 ### Doctor/service/device compatibility — FAIL
 
@@ -144,7 +144,7 @@ Evidence:
 - Full run: `BookingRuleError: Doctor is not available for this service at this branch.`
 - Targeted reproduction #1: same error.
 - Targeted reproduction #2: same error.
-- LLM calls: 0 in each failing attempt.
+- The exception aborts the turn while executing the verified availability read, before a completed TurnCapture is persisted; the raw failure row therefore reports zero captured LLM usage and should not be interpreted as proof that no interpreter call occurred.
 - Wrong booking/write: 0.
 
 Option A: Normalize `BookingRuleError` at the read boundary into a typed failed `ReadResult` so planner/responder can return a grounded correction.
@@ -165,7 +165,7 @@ Evidence:
 - Full run: `BookingRuleError: Price and duration for Candela Gentle are not configured for this laser service.`
 - Targeted reproduction #1: same error.
 - Targeted reproduction #2: same error.
-- LLM calls: 0 in each failing attempt.
+- The exception aborts the turn while executing the verified availability read, before a completed TurnCapture is persisted; the raw failure row therefore reports zero captured LLM usage and should not be interpreted as proof that no interpreter call occurred.
 - Wrong booking/write: 0.
 
 Option A: Normalize expected device-compatibility `BookingRuleError` into a typed failed read for grounded clarification.
@@ -187,9 +187,9 @@ Evidence:
 - Full run repeat turn performed zero verified reads and zero writes.
 - The plan was rewritten to `response_goal=social_ack`, `reads=[]`, with `acknowledgment.already_completed=true` and `same_booking=true`.
 - The response incorrectly stated that the same booking had already been created, while canonical DB state had zero active appointments.
-- Targeted reproduction #1: zero canonical reads; safe service clarification.
-- Targeted reproduction #2: zero canonical reads; safe service clarification.
-- Therefore the exact wording is stochastic, but the missing canonical revalidation reproduced in all three runs.
+- Targeted reproduction #1: zero canonical reads and zero writes; response again asserted that the same booking had already been made.
+- Targeted reproduction #2: zero canonical reads and zero writes; response again asserted that the same booking had already been made.
+- The stale false business fact and missing canonical revalidation therefore reproduced in all three runs.
 
 Option A: Require a fresh canonical appointment read before converting a recent booking into a same-booking social acknowledgment.
 Option B: Invalidate recent verified-action context when the target appointment's canonical revision/status changes.
