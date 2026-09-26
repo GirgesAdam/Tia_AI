@@ -56,7 +56,11 @@ def _execute_legacy(batch: str, scenarios, extra_args: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch", required=True, choices=("batch_01", "batch_02", "batch_03", "batch_04"))
+    parser.add_argument(
+        "--batch",
+        required=True,
+        choices=("batch_01", "batch_02", "batch_03", "batch_04", "batch_05"),
+    )
     parser.add_argument("--scenario")
     parser.add_argument("--tag")
     parser.add_argument(

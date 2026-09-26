@@ -12,6 +12,7 @@ _BATCH_MODULES = {
     "batch_02": "tools.agent_eval.run_batch_02",
     "batch_03": "tools.agent_eval.run_batch_03",
     "batch_04": "tools.agent_eval.run_batch_04",
+    "batch_05": "tools.agent_eval.run_batch_05",
 }
 
 _BATCH1 = (
@@ -81,6 +82,24 @@ _BATCH4_NAMES = (
     "case_17_repeat_package_booking_confirmation",
 )
 
+_BATCH5_NAMES = (
+    "case_01_same_name_different_patients",
+    "case_02_phone_beats_ambiguous_name",
+    "case_03_historical_name_not_current_identity",
+    "case_04_slot_becomes_unavailable",
+    "case_05_doctor_schedule_changes_between_turns",
+    "case_06_cancelled_externally_before_reschedule",
+    "case_07_same_day_current_time_boundary",
+    "case_08_doctor_does_not_offer_service",
+    "case_09_laser_requires_device",
+    "case_10_explicit_incompatible_device",
+    "case_11_doctor_change_invalidates_availability",
+    "case_12_duplicate_booking_after_external_change",
+    "case_13_repeat_cancel_after_external_change",
+    "case_14_availability_then_competing_laser_booking",
+    "case_15_two_rapid_customer_turns",
+)
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -125,8 +144,10 @@ def _rows_for(batch: BatchName) -> list[tuple[str, str]]:
         names, prefix = _BATCH2_NAMES, "b2"
     elif batch == "batch_03":
         names, prefix = _BATCH3_NAMES, "b3"
-    else:
+    elif batch == "batch_04":
         names, prefix = _BATCH4_NAMES, "b4"
+    else:
+        names, prefix = _BATCH5_NAMES, "b5"
     return [
         (name, f"{prefix}_{name.removeprefix('case_')}")
         for name in names
