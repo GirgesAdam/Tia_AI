@@ -744,3 +744,97 @@ def test_skipped_conditional_operation_does_not_drop_independent_followup(
     assert result.traces[1].skipped is True
     assert result.traces[2].operation_index == 2
     assert result.traces[2].skipped is False
+
+
+def test_doctor_compatibility_failure_preserves_booking_context_and_clears_doctor() -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        write_intent=WriteIntent(kind="booking", authorized=True, parameters={}),
+        state_action="none",
+        response_goal="present_availability",
+        facts={
+            "service_id": "service-1",
+            "doctor_id": "doctor-bad",
+            "date": {"mode": "exact", "start_date": "2026-09-30"},
+            "time": {"mode": "exact", "start_time": "14:00"},
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=False,
+                error_code="doctor_service_incompatible",
+                payload={
+                    "compatibility_failure": {
+                        "dimension": "doctor",
+                        "service_name": "Hydrafacial",
+                        "requested_name": "Doctor Bad",
+                        "compatible_options": ["Doctor Good"],
+                    }
+                },
+            )
+        ]
+    )
+
+    advanced = runtime._compatibility_failure_step(step, reads)
+
+    assert advanced is not None
+    assert advanced.disposition == "clarify"
+    assert advanced.clarification_field == "doctor"
+    assert advanced.state_action == "start_booking"
+    assert advanced.write_intent is None
+    assert advanced.facts["service_id"] == "service-1"
+    assert advanced.facts["date"] == {"mode": "exact", "start_date": "2026-09-30"}
+    assert advanced.facts["time"] == {"mode": "exact", "start_time": "14:00"}
+    assert advanced.facts["doctor_id"] is None
+
+
+def test_device_compatibility_failure_preserves_booking_context_and_clears_device() -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        write_intent=WriteIntent(kind="booking", authorized=True, parameters={}),
+        state_action="update_active",
+        response_goal="present_availability",
+        facts={
+            "service_id": "service-1",
+            "doctor_id": "doctor-1",
+            "device_key": "device-bad",
+            "date": {"mode": "exact", "start_date": "2026-09-30"},
+            "time": {"mode": "exact", "start_time": "14:00"},
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=False,
+                error_code="device_service_incompatible",
+                payload={
+                    "compatibility_failure": {
+                        "dimension": "device",
+                        "service_name": "Laser",
+                        "requested_name": "Device Bad",
+                        "compatible_options": ["Device Good"],
+                    }
+                },
+            )
+        ]
+    )
+
+    advanced = runtime._compatibility_failure_step(step, reads)
+
+    assert advanced is not None
+    assert advanced.disposition == "clarify"
+    assert advanced.clarification_field == "device"
+    assert advanced.state_action == "update_active"
+    assert advanced.write_intent is None
+    assert advanced.facts["service_id"] == "service-1"
+    assert advanced.facts["doctor_id"] == "doctor-1"
+    assert advanced.facts["device_key"] is None

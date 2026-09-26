@@ -298,6 +298,69 @@ def _verified_doctor_names(outcomes: list[TurnOutcome]) -> list[str]:
     return names
 
 
+def _deterministic_compatibility_reply(
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> str | None:
+    """Render canonical compatibility corrections without inventing availability."""
+    if len(outcomes) != 1:
+        return None
+    outcome = outcomes[0]
+    if outcome.status != "needs_input":
+        return None
+    failure = outcome.facts.get("compatibility_failure")
+    if not isinstance(failure, dict):
+        return None
+
+    dimension = failure.get("dimension")
+    if dimension not in {"doctor", "device"}:
+        return None
+    service_name = str(failure.get("service_name") or "الخدمة").strip()
+    requested_name = str(failure.get("requested_name") or "").strip()
+    raw_options = failure.get("compatible_options")
+    options = [
+        str(item).strip()
+        for item in raw_options
+        if str(item).strip()
+    ] if isinstance(raw_options, list) else []
+
+    arabic = _latest_customer_is_arabic(history)
+    if arabic:
+        subject = (
+            f"الدكتور {requested_name}" if dimension == "doctor" and requested_name
+            else f"الجهاز {requested_name}" if requested_name
+            else "الاختيار ده"
+        )
+        kind = "الدكاترة" if dimension == "doctor" else "الأجهزة"
+        if options:
+            return (
+                f"{subject} مش متوافق مع خدمة {service_name}. "
+                f"{kind} المتوافقين مع الخدمة: {'، '.join(options)}. "
+                f"اختاري {'دكتور' if dimension == 'doctor' else 'جهاز'} منهم عشان أكمل الحجز."
+            )
+        return (
+            f"{subject} مش متوافق مع خدمة {service_name}. "
+            "محتاجين نختار بديل متوافق قبل ما نكمل الحجز."
+        )
+
+    subject = (
+        f"Doctor {requested_name}" if dimension == "doctor" and requested_name
+        else f"Device {requested_name}" if requested_name
+        else "That selection"
+    )
+    kind = "doctors" if dimension == "doctor" else "devices"
+    if options:
+        return (
+            f"{subject} is not compatible with {service_name}. "
+            f"Compatible {kind} for this service: {', '.join(options)}. "
+            f"Choose one of them to continue the booking."
+        )
+    return (
+        f"{subject} is not compatible with {service_name}. "
+        "A compatible alternative is needed before the booking can continue."
+    )
+
+
 def _deterministic_pure_doctor_list_reply(
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
@@ -531,6 +594,10 @@ def compose_v2_customer_reply(
     deterministic_medical = _deterministic_medical_handoff_reply(history, outcomes)
     if deterministic_medical is not None:
         return deterministic_medical, "deterministic:medical-handoff"
+
+    deterministic_compatibility = _deterministic_compatibility_reply(history, outcomes)
+    if deterministic_compatibility is not None:
+        return deterministic_compatibility, "deterministic:compatibility"
 
     deterministic_doctors = _deterministic_pure_doctor_list_reply(history, outcomes)
     if deterministic_doctors is not None:

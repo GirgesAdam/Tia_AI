@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from app.integrations.clinic.base import (
     AppointmentReadResult,
     AppointmentRecord,
@@ -12,6 +14,7 @@ from app.integrations.clinic.base import (
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
+from app.services.booking import BookingCompatibilityError, BookingRuleError
 
 NOW = datetime(2026, 9, 11, 15, 0, tzinfo=UTC)
 WORKSPACE_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -72,6 +75,19 @@ def _catalog():
                 "name": "ليزر إبط",
                 "price_minor": 50000,
                 "currency": "EGP",
+                "doctor_ids": ["doctor-maryam"],
+                "laser_devices": [
+                    {
+                        "device_key": "candela_gentle",
+                        "device_name": "Candela Gentle",
+                        "configured": True,
+                    },
+                    {
+                        "device_key": "prime_lase",
+                        "device_name": "Prime Lase",
+                        "configured": False,
+                    },
+                ],
             }
         ],
         "doctors": [
@@ -428,3 +444,137 @@ def test_refund_quote_read_surfaces_unsafe_legacy_package(monkeypatch) -> None:
     assert bundle.results[0].ok is False
     assert bundle.results[0].error_code == "refund_quote_requires_staff"
     assert bundle.results[0].payload["unsafe_package_ids"] == [str(PACKAGE_ID)]
+
+
+def _compatibility_booking_step(*, doctor_id: str, device_key: str) -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="availability",
+                parameters={
+                    "service_id": str(SERVICE_ID),
+                    "doctor_id": doctor_id,
+                    "device_key": device_key,
+                    "date": {"mode": "exact", "start_date": "2026-09-17"},
+                    "time": {"mode": "exact", "start_time": "19:00"},
+                },
+            )
+        ],
+        write_intent=WriteIntent(kind="booking", authorized=True, parameters={}),
+        response_goal="present_availability",
+    )
+
+
+def test_known_incompatible_doctor_becomes_typed_failed_read() -> None:
+    def availability(request):
+        if request.doctor_id == "doctor-other":
+            raise BookingCompatibilityError(
+                "Doctor is not available for this service at this branch.",
+                dimension="doctor",
+            )
+        return _availability([_slot(doctor_id="doctor-maryam", start_hour_utc=16)])
+
+    adapter = FakeAdapter(availability=availability)
+    bundle = execute_step_reads(
+        _compatibility_booking_step(
+            doctor_id="doctor-other",
+            device_key="candela_gentle",
+        ),
+        _context(adapter),
+    )
+
+    result = bundle.results[0]
+    assert result.ok is False
+    assert result.error_code == "doctor_service_incompatible"
+    assert result.payload["compatibility_failure"] == {
+        "dimension": "doctor",
+        "service_name": "ليزر إبط",
+        "requested_name": "سارة",
+        "compatible_options": ["مريم"],
+    }
+
+
+def test_known_incompatible_device_becomes_typed_failed_read() -> None:
+    def availability(request):
+        if request.laser_device_key == "prime_lase":
+            raise BookingCompatibilityError(
+                "Price and duration for Prime Lase are not configured.",
+                dimension="device",
+            )
+        return _availability([_slot(doctor_id="doctor-maryam", start_hour_utc=16)])
+
+    adapter = FakeAdapter(availability=availability)
+    bundle = execute_step_reads(
+        _compatibility_booking_step(
+            doctor_id="doctor-maryam",
+            device_key="prime_lase",
+        ),
+        _context(adapter),
+    )
+
+    result = bundle.results[0]
+    assert result.ok is False
+    assert result.error_code == "device_service_incompatible"
+    assert result.payload["compatibility_failure"] == {
+        "dimension": "device",
+        "service_name": "ليزر إبط",
+        "requested_name": "Prime Lase",
+        "compatible_options": ["Candela Gentle"],
+    }
+
+
+def test_noncompatibility_booking_rule_error_still_raises() -> None:
+    adapter = FakeAdapter(
+        availability=lambda _request: (_ for _ in ()).throw(
+            BookingRuleError("Requested date is outside the booking horizon.")
+        )
+    )
+    with pytest.raises(BookingRuleError, match="outside the booking horizon"):
+        execute_step_reads(
+            _compatibility_booking_step(
+                doctor_id="doctor-maryam",
+                device_key="candela_gentle",
+            ),
+            _context(adapter),
+        )
+
+
+def test_unknown_doctor_is_not_reclassified_as_known_incompatibility() -> None:
+    adapter = FakeAdapter(
+        availability=lambda _request: (_ for _ in ()).throw(
+            BookingCompatibilityError(
+                "Doctor is not available for this service at this branch.",
+                dimension="doctor",
+            )
+        )
+    )
+    with pytest.raises(BookingCompatibilityError, match="Doctor is not available"):
+        execute_step_reads(
+            _compatibility_booking_step(
+                doctor_id="unknown-doctor",
+                device_key="candela_gentle",
+            ),
+            _context(adapter),
+        )
+
+
+def test_unknown_device_is_not_reclassified_as_known_incompatibility() -> None:
+    adapter = FakeAdapter(
+        availability=lambda _request: (_ for _ in ()).throw(
+            BookingCompatibilityError(
+                "Laser device is not configured.",
+                dimension="device",
+            )
+        )
+    )
+    with pytest.raises(BookingCompatibilityError, match="not configured"):
+        execute_step_reads(
+            _compatibility_booking_step(
+                doctor_id="doctor-maryam",
+                device_key="unknown-device",
+            ),
+            _context(adapter),
+        )

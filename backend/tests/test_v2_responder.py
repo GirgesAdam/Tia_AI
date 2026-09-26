@@ -426,3 +426,74 @@ def test_package_backed_booking_keeps_package_fact_and_scopes_pulse_guidance() -
     assert '"package_usage":"use_existing"' in outcome_payload
     assert "do not add Pulse" in system_prompt
     assert "another TURN_OUTCOME in this same turn explicitly carries a Pulse" in system_prompt
+
+
+def test_doctor_compatibility_reply_is_deterministic_and_does_not_claim_time_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM must not run")),
+    )
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "compatibility_failure": {
+                "dimension": "doctor",
+                "service_name": "PRP للبشرة",
+                "requested_name": "أحمد محمود",
+                "compatible_options": ["مها", "نور علي"],
+            }
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="احجزيلي مع أحمد محمود")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:compatibility"
+    assert "مش متوافق" in reply
+    assert "مها" in reply and "نور علي" in reply
+    assert "الساعة" not in reply
+    assert "متاحين يوم" not in reply
+
+
+def test_device_compatibility_reply_is_deterministic_and_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM must not run")),
+    )
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "compatibility_failure": {
+                "dimension": "device",
+                "service_name": "ليزر إزالة الشعر - إبط",
+                "requested_name": "Candela Gentle",
+                "compatible_options": ["Prime Lase"],
+            }
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="عايزاه على Candela Gentle")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:compatibility"
+    assert "مش متوافق" in reply
+    assert "Prime Lase" in reply
+    assert "اختاري جهاز" in reply

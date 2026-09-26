@@ -275,6 +275,14 @@ def _read_facts(
     selected_device_key: str | None = None,
 ) -> dict[str, object]:
     if result.kind == "availability":
+        compatibility_failure = result.payload.get("compatibility_failure")
+        if isinstance(compatibility_failure, dict):
+            visible = _visible_value(compatibility_failure)
+            return {
+                "compatibility_failure": (
+                    visible if isinstance(visible, dict) else {}
+                )
+            }
         return {"availability": _availability_facts(result)}
     if result.kind == "service_catalog":
         return {

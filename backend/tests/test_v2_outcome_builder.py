@@ -577,3 +577,59 @@ def test_single_configured_laser_device_can_supply_verified_price_without_extra_
         "price": "550.00 EGP",
     }
     assert "price" not in service
+
+
+def test_compatibility_failure_reaches_responder_as_grounded_visible_fact() -> None:
+    context = _semantic_context()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر إبط", ref="S1", candidate_refs=[]),
+            doctor=EntityReference(text="مريم", ref="D1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="clarify",
+        response_goal="clarification",
+        clarification_field="doctor",
+        facts={"service_id": "service-1", "doctor_id": None},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=False,
+                error_code="doctor_service_incompatible",
+                payload={
+                    "compatibility_failure": {
+                        "dimension": "doctor",
+                        "service_name": "ليزر إبط",
+                        "requested_name": "مريم",
+                        "compatible_options": ["سارة"],
+                        "candidate_ids": ["doctor-2"],
+                    }
+                },
+            )
+        ]
+    )
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=context,
+        reads=reads,
+    )
+    visible = customer_visible_outcome(outcome)
+
+    assert outcome.status == "needs_input"
+    assert outcome.response_goal == "clarification"
+    assert visible["facts"]["compatibility_failure"] == {
+        "dimension": "doctor",
+        "service_name": "ليزر إبط",
+        "requested_name": "مريم",
+        "compatible_options": ["سارة"],
+    }
+    assert "doctor-2" not in str(visible)

@@ -29,6 +29,14 @@ class BookingRuleError(ValueError):
     pass
 
 
+class BookingCompatibilityError(BookingRuleError):
+    """Canonical booking rejection caused by an incompatible grounded selection."""
+
+    def __init__(self, message: str, *, dimension: str) -> None:
+        super().__init__(message)
+        self.dimension = dimension
+
+
 @dataclass(frozen=True)
 class EffectiveBookingSettings:
     slot_interval_minutes: int = 15
@@ -293,7 +301,10 @@ def calculate_availability(
 
     assignments = list(db.execute(assignment_stmt).all())
     if doctor_id is not None and not assignments:
-        raise BookingRuleError("Doctor is not available for this service at this branch.")
+        raise BookingCompatibilityError(
+            "Doctor is not available for this service at this branch.",
+            dimension="doctor",
+        )
     if not assignments:
         return tz.key, []
 
