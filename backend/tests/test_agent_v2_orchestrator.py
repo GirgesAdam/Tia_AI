@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.agents.structured_output import StructuredOutputError
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
@@ -838,3 +839,29 @@ def test_device_compatibility_failure_preserves_booking_context_and_clears_devic
     assert advanced.facts["service_id"] == "service-1"
     assert advanced.facts["doctor_id"] == "doctor-1"
     assert advanced.facts["device_key"] is None
+
+
+
+def test_structured_interpretation_failure_never_reaches_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    understanding = _understanding("social")
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=None,
+        understanding=understanding,
+        plan=TurnPlan(),
+    )
+
+    def fail_interpreter(**_kwargs):
+        raise StructuredOutputError("invalid turn semantics")
+
+    monkeypatch.setattr(runtime, "interpret_customer_turn_v2", fail_interpreter)
+    monkeypatch.setattr(
+        runtime,
+        "plan_turn",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("planner must not run")),
+    )
+
+    with pytest.raises(runtime.V2TurnInterpretationStructuredOutputError):
+        runtime.orchestrate_v2_turn(**_runtime_args())

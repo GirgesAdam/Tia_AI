@@ -4,8 +4,11 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agents.structured_output import StructuredOutputError
 from app.agents.v2 import turn_interpreter as interpreter
 from app.agents.v2.semantic_context import (
     SemanticContext,
@@ -628,3 +631,123 @@ def test_recent_booking_revocation_preserves_compound_cancel_then_availability_o
     assert cancel_selector.appointment is not None
     assert cancel_selector.appointment.ref == "A1"
     assert merged.operations[1].source_appointment is None
+
+
+
+def _minimal_semantic_turn() -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="social",
+                entities=TurnEntities(),
+                execution_intent="informational",
+            )
+        ]
+    )
+
+
+def test_interpreter_structured_primary_exhaustion_uses_configured_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = object()
+    fallback = object()
+    calls: list[str] = []
+    semantic_result = _minimal_semantic_turn()
+    monkeypatch.setattr(interpreter.settings, "openai_model", "primary-test")
+    monkeypatch.setattr(interpreter.settings, "openai_fallback_model", "fallback-test")
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: primary)
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_fallback_model", lambda: fallback)
+    monkeypatch.setattr(
+        interpreter,
+        "_messages_for_prompt_cache",
+        lambda _model, messages, **_kwargs: messages,
+    )
+
+    def invoke(*, model, **_kwargs):
+        if model is primary:
+            calls.append("primary")
+            raise StructuredOutputError("primary invalid")
+        assert model is fallback
+        calls.append("fallback")
+        return semantic_result
+
+    monkeypatch.setattr(interpreter, "invoke_typed_structured_output", invoke)
+    result = interpret_customer_turn_v2(
+        history=[HumanMessage(content="ممكن توضحي؟")],
+        semantic_context=build_semantic_context({"services": [], "doctors": [], "appointments": []}),
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC),
+    )
+
+    assert result == semantic_result
+    assert calls == ["primary", "primary", "fallback"]
+
+
+def test_interpreter_all_bounded_structured_attempts_still_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = object()
+    fallback = object()
+    calls: list[str] = []
+    monkeypatch.setattr(interpreter.settings, "openai_model", "primary-test")
+    monkeypatch.setattr(interpreter.settings, "openai_fallback_model", "fallback-test")
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: primary)
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_fallback_model", lambda: fallback)
+    monkeypatch.setattr(
+        interpreter,
+        "_messages_for_prompt_cache",
+        lambda _model, messages, **_kwargs: messages,
+    )
+
+    def invoke(*, model, **_kwargs):
+        calls.append("primary" if model is primary else "fallback")
+        raise StructuredOutputError("invalid")
+
+    monkeypatch.setattr(interpreter, "invoke_typed_structured_output", invoke)
+    with pytest.raises(StructuredOutputError):
+        interpret_customer_turn_v2(
+            history=[HumanMessage(content="التاني")],
+            semantic_context=build_semantic_context({"services": [], "doctors": [], "appointments": []}),
+            timezone_name="Africa/Cairo",
+            local_now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC),
+        )
+
+    assert calls == ["primary", "primary", "fallback", "fallback"]
+
+
+
+def test_interpreter_output_parser_failure_uses_same_bounded_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = object()
+    fallback = object()
+    calls: list[str] = []
+    semantic_result = _minimal_semantic_turn()
+    monkeypatch.setattr(interpreter.settings, "openai_model", "primary-test")
+    monkeypatch.setattr(interpreter.settings, "openai_fallback_model", "fallback-test")
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: primary)
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_fallback_model", lambda: fallback)
+    monkeypatch.setattr(
+        interpreter,
+        "_messages_for_prompt_cache",
+        lambda _model, messages, **_kwargs: messages,
+    )
+
+    def invoke(*, model, **_kwargs):
+        if model is primary:
+            calls.append("primary")
+            raise OutputParserException("invalid provider json")
+        assert model is fallback
+        calls.append("fallback")
+        return semantic_result
+
+    monkeypatch.setattr(interpreter, "invoke_typed_structured_output", invoke)
+    result = interpret_customer_turn_v2(
+        history=[HumanMessage(content="الحجز التاني")],
+        semantic_context=build_semantic_context({"services": [], "doctors": [], "appointments": []}),
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC),
+    )
+
+    assert result == semantic_result
+    assert calls == ["primary", "primary", "fallback"]
