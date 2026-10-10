@@ -131,6 +131,95 @@ def _identity_compatible_with_service(
     return None
 
 
+def _apply_explicit_active_task_clears(
+    params: dict[str, object],
+    *,
+    operation: TurnOperation,
+) -> dict[str, object]:
+    if "doctor" not in set(operation.cleared_active_task_fields):
+        return params
+    cleared = dict(params)
+    cleared["doctor_id"] = None
+    return cleared
+
+
+def _verified_alternative_doctor_candidates(
+    operation: TurnOperation,
+    *,
+    service_id: str | None,
+    current_doctor_id: str | None,
+    context: SemanticContext,
+) -> list[tuple[str, str]] | None:
+    """Return server-compatible alternatives only when candidates explicitly exclude current doctor."""
+    entity = operation.entities.doctor
+    if (
+        entity is None
+        or entity.ref is not None
+        or entity.candidate_mode != "ambiguous"
+        or not entity.candidate_refs
+        or current_doctor_id is None
+        or service_id is None
+    ):
+        return None
+
+    grounded: list[tuple[str, str]] = []
+    for ref in dict.fromkeys(entity.candidate_refs):
+        target = context.reference_map.get(ref)
+        if target is None or target.kind != "doctor":
+            continue
+        grounded.append((ref, target.canonical_id))
+    if not grounded:
+        return None
+    if any(canonical_id == current_doctor_id for _, canonical_id in grounded):
+        return None
+
+    compatible: list[tuple[str, str]] = []
+    for ref, canonical_id in grounded:
+        if (
+            _identity_compatible_with_service(
+                context,
+                service_id=service_id,
+                identity_kind="doctor",
+                identity_id=canonical_id,
+            )
+            is True
+        ):
+            compatible.append((ref, canonical_id))
+    return compatible
+
+
+def _explicit_unresolved_doctor(operation: TurnOperation) -> bool:
+    entity = operation.entities.doctor
+    return bool(
+        entity is not None
+        and entity.ref is None
+        and not entity.candidate_refs
+        and entity.text not in (None, "")
+        and "doctor" not in set(operation.cleared_active_task_fields)
+    )
+
+
+def _doctor_choice_step(
+    step: PlanStep,
+    *,
+    params: dict[str, object],
+    verified_refs: list[str],
+) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "clarify",
+            "state_action": "update_active",
+            "response_goal": "ask_doctor_choice",
+            "clarification_field": "doctor",
+            "facts": {
+                **params,
+                "doctor_id": None,
+                "_verified_candidate_refs": verified_refs,
+            },
+        }
+    )
+
+
 def _invalidate_incompatible_booking_identities(
     params: dict[str, object],
     *,
@@ -247,6 +336,7 @@ def _booking_followup_parameters(
         **_past_temporal_resume_updates(active_task, now=now),
         **params,
     }
+    params = _apply_explicit_active_task_clears(params, operation=operation)
     return _invalidate_incompatible_booking_identities(
         params,
         active_task=active_task,
@@ -307,6 +397,58 @@ def adapt_matching_active_task_step(
     if isinstance(active_task, BookingTaskState):
         if active_task.grouped is not None and operation.type in {"continue_active", "book"}:
             return step.model_copy(update={"state_action": "none"})
+        if operation.type in {"continue_active", "book"}:
+            alternatives = _verified_alternative_doctor_candidates(
+                operation,
+                service_id=active_task.constraints.service_id,
+                current_doctor_id=active_task.constraints.doctor_id,
+                context=context,
+            )
+            if alternatives is not None:
+                params = _booking_followup_parameters(
+                    operation,
+                    active_task=active_task,
+                    context=context,
+                    now=now,
+                )
+                if len(alternatives) == 1:
+                    params["doctor_id"] = alternatives[0][1]
+                    return PlanStep(
+                        operation_index=step.operation_index,
+                        operation_type=operation.type,
+                        disposition="state_update",
+                        state_action="update_active",
+                        response_goal="clarification",
+                        facts=params,
+                    )
+                return _doctor_choice_step(
+                    step,
+                    params=params,
+                    verified_refs=[ref for ref, _ in alternatives],
+                )
+            doctor_entity = operation.entities.doctor
+            if (
+                doctor_entity is not None
+                and doctor_entity.ref is None
+                and doctor_entity.candidate_refs
+            ):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "state_action": "none",
+                        "response_goal": "ask_doctor_choice",
+                        "clarification_field": "doctor",
+                    }
+                )
+            if _explicit_unresolved_doctor(operation):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "state_action": "none",
+                        "response_goal": "clarification",
+                        "clarification_field": "doctor",
+                    }
+                )
         if operation.type == "continue_active":
             params = _booking_followup_parameters(
                 operation,
@@ -345,7 +487,49 @@ def adapt_matching_active_task_step(
     if appointment is not None and appointment.candidate_refs:
         return step
 
-    params = resolved_operation_parameters(operation, context=context)
+    alternatives = _verified_alternative_doctor_candidates(
+        operation,
+        service_id=active_task.replacement.service_id,
+        current_doctor_id=active_task.replacement.doctor_id,
+        context=context,
+    )
+    if alternatives is not None:
+        params = _apply_explicit_active_task_clears(
+            resolved_operation_parameters(operation, context=context),
+            operation=operation,
+        )
+        params.pop("appointment_id", None)
+        if len(alternatives) == 1:
+            params["doctor_id"] = alternatives[0][1]
+        else:
+            return _doctor_choice_step(
+                step,
+                params=params,
+                verified_refs=[ref for ref, _ in alternatives],
+            )
+    elif operation.entities.doctor is not None and operation.entities.doctor.ref is None:
+        if operation.entities.doctor.candidate_refs or _explicit_unresolved_doctor(operation):
+            return step.model_copy(
+                update={
+                    "disposition": "clarify",
+                    "state_action": "none",
+                    "response_goal": (
+                        "ask_doctor_choice"
+                        if operation.entities.doctor.candidate_refs
+                        else "clarification"
+                    ),
+                    "clarification_field": "doctor",
+                }
+            )
+        params = _apply_explicit_active_task_clears(
+            resolved_operation_parameters(operation, context=context),
+            operation=operation,
+        )
+    else:
+        params = _apply_explicit_active_task_clears(
+            resolved_operation_parameters(operation, context=context),
+            operation=operation,
+        )
     explicit_target = params.pop("appointment_id", None)
     if explicit_target is not None and str(explicit_target) != active_task.target.appointment_id:
         return step

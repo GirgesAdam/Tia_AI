@@ -64,6 +64,7 @@ ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
 AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
 AppointmentActionExplicitField = Literal["date", "time"]
 ActiveTaskExplicitField = Literal["date", "time"]
+ActiveTaskClearField = Literal["doctor"]
 ResponseDisposition = Literal["reply", "no_reply"]
 FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
@@ -383,6 +384,16 @@ class TurnOperation(StrictContractModel):
             "model defaults while keeping active-task lifecycle deterministic."
         ),
     )
+    cleared_active_task_fields: list[ActiveTaskClearField] = Field(
+        default_factory=list,
+        description=(
+            "Explicit sparse-patch CLEAR provenance for the supplied active task. In this contract "
+            "only doctor is supported: use doctor only when the latest customer message explicitly "
+            "removes any doctor preference while continuing the same booking/reschedule task. Do not "
+            "use this for an unknown/ungrounded doctor, a choice between doctors, or a request for a "
+            "different doctor. A cleared doctor must have entities.doctor=null; omission alone means KEEP."
+        ),
+    )
     automation_context_relationship: AutomationContextRelationship = Field(
         default="none",
         description=(
@@ -494,6 +505,19 @@ class TurnOperation(StrictContractModel):
             raise ValueError("active-task explicit date marker requires a date entity.")
         if "time" in explicit and self.entities.time is None:
             raise ValueError("active-task explicit time marker requires a time entity.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_cleared_active_task_fields(self) -> TurnOperation:
+        cleared = set(self.cleared_active_task_fields)
+        if not cleared:
+            return self
+        if self.type not in {"book", "reschedule", "continue_active"}:
+            raise ValueError(
+                "cleared_active_task_fields is only valid for active booking/reschedule continuations."
+            )
+        if "doctor" in cleared and self.entities.doctor is not None:
+            raise ValueError("cleared active-task doctor requires entities.doctor=null.")
         return self
 
     @model_validator(mode="after")

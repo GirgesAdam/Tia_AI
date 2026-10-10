@@ -1662,7 +1662,7 @@ def orchestrate_v2_turn(
                 turn_id=resolved_turn_id,
             )
             current_task = initial_transition.active_task
-            if current_task is not None:
+            if current_task is not None and effective_step.disposition != "clarify":
                 effective_step = plan_active_task_progress(
                     current_task,
                     operation_index=effective_step.operation_index,

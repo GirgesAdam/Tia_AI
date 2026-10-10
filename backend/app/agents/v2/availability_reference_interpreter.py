@@ -100,6 +100,11 @@ Safety:
   If more than one displayed option could correspond to it (for example both 03:00 and 15:00), clarify rather
   than guessing. This preserves the conversational meaning of a displayed 3 PM option when the customer says
   "3", without Python parsing the phrase.
+- A short/bare customer expression can sometimes reasonably denote both a displayed ordinal and a natural
+  clock time relevant to the displayed availability (for example a fourth option exists while 4 PM is also a
+  plausible time inside a displayed window). In that case return clarify. Do not choose the ordinal or the clock
+  interpretation, and do not mutate last_selected_option_ref based on a guess. Explicit ordinal wording remains
+  a displayed-option selection; an otherwise unambiguous clock-only correction remains a clock meaning.
 - An explicit colon-formatted clock is exact: 03:00 is not 15:00. If that exact clock is one displayed option,
   select that option_ref. If it is not displayed, use new_search so the normal availability flow can verify
   that exact time. For this time-only new search, copy the exact colon clock into exact_time. Never map it to a different displayed clock.

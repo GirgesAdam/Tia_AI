@@ -945,7 +945,9 @@ def _semantic_choices(
     if entity is None:
         return []
     choices: list[OutcomeChoice] = []
-    for ref in entity.candidate_refs:
+    verified_refs = step.facts.get("_verified_candidate_refs")
+    candidate_refs = verified_refs if isinstance(verified_refs, list) else entity.candidate_refs
+    for ref in candidate_refs:
         if semantic_context.resolve(ref) is None:
             continue
         row = _row_by_ref(semantic_context, ref)

@@ -209,6 +209,13 @@ SEMANTIC PRINCIPLES
   next-available date scope and an exact time in the same message, list both date and time. If the latest
   message only authorizes/acknowledges the change without restating either dimension, leave this list
   empty even if an inferred/default date or time entity is emitted.
+- cleared_active_task_fields is explicit CLEAR provenance, not omission. In this contract only doctor is
+  supported. When the customer explicitly removes any doctor preference for the current unfinished task,
+  set cleared_active_task_fields=[doctor] and leave entities.doctor null. Do not use CLEAR for an unknown or
+  ungrounded doctor name, a choice between doctors, or a request for a different doctor. For a different-doctor
+  request, leave doctor.ref null and use grounded doctor candidate_refs that reflect the requested alternatives;
+  do not include the currently selected doctor merely because it exists in active_task. Python verifies service
+  compatibility and never guesses among multiple alternatives.
 - Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
   booking or reschedule instead of continuing any prior task or completed action. Also, whenever
   active_task is empty and a book/reschedule is not explicitly continuing supplied verified context,
@@ -221,6 +228,12 @@ SEMANTIC PRINCIPLES
   service/date/time/device/doctor. If they explicitly restate Under Arm, list service but do not list
   old device/date/time/doctor unless the latest message itself states them. Later answers inside the
   new active task use fresh_task=false and active_task_relationship=continue where applicable.
+  Distinguish a correction of one requirement inside the same requested appointment from explicit abandonment
+  plus a new booking goal. If the customer says the prior service identification was wrong but is still working
+  on the same appointment, that is continue and only the service is replaced. If the customer explicitly drops
+  or abandons the unfinished booking and asks to book a different treatment instead, that is replace + fresh_task,
+  and only fields explicitly stated in that latest message belong in fresh_task_explicit_fields. Never infer
+  replacement merely because the service changed.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
 - Use native recent dialogue to resolve elliptical follow-ups, but prefer active_task,
