@@ -1,4 +1,4 @@
-name: Temporary Cancellation Trace
+name: Temporary Cancellation Validation
 
 on:
   pull_request:
@@ -9,17 +9,41 @@ permissions:
   contents: read
 
 jobs:
-  trace:
+  focused:
     if: github.head_ref == 'fix/cancellation-handoff-20261011'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: sqlite+pysqlite:///:memory:
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+      ENVIRONMENT: test
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
-      - name: Locate cancellation and grouped booking paths
-        shell: bash
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Focused cancellation and safety regressions
         run: |
-          echo '=== FILENAMES ==='
-          find backend -type f | grep -Ei '(cancel|appointment|handoff|reception|pending|choice|compound|group|multi|laser)' | sort | head -n 300
-          echo '=== CANCELLATION SYMBOLS ==='
-          grep -RInE --exclude-dir='__pycache__' --include='*.py' '(cancel|cancell|handoff|reception|pending.*choice|appointment_action)' backend/app backend/tests backend/scripts | head -n 1200 || true
-          echo '=== GROUPED / MULTI / LASER SYMBOLS ==='
-          grep -RInE --exclude-dir='__pycache__' --include='*.py' '(compound|grouped|multi.?service|multi_service|laser|atomic)' backend/app backend/tests backend/scripts | head -n 1200 || true
+          pytest -q \
+            tests/test_v2_cancellation_handoff_policy.py \
+            tests/test_v2_booking_presentation_and_cancellation_policy.py \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_v2_structured_output_containment.py \
+            tests/test_v2_side_question_resume.py \
+            tests/test_v2_correction_semantics_fix.py \
+            tests/test_v2_grouped_booking_continuity.py \
+            tests/test_v2_compound_atomicity.py \
+            tests/test_v2_multi_service_visit_semantics.py \
+            tests/test_laser_device_resource_booking.py
+      - run: ruff check app tests/test_v2_cancellation_handoff_policy.py
+      - run: python -m compileall -q app tests/test_v2_cancellation_handoff_policy.py
+      - run: git diff --check origin/main...HEAD
