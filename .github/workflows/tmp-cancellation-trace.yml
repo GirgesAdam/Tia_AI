@@ -2,7 +2,8 @@ name: Temporary Cancellation Validation
 
 on:
   push:
-    branches: [fix/cancellation-handoff-20261011]
+    branches:
+      - fix/cancellation-handoff-20261011
   pull_request:
     types: [opened, synchronize]
     branches: [main]
@@ -12,7 +13,6 @@ permissions:
 
 jobs:
   focused:
-    if: github.ref_name == 'fix/cancellation-handoff-20261011' || github.head_ref == 'fix/cancellation-handoff-20261011'
     runs-on: ubuntu-latest
     defaults:
       run:
