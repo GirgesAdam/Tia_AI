@@ -676,6 +676,22 @@ def _availability_reference_context_from_turn(
     ):
         return None
 
+    if isinstance(previous_context, dict):
+        active_task = getattr(turn, "active_task", None)
+        active_scope = getattr(active_task, "constraints", None) or getattr(
+            active_task,
+            "replacement",
+            None,
+        )
+        task_service_id = getattr(active_scope, "service_id", None)
+        previous_service_id = previous_context.get("service_id")
+        if (
+            task_service_id not in (None, "")
+            and previous_service_id not in (None, "")
+            and str(task_service_id) != str(previous_service_id)
+        ):
+            return None
+
     return dict(previous_context) if isinstance(previous_context, dict) else None
 
 

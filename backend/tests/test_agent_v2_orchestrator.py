@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,7 +12,13 @@ from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
-from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
+from app.services.agent_v2.state import (
+    BookingTaskState,
+    CustomerConstraints,
+    OptionChoice,
+    OptionSnapshot,
+    WriteAuthorization,
+)
 from app.services.agent_v2.state_executor import StateTransition
 from app.services.agent_v2.state_persistence import PersistedActiveTask, V2StateConflictError
 
@@ -865,3 +871,71 @@ def test_structured_interpretation_failure_never_reaches_planner(
 
     with pytest.raises(runtime.V2TurnInterpretationStructuredOutputError):
         runtime.orchestrate_v2_turn(**_runtime_args())
+
+
+def test_pricing_side_read_preserves_existing_pending_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _booking_task(version=3)
+    persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=11)
+    understanding = TiaTurnUnderstanding(operations=[TurnOperation(type="pricing", entities=TurnEntities(), execution_intent="informational")])
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="respond",
+        state_action="none",
+        response_goal="answer_price",
+    )
+    _patch_semantic_pipeline(
+        monkeypatch,
+        persisted=persisted,
+        understanding=understanding,
+        plan=TurnPlan(steps=[step]),
+    )
+    monkeypatch.setattr(runtime, "with_safe_task_context", lambda context, **kwargs: context)
+    monkeypatch.setattr(
+        runtime,
+        "apply_step_state",
+        lambda *args, **kwargs: StateTransition(
+            active_task=task,
+            changed=False,
+            reason="side_read_preserved",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "finalize_step_after_state_transition",
+        lambda planned_step, transition: planned_step,
+    )
+    outcome = TurnOutcome(status="answered", response_goal="answer_price")
+    monkeypatch.setattr(runtime, "build_step_outcome", lambda *args, **kwargs: outcome)
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("price reply", "test-model"),
+    )
+    monkeypatch.setattr(runtime, "save_active_task", lambda *a, **k: pytest.fail("no save"))
+    monkeypatch.setattr(runtime, "cancel_active_task", lambda *a, **k: pytest.fail("no cancel"))
+
+    pending = OptionSnapshot(
+        snapshot_id="appointment-choice",
+        purpose="appointment",
+        lifecycle_action="reschedule",
+        task_version=1,
+        created_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=15),
+        options=[OptionChoice(ref="A1", payload={"appointment_id": "appointment-1"})],
+    )
+    args = _runtime_args()
+    args["pending_choice_context"] = pending.model_dump(mode="json")
+    result = runtime.orchestrate_v2_turn(**args)
+
+    assert result.active_task == task
+    assert result.pending_choice == pending
+
+
+def test_availability_update_does_not_carry_unrelated_pending_choice() -> None:
+    assert runtime._is_pure_informational_side_question(TiaTurnUnderstanding(operations=[TurnOperation(type="pricing", entities=TurnEntities(), execution_intent="informational")])) is True
+    assert runtime._is_pure_informational_side_question(TiaTurnUnderstanding(operations=[TurnOperation(type="clinic_info", entities=TurnEntities(), execution_intent="informational")])) is True
+    assert runtime._is_pure_informational_side_question(_understanding("availability")) is False
+    assert runtime._is_pure_informational_side_question(_understanding("book")) is False
