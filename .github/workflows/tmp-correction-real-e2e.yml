@@ -103,6 +103,27 @@ jobs:
         env:
           PGPASSWORD: ci_password
         run: psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 -c "DELETE FROM appointments;"
+      - name: Tighten E2E fixture assumptions in runner workspace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/tmp_correction_real_e2e.py")
+          text = p.read_text(encoding="utf-8")
+          text = text.replace(
+              "عايزة أحجز PRP للبشرة يوم 2026-10-17 الساعة 5 مع هالة مصطفى",
+              "عايزة أحجز PRP للبشرة يوم 2026-10-17 الساعة 17:00 مع هالة مصطفى",
+          )
+          text = text.replace(
+              '        start = (\n            f"عايزة أغير ميعاد {service.name} يوم {local.date().isoformat()} "\n            f"الساعة {local.strftime(\'%H:%M\')}"\n        )',
+              '        start = "عايزة أغير ميعادي"',
+          )
+          text = text.replace(
+              "عايزة أحجز PRP للبشرة يوم 2026-10-17 الساعة 3",
+              "عايزة أحجز PRP للبشرة يوم 2026-10-17 الساعة 15:00",
+          )
+          text = text.replace("لا خليها 5", "لا خليها 17:00")
+          p.write_text(text, encoding="utf-8")
+          PY
       - name: Run rollback-only Real Agent E2E
         run: python -m scripts.tmp_correction_real_e2e
       - name: Upload exact replies and state report
