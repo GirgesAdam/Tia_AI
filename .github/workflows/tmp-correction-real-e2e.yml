@@ -99,6 +99,10 @@ jobs:
           PY
       - name: Seed realistic synthetic clinic
         run: python -m scripts.seed_realistic_aesthetic_clinic --workspace-slug tia
+      - name: Clear seeded appointment history for correction cases
+        env:
+          PGPASSWORD: ci_password
+        run: psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 -c "DELETE FROM appointments;"
       - name: Run rollback-only Real Agent E2E
         run: python -m scripts.tmp_correction_real_e2e
       - name: Upload exact replies and state report
