@@ -1,0 +1,25 @@
+name: Temporary Cancellation Trace
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    if: github.head_ref == 'fix/cancellation-handoff-20261011'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate cancellation and grouped booking paths
+        shell: bash
+        run: |
+          echo '=== FILENAMES ==='
+          find backend -type f | grep -Ei '(cancel|appointment|handoff|reception|pending|choice|compound|group|multi|laser)' | sort | head -n 300
+          echo '=== CANCELLATION SYMBOLS ==='
+          grep -RInE --exclude-dir='__pycache__' --include='*.py' '(cancel|cancell|handoff|reception|pending.*choice|appointment_action)' backend/app backend/tests backend/scripts | head -n 1200 || true
+          echo '=== GROUPED / MULTI / LASER SYMBOLS ==='
+          grep -RInE --exclude-dir='__pycache__' --include='*.py' '(compound|grouped|multi.?service|multi_service|laser|atomic)' backend/app backend/tests backend/scripts | head -n 1200 || true
