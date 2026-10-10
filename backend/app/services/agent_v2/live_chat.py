@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -39,7 +40,11 @@ from app.services.agent_chat import (
 from app.services.agent_chat import (
     run_agent_for_existing_inbound as run_agent_for_existing_inbound_v1,
 )
-from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
+from app.services.agent_v2.orchestrator import (
+    V2OrchestratedTurn,
+    V2TurnInterpretationStructuredOutputError,
+    orchestrate_v2_turn,
+)
 from app.services.agent_v2.reference_resolution import build_availability_reference_options
 from app.services.agent_v2.write_executor import execute_write_ready_step
 from app.services.conversation_ownership import (
@@ -49,6 +54,8 @@ from app.services.conversation_ownership import (
     record_customer_inbound,
 )
 from app.services.handoffs import create_handoff, get_active_handoff
+
+logger = logging.getLogger(__name__)
 
 
 def _get_patient_v2(db: Session, *, workspace_id: UUID, patient_id: UUID) -> Patient:
@@ -314,39 +321,14 @@ def _recent_verified_action_context(
     return _recent_verified_action_context_from_outbounds(previous_outbounds)
 
 
-def _recent_automation_context(
+def _verified_automation_context(
     db: Session,
     *,
     conversation: Conversation,
     patient: Patient,
-    inbound: Message,
+    metadata: dict[str, Any],
+    source_message_id: object,
 ) -> dict[str, Any] | None:
-    """Return the immediately preceding verified system automation focus.
-
-    Template prose is never parsed for identity. The appointment target comes only
-    from server-owned automation metadata and is re-verified against the patient.
-    """
-    previous = db.scalar(
-        select(Message)
-        .where(
-            Message.workspace_id == conversation.workspace_id,
-            Message.conversation_id == conversation.id,
-            Message.created_at < inbound.created_at,
-        )
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(1)
-    )
-    if (
-        previous is None
-        or previous.sender_type != "system"
-        or previous.direction != "outbound"
-    ):
-        return None
-
-    metadata = dict(previous.metadata_json or {})
-    if metadata.get("source") != "automation_engine":
-        return None
-
     appointment_id = _uuid_from_metadata(metadata.get("appointment_id"))
     if appointment_id is None:
         return None
@@ -359,10 +341,9 @@ def _recent_automation_context(
     )
     if appointment is None:
         return None
-
     return {
         "source": "automation_engine",
-        "automation_message_id": str(previous.id),
+        "automation_message_id": str(source_message_id),
         "automation_job_id": str(metadata.get("automation_job_id") or ""),
         "automation_rule_key": str(metadata.get("automation_rule_key") or ""),
         "appointment_id": str(appointment.id),
@@ -375,6 +356,59 @@ def _recent_automation_context(
         "appointment_status": appointment.status,
         "start_at": appointment.start_at.isoformat(),
     }
+
+
+def _recent_automation_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    patient: Patient,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Return the immediately preceding verified automation focus.
+
+    Template prose is never parsed for identity. A contained structured-output failure
+    may carry the prior server-owned automation metadata for one clarification hop, but
+    the appointment target is re-verified against the patient before reuse.
+    """
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if previous is None or previous.direction != "outbound":
+        return None
+
+    metadata = dict(previous.metadata_json or {})
+    if previous.sender_type == "system" and metadata.get("source") == "automation_engine":
+        return _verified_automation_context(
+            db,
+            conversation=conversation,
+            patient=patient,
+            metadata=metadata,
+            source_message_id=previous.id,
+        )
+
+    carried = metadata.get("v2_automation_context")
+    if (
+        previous.sender_type == "ai"
+        and metadata.get("runtime") == "v2"
+        and isinstance(metadata.get("v2_structured_interpretation_failure"), dict)
+        and isinstance(carried, dict)
+    ):
+        return _verified_automation_context(
+            db,
+            conversation=conversation,
+            patient=patient,
+            metadata=carried,
+            source_message_id=carried.get("automation_message_id") or previous.id,
+        )
+    return None
 
 
 def _recent_pending_choice_context(
@@ -720,6 +754,120 @@ def _outbound_verified_action_context(
     return dict(recent_action_context)
 
 
+_STRUCTURED_INTERPRETATION_MODEL = "deterministic:structured-output-clarification"
+
+
+def _structured_interpretation_clarification_reply(patient: Patient) -> str:
+    language = str(getattr(patient, "preferred_language", "ar") or "ar").lower()
+    if language.startswith("ar"):
+        return (
+            "\u0645\u0639\u0644\u0634\u060c \u0645\u0645\u0643\u0646 \u062a\u0648\u0636\u062d\u064a\u0644\u064a "
+            "\u0637\u0644\u0628\u0643 \u0628\u0634\u0643\u0644 \u0623\u062f\u0642 \u0634\u0648\u064a\u0629 \u0639\u0634\u0627\u0646 "
+            "\u0623\u062a\u0623\u0643\u062f \u0625\u0646\u064a \u0645\u0646\u0641\u0630\u0634 \u062d\u0627\u062c\u0629 \u063a\u0644\u0637\u061f"
+        )
+    return (
+        "Sorry, could you clarify your request a little so I can make sure I do not "
+        "do the wrong thing?"
+    )
+
+
+def _persist_structured_interpretation_failure(
+    *,
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    conversation: Conversation,
+    inbound: Message,
+    run_id: UUID,
+    outbound_delivery_status: str,
+    source: str,
+    recent_read_context: dict[str, Any] | None,
+    recent_action_context: dict[str, Any] | None,
+    pending_choice_context: dict[str, Any] | None,
+    availability_reference_context: dict[str, Any] | None,
+    automation_context: dict[str, Any] | None,
+) -> AgentChatResponse:
+    """Persist a non-executable clarification while preserving verified prior context."""
+    locked_conversation = lock_conversation_ownership(
+        db,
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+    )
+    if locked_conversation is None:
+        raise AgentChatError(
+            "Conversation disappeared before structured-output clarification was persisted."
+        )
+    conversation = locked_conversation
+    active_handoff = get_active_handoff(
+        db,
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+    )
+    if not agent_can_reply(conversation) or active_handoff is not None:
+        db.rollback()
+        return AgentChatResponse(
+            run_id=run_id,
+            conversation_id=conversation.id,
+            inbound_message_id=inbound.id,
+            outbound_message_id=None,
+            reply=None,
+            handoff_required=True,
+            agent_paused=True,
+            model=None,
+        )
+
+    reply = _structured_interpretation_clarification_reply(patient)
+    outbound_now = datetime.now(UTC)
+    outbound = Message(
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+        channel_connection_id=conversation.channel_connection_id,
+        sender_type="ai",
+        direction="outbound",
+        in_reply_to_message_id=inbound.id,
+        created_at=outbound_now,
+        message_type="text",
+        content=reply,
+        delivery_status=outbound_delivery_status,
+        metadata_json={
+            "agent_run_id": str(run_id),
+            "model": _STRUCTURED_INTERPRETATION_MODEL,
+            "source": source,
+            "runtime": "v2",
+            "in_reply_to_message_id": str(inbound.id),
+            "dispatch_required": outbound_delivery_status == "queued",
+            "v2_structured_interpretation_failure": {
+                "stage": "turn_interpretation",
+                "category": "StructuredOutputError",
+                "primary_model": settings.openai_model,
+                "fallback_model": settings.openai_fallback_model or None,
+                "attempts_per_model": 2,
+            },
+            # A failed semantic turn is state-neutral. Carry only the already
+            # verified/server-owned context that existed before the failed turn.
+            "v2_read_context": recent_read_context,
+            "v2_availability_reference_context": availability_reference_context,
+            "v2_action_context": recent_action_context,
+            "v2_action_context_passthrough": recent_action_context is not None,
+            "v2_pending_choice": pending_choice_context,
+            "v2_automation_context": automation_context,
+        },
+    )
+    conversation.last_message_at = outbound_now
+    db.add(outbound)
+    db.commit()
+    return AgentChatResponse(
+        run_id=run_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+        outbound_message_id=outbound.id,
+        reply=reply,
+        handoff_required=False,
+        agent_paused=False,
+        model=_STRUCTURED_INTERPRETATION_MODEL,
+    )
+
+
 def _run_v2_after_inbound(
     *,
     db: Session,
@@ -800,25 +948,53 @@ def _run_v2_after_inbound(
             commit=False,
         )
 
-    turn = orchestrate_v2_turn(
-        db=db,
-        workspace=workspace,
-        patient=patient,
-        conversation_id=conversation.id,
-        run_id=run_id,
-        history=history,
-        local_now=local_now,
-        timezone_name=timezone_name,
-        clinic_name=workspace.name,
-        adapter=adapter,
-        turn_id=str(inbound.id),
-        write_executor=live_write,
-        recent_read_context=recent_read_context,
-        recent_action_context=recent_action_context,
-        automation_context=automation_context,
-        pending_choice_context=pending_choice_context,
-        availability_reference_context=availability_reference_context,
-    )
+    try:
+        turn = orchestrate_v2_turn(
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            conversation_id=conversation.id,
+            run_id=run_id,
+            history=history,
+            local_now=local_now,
+            timezone_name=timezone_name,
+            clinic_name=workspace.name,
+            adapter=adapter,
+            turn_id=str(inbound.id),
+            write_executor=live_write,
+            recent_read_context=recent_read_context,
+            recent_action_context=recent_action_context,
+            automation_context=automation_context,
+            pending_choice_context=pending_choice_context,
+            availability_reference_context=availability_reference_context,
+        )
+    except V2TurnInterpretationStructuredOutputError:
+        logger.error(
+            "V2 structured interpretation contained stage=turn_interpretation "
+            "error_category=StructuredOutputError run_id=%s conversation_id=%s "
+            "inbound_message_id=%s primary_model=%s fallback_model=%s "
+            "attempts_per_model=2",
+            run_id,
+            conversation.id,
+            inbound.id,
+            settings.openai_model,
+            settings.openai_fallback_model or None,
+        )
+        return _persist_structured_interpretation_failure(
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            outbound_delivery_status=outbound_delivery_status,
+            source=source,
+            recent_read_context=recent_read_context,
+            recent_action_context=recent_action_context,
+            pending_choice_context=pending_choice_context,
+            availability_reference_context=availability_reference_context,
+            automation_context=automation_context,
+        )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
     no_reply = turn.reply is None and turn.responder_model == "deterministic:no-reply"

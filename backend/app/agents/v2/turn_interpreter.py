@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.agents.explicit_time import extract_single_explicit_hhmm
-from app.agents.llm_runtime import invoke_with_model_chain
+from app.agents.llm_runtime import LLMInvocationResult, invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_interpreter_fallback_model,
     build_realtime_interpreter_model,
@@ -28,6 +30,8 @@ from app.agents.v2.turn_normalization import (
     normalize_semantic_invariants,
 )
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
@@ -1216,20 +1220,28 @@ def interpret_customer_turn_v2(
         model,
         request_messages: list[BaseMessage],
     ) -> TiaTurnUnderstanding:
+        def call_once() -> TiaTurnUnderstanding:
+            try:
+                return invoke_typed_structured_output(
+                    model=model,
+                    schema=TiaTurnUnderstanding,
+                    messages=request_messages,
+                )
+            except OutputParserException as exc:
+                raise StructuredOutputError(
+                    "LLM provider returned structured data that could not be parsed."
+                ) from exc
+
         try:
-            return invoke_typed_structured_output(
-                model=model,
-                schema=TiaTurnUnderstanding,
-                messages=request_messages,
-            )
+            return call_once()
         except StructuredOutputError:
-            return invoke_typed_structured_output(
-                model=model,
-                schema=TiaTurnUnderstanding,
-                messages=request_messages,
-            )
+            return call_once()
+
+    last_model_attempted: str | None = None
 
     def invoke_primary() -> TiaTurnUnderstanding:
+        nonlocal last_model_attempted
+        last_model_attempted = primary_name
         return invoke_structured(
             primary_model,
             _messages_for_prompt_cache(
@@ -1241,6 +1253,8 @@ def interpret_customer_turn_v2(
         )
 
     def invoke_fallback() -> TiaTurnUnderstanding:
+        nonlocal last_model_attempted
+        last_model_attempted = fallback_name
         fallback_model = build_realtime_interpreter_fallback_model()
         if fallback_model is None:
             raise RuntimeError("V2 turn interpreter fallback model is not configured.")
@@ -1255,14 +1269,40 @@ def interpret_customer_turn_v2(
         )
 
     model_calls = [(primary_name, invoke_primary)]
-    if fallback_name and fallback_name != primary_name:
+    has_distinct_fallback = bool(fallback_name and fallback_name != primary_name)
+    if has_distinct_fallback:
         model_calls.append((fallback_name, invoke_fallback))
 
-    invocation = invoke_with_model_chain(
-        model_calls=model_calls,
-        operation="v2-turn-interpreter",
-        circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
-    )
+    try:
+        invocation = invoke_with_model_chain(
+            model_calls=model_calls,
+            operation="v2-turn-interpreter",
+            circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
+        )
+    except StructuredOutputError:
+        # The generic model chain intentionally fails immediately on application/schema
+        # errors. For this semantic boundary only, a fully exhausted primary schema
+        # result may use the already-configured fallback model. Each model remains
+        # bounded to the existing two structured attempts.
+        if not has_distinct_fallback or last_model_attempted != primary_name:
+            raise
+        logger.warning(
+            "V2 turn interpreter primary structured attempts exhausted; "
+            "trying configured fallback primary_model=%s fallback_model=%s "
+            "attempts_per_model=2",
+            primary_name,
+            fallback_name,
+        )
+        fallback_invocation = invoke_with_model_chain(
+            model_calls=[(fallback_name, invoke_fallback)],
+            operation="v2-turn-interpreter-structured-fallback",
+            circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
+        )
+        invocation = LLMInvocationResult(
+            value=fallback_invocation.value,
+            model_name=fallback_invocation.model_name,
+            used_fallback=True,
+        )
     latest_index = _latest_customer_index(history)
     latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
     explicit_safe = _preserve_explicit_clock_constraints_v2(

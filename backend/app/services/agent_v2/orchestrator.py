@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.explicit_time import extract_single_explicit_hhmm
+from app.agents.structured_output import StructuredOutputError
 from app.agents.v2.availability_reference_interpreter import (
     ReferenceInterpretation,
     interpret_availability_reference_turn,
@@ -103,6 +104,10 @@ from app.services.agent_v2.turn_normalization import expand_multi_service_operat
 from app.services.agent_v2.write_policy import advance_step_with_write_policies
 
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
+
+
+class V2TurnInterpretationStructuredOutputError(RuntimeError):
+    """Exhausted structured semantic interpretation for one customer turn."""
 
 
 @dataclass(frozen=True)
@@ -1402,12 +1407,17 @@ def orchestrate_v2_turn(
         )
         full_interpreter_called = False
     else:
-        understanding = interpret_customer_turn_v2(
-            history=history,
-            semantic_context=semantic_context,
-            timezone_name=timezone_name,
-            local_now=local_now,
-        )
+        try:
+            understanding = interpret_customer_turn_v2(
+                history=history,
+                semantic_context=semantic_context,
+                timezone_name=timezone_name,
+                local_now=local_now,
+            )
+        except StructuredOutputError as exc:
+            raise V2TurnInterpretationStructuredOutputError(
+                "V2 turn semantic interpretation exhausted structured attempts."
+            ) from exc
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
