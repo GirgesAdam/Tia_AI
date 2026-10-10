@@ -5,7 +5,13 @@ from pydantic import ValidationError
 
 from app.agents.v2.availability_reference_interpreter import _SYSTEM_PROMPT as REFERENCE_PROMPT
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
-from app.agents.v2.turn_contract import DateConstraint, EntityReference, TimeConstraint, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    EntityReference,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
 from app.services.agent_v2.planner import PlanStep
@@ -36,12 +42,21 @@ def _context(*, two_alternatives: bool = True) -> SemanticContext:
 
 
 def _ref(context: SemanticContext, kind: str, canonical_id: str) -> str:
-    return next(ref for ref, target in context.reference_map.items() if target.kind == kind and target.canonical_id == canonical_id)
+    return next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == kind and target.canonical_id == canonical_id
+    )
 
 
 def _state(*, doctor_id: str | None = "doc-maha") -> BookingTaskState:
     return BookingTaskState(
-        write_authorization=WriteAuthorization(operation="booking", authorized=True, source_turn_id="turn-start", granted_at=NOW),
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-start",
+            granted_at=NOW,
+        ),
         constraints=CustomerConstraints(
             service_id="svc-prp",
             doctor_id=doctor_id,
@@ -63,16 +78,39 @@ def _step(operation_type: str = "book", *, clarify_doctor: bool = False) -> Plan
     )
 
 
-def _apply(state: BookingTaskState, operation: TurnOperation, step: PlanStep, context: SemanticContext):
-    adapted = adapt_matching_active_task_step(step, operation=operation, active_task=state, context=context, now=NOW)
-    transition = apply_step_state(state, step=adapted, operation=operation, reads=None, now=NOW, turn_id="turn-correction")
+def _apply(
+    state: BookingTaskState,
+    operation: TurnOperation,
+    step: PlanStep,
+    context: SemanticContext,
+):
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=state,
+        context=context,
+        now=NOW,
+    )
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-correction",
+    )
     return adapted, transition.active_task
 
 
 def test_explicit_doctor_clear_preserves_other_constraints() -> None:
     context = _context()
     state = _state()
-    operation = TurnOperation(type="continue_active", entities=TurnEntities(), execution_intent="execute", cleared_active_task_fields=["doctor"])
+    operation = TurnOperation(
+        type="continue_active",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        cleared_active_task_fields=["doctor"],
+    )
     adapted, updated = _apply(state, operation, _step("continue_active"), context)
     assert adapted.facts["doctor_id"] is None
     assert isinstance(updated, BookingTaskState)
@@ -85,14 +123,35 @@ def test_explicit_doctor_clear_preserves_other_constraints() -> None:
 def test_clear_marker_rejects_contradictory_doctor_entity() -> None:
     context = _context()
     with pytest.raises(ValidationError):
-        TurnOperation(type="book", entities=TurnEntities(doctor=EntityReference(text="Maha", ref=_ref(context, "doctor", "doc-maha"))), execution_intent="execute", cleared_active_task_fields=["doctor"])
+        TurnOperation(
+            type="book",
+            entities=TurnEntities(
+                doctor=EntityReference(
+                    text="Maha",
+                    ref=_ref(context, "doctor", "doc-maha"),
+                )
+            ),
+            execution_intent="execute",
+            cleared_active_task_fields=["doctor"],
+        )
 
 
 def test_unknown_doctor_is_not_clear_and_does_not_mutate_current_doctor() -> None:
     context = _context()
     state = _state()
-    operation = TurnOperation(type="book", entities=TurnEntities(doctor=EntityReference(text="XYZ")), execution_intent="execute", active_task_relationship="continue")
-    adapted = adapt_matching_active_task_step(_step("book"), operation=operation, active_task=state, context=context, now=NOW)
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(doctor=EntityReference(text="XYZ")),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
+    adapted = adapt_matching_active_task_step(
+        _step("book"),
+        operation=operation,
+        active_task=state,
+        context=context,
+        now=NOW,
+    )
     assert operation.cleared_active_task_fields == []
     assert adapted.disposition == "clarify"
     assert adapted.clarification_field == "doctor"
@@ -105,11 +164,25 @@ def test_ambiguous_doctor_choice_including_current_is_not_clear() -> None:
     state = _state()
     operation = TurnOperation(
         type="book",
-        entities=TurnEntities(doctor=EntityReference(text="Maha or Maryam", candidate_refs=[_ref(context, "doctor", "doc-maha"), _ref(context, "doctor", "doc-maryam")])),
+        entities=TurnEntities(
+            doctor=EntityReference(
+                text="Maha or Maryam",
+                candidate_refs=[
+                    _ref(context, "doctor", "doc-maha"),
+                    _ref(context, "doctor", "doc-maryam"),
+                ],
+            )
+        ),
         execution_intent="execute",
         active_task_relationship="continue",
     )
-    adapted = adapt_matching_active_task_step(_step("book", clarify_doctor=True), operation=operation, active_task=state, context=context, now=NOW)
+    adapted = adapt_matching_active_task_step(
+        _step("book", clarify_doctor=True),
+        operation=operation,
+        active_task=state,
+        context=context,
+        now=NOW,
+    )
     assert adapted.disposition == "clarify"
     assert adapted.state_action == "none"
     assert operation.cleared_active_task_fields == []
@@ -120,7 +193,15 @@ def test_another_doctor_one_compatible_candidate_resolves_without_guessing() -> 
     state = _state()
     operation = TurnOperation(
         type="book",
-        entities=TurnEntities(doctor=EntityReference(text="another doctor", candidate_refs=[_ref(context, "doctor", "doc-ahmed"), _ref(context, "doctor", "doc-hydra")])),
+        entities=TurnEntities(
+            doctor=EntityReference(
+                text="another doctor",
+                candidate_refs=[
+                    _ref(context, "doctor", "doc-ahmed"),
+                    _ref(context, "doctor", "doc-hydra"),
+                ],
+            )
+        ),
         execution_intent="execute",
         active_task_relationship="continue",
     )
@@ -138,7 +219,16 @@ def test_another_doctor_multiple_compatible_candidates_clears_old_and_clarifies(
     maryam_ref = _ref(context, "doctor", "doc-maryam")
     operation = TurnOperation(
         type="book",
-        entities=TurnEntities(doctor=EntityReference(text="another doctor", candidate_refs=[ahmed_ref, maryam_ref, _ref(context, "doctor", "doc-hydra")])),
+        entities=TurnEntities(
+            doctor=EntityReference(
+                text="another doctor",
+                candidate_refs=[
+                    ahmed_ref,
+                    maryam_ref,
+                    _ref(context, "doctor", "doc-hydra"),
+                ],
+            )
+        ),
         execution_intent="execute",
         active_task_relationship="continue",
     )
@@ -155,7 +245,16 @@ def test_another_doctor_multiple_compatible_candidates_clears_old_and_clarifies(
 def test_another_doctor_zero_compatible_candidates_clears_old_and_fails_closed() -> None:
     context = _context(two_alternatives=False)
     state = _state()
-    operation = TurnOperation(type="continue_active", entities=TurnEntities(doctor=EntityReference(text="another doctor", candidate_refs=[_ref(context, "doctor", "doc-hydra")])), execution_intent="execute")
+    operation = TurnOperation(
+        type="continue_active",
+        entities=TurnEntities(
+            doctor=EntityReference(
+                text="another doctor",
+                candidate_refs=[_ref(context, "doctor", "doc-hydra")],
+            )
+        ),
+        execution_intent="execute",
+    )
     adapted, updated = _apply(state, operation, _step("continue_active"), context)
     assert adapted.disposition == "clarify"
     assert adapted.facts["_verified_candidate_refs"] == []
@@ -166,10 +265,25 @@ def test_another_doctor_zero_compatible_candidates_clears_old_and_fails_closed()
 def test_clear_then_specific_doctor_sets_new_doctor() -> None:
     context = _context()
     state = _state()
-    clear = TurnOperation(type="continue_active", entities=TurnEntities(), execution_intent="execute", cleared_active_task_fields=["doctor"])
+    clear = TurnOperation(
+        type="continue_active",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        cleared_active_task_fields=["doctor"],
+    )
     _, cleared = _apply(state, clear, _step("continue_active"), context)
     assert isinstance(cleared, BookingTaskState)
-    set_doctor = TurnOperation(type="book", entities=TurnEntities(doctor=EntityReference(text="Ahmed", ref=_ref(context, "doctor", "doc-ahmed"))), execution_intent="execute", active_task_relationship="continue")
+    set_doctor = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            doctor=EntityReference(
+                text="Ahmed",
+                ref=_ref(context, "doctor", "doc-ahmed"),
+            )
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
     _, updated = _apply(cleared, set_doctor, _step("book"), context)
     assert isinstance(updated, BookingTaskState)
     assert updated.constraints.doctor_id == "doc-ahmed"
@@ -178,7 +292,13 @@ def test_clear_then_specific_doctor_sets_new_doctor() -> None:
 def test_specific_doctor_then_clear_removes_preference() -> None:
     context = _context()
     state = _state(doctor_id="doc-ahmed")
-    clear = TurnOperation(type="book", entities=TurnEntities(), execution_intent="execute", active_task_relationship="continue", cleared_active_task_fields=["doctor"])
+    clear = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        cleared_active_task_fields=["doctor"],
+    )
     _, updated = _apply(state, clear, _step("book"), context)
     assert isinstance(updated, BookingTaskState)
     assert updated.constraints.doctor_id is None
