@@ -1,20 +1,21 @@
 name: Temporary Correction Patch Apply
 
 on:
-  push:
-    branches:
-      - fix/correction-semantics-20261011
+  pull_request:
+    types: [opened]
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: stage correction apply workflow'
+    if: github.head_ref == 'fix/correction-semantics-20261011'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: fix/correction-semantics-20261011
           fetch-depth: 0
       - name: Apply focused patch
         run: python .github/tmp_apply_correction_fix.py
