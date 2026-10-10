@@ -707,9 +707,69 @@ def merge_presented_availability_context(
         return turn
 
     last_selected = raw.get("last_selected_option_ref")
+    followup = semantic_context.model_input.get("availability_followup_intent")
+    refresh_same_search = (
+        isinstance(followup, dict)
+        and followup.get("action") == "refresh_availability"
+    )
     operations: list = []
     changed = False
     for operation in turn.operations:
+        if operation.type == "availability" and refresh_same_search:
+            refresh_updates: dict[str, object] = {}
+            inherited = (
+                ("service", _reference_from_verified(raw, single_key="service_ref")),
+                (
+                    "doctor",
+                    _reference_from_verified(
+                        raw,
+                        single_key="doctor_ref",
+                        set_key="doctor_refs",
+                    ),
+                ),
+                ("device", _reference_from_verified(raw, single_key="device_ref")),
+            )
+            for field, value in inherited:
+                if getattr(operation.entities, field) is None and value is not None:
+                    refresh_updates[field] = value
+            inherited_date = raw.get("date")
+            current_date = operation.entities.date
+            if isinstance(inherited_date, dict) and (
+                current_date is None or current_date.mode == "next_available"
+            ):
+                try:
+                    refresh_updates["date"] = DateConstraint.model_validate(inherited_date)
+                except ValueError:
+                    pass
+            inherited_time = raw.get("time")
+            if operation.entities.time is None and isinstance(inherited_time, dict):
+                try:
+                    refresh_updates["time"] = TimeConstraint.model_validate(inherited_time)
+                except ValueError:
+                    pass
+            entities = (
+                operation.entities.model_copy(update=refresh_updates)
+                if refresh_updates
+                else operation.entities
+            )
+            package_usage = raw.get("package_usage")
+            normalized = operation.model_copy(
+                update={
+                    "entities": entities,
+                    "package_usage": (
+                        package_usage
+                        if operation.package_usage == "unspecified"
+                        and package_usage in {"unspecified", "use_existing", "avoid_existing"}
+                        else operation.package_usage
+                    ),
+                    "continues_previous": True,
+                    "fresh_task": False,
+                    "fresh_task_explicit_fields": [],
+                }
+            )
+            changed = changed or normalized != operation
+            operations.append(normalized)
+            continue
         if operation.type not in {"book", "reschedule"}:
             operations.append(operation)
             continue

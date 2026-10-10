@@ -708,6 +708,34 @@ def test_side_question_preserves_last_presented_availability_snapshot() -> None:
     assert carried == previous
 
 
+def test_fresh_task_service_change_drops_stale_availability_snapshot() -> None:
+    previous = _reference_context()
+    turn = SimpleNamespace(
+        plan=TurnPlan(
+            steps=[
+                PlanStep(
+                    operation_index=0,
+                    operation_type="book",
+                    disposition="clarify",
+                    response_goal="ask_device_choice",
+                )
+            ]
+        ),
+        outcomes=(),
+        active_task=SimpleNamespace(
+            constraints=SimpleNamespace(service_id="fresh-service-id")
+        ),
+        reference_semantic_path_used=True,
+        reference_action="normal",
+    )
+
+    assert _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    ) is None
+
+
 def test_reference_selection_updates_only_last_selected_option_ref() -> None:
     previous = _reference_context()
     step = PlanStep(

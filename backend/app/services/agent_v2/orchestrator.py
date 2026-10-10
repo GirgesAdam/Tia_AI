@@ -106,6 +106,31 @@ from app.services.agent_v2.write_policy import advance_step_with_write_policies
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
 
 
+_SIDE_QUESTION_READ_TYPES = frozenset(
+    {
+        "service_info",
+        "pricing",
+        "doctor_info",
+        "clinic_info",
+        "payment_info",
+        "customer_profile",
+        "customer_history",
+        "package_info",
+        "package_compare",
+        "pulse_info",
+        "refund_quote",
+    }
+)
+
+
+def _is_pure_informational_side_question(turn: TiaTurnUnderstanding) -> bool:
+    return bool(turn.operations) and all(
+        getattr(operation, "execution_intent", None) == "informational"
+        and getattr(operation, "type", None) in _SIDE_QUESTION_READ_TYPES
+        for operation in turn.operations
+    )
+
+
 class V2TurnInterpretationStructuredOutputError(RuntimeError):
     """Exhausted structured semantic interpretation for one customer turn."""
 
@@ -1554,7 +1579,9 @@ def orchestrate_v2_turn(
     traces: list[V2RuntimeStepTrace] = []
     outcomes: list[TurnOutcome] = []
     pending_write: PendingV2Write | None = None
-    outgoing_pending_choice: OptionSnapshot | None = None
+    outgoing_pending_choice: OptionSnapshot | None = (
+        pending_choice if _is_pure_informational_side_question(understanding) else None
+    )
     cancelled_existing_task = False
     cancelled_existing_task_reason: str | None = None
     replaced_existing_task = False
