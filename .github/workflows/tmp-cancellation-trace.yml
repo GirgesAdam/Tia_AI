@@ -39,13 +39,15 @@ jobs:
             tests/test_v2_cancellation_handoff_policy.py \
             tests/test_v2_booking_presentation_and_cancellation_policy.py \
             tests/test_verified_cancellation_execution.py \
-            tests/test_v2_structured_output_containment.py \
-            tests/test_v2_side_question_resume.py \
+            tests/test_reschedule_appointment_resolution.py \
             tests/test_v2_correction_semantics_fix.py \
+            tests/test_v2_handoff_continuation.py \
             tests/test_v2_grouped_booking_continuity.py \
             tests/test_v2_compound_atomicity.py \
             tests/test_v2_multi_service_visit_semantics.py \
-            tests/test_laser_device_resource_booking.py
+            tests/test_laser_device_resource_booking.py \
+            tests/test_agent_v2_orchestrator.py \
+            tests/test_v2_turn_interpreter.py
       - run: ruff check app tests/test_v2_cancellation_handoff_policy.py
       - run: python -m compileall -q app tests/test_v2_cancellation_handoff_policy.py
       - run: git diff --check origin/main...HEAD
