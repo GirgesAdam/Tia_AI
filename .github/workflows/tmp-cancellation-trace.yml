@@ -1,0 +1,53 @@
+name: Temporary Cancellation Validation
+
+on:
+  push:
+    branches:
+      - fix/cancellation-handoff-20261011
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: "sqlite+pysqlite:///:memory:"
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+      ENVIRONMENT: test
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Focused cancellation and safety regressions
+        run: |
+          python -m pytest -q \
+            tests/test_v2_cancellation_handoff_policy.py \
+            tests/test_v2_booking_presentation_and_cancellation_policy.py \
+            tests/test_verified_cancellation_execution.py \
+            tests/test_reschedule_appointment_resolution.py \
+            tests/test_v2_correction_semantics_fix.py \
+            tests/test_v2_handoff_continuation.py \
+            tests/test_v2_grouped_booking_continuity.py \
+            tests/test_v2_compound_atomicity.py \
+            tests/test_v2_multi_service_visit_semantics.py \
+            tests/test_laser_device_resource_booking.py \
+            tests/test_agent_v2_orchestrator.py \
+            tests/test_v2_turn_interpreter.py
+      - run: ruff check app tests/test_v2_cancellation_handoff_policy.py
+      - run: python -m compileall -q app tests/test_v2_cancellation_handoff_policy.py
+      - run: git diff --check origin/main...HEAD
